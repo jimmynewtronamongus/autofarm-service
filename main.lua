@@ -15,18 +15,20 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 local CONFIG = {
-	collectInterval = 0.25,
+	collectInterval = 1.5,
 	plantInterval = 1.0,
-	sellInterval = 8.0,
-	buyInterval = 2.0,
-	rainbowCollectInterval = 0.35,
-	petBuyInterval = 3.0,
+	sellInterval = 12.0,
+	buyInterval = 5.0,
+	rainbowCollectInterval = 1.5,
+	petBuyInterval = 5.0,
+	cacheRefreshInterval = 5.0,
 	selectedSeed = "Carrot",
 	plantRadius = 18,
 }
 
 local seedNames = {
 	"Carrot",
+	"Alien Apple",
 	"Strawberry",
 	"Blueberry",
 	"Tomato",
@@ -46,6 +48,16 @@ local seedNames = {
 	"Beanstalk",
 	"Sugar Apple",
 	"Burning Bud",
+	"Buttercup",
+	"Crimson Thorn",
+	"Elder Strawberry",
+	"Ember Lily",
+	"Firefly Spiral",
+	"Giant Pinecone",
+	"Octobloom",
+	"Romanesco",
+	"Sunflower",
+	"Zebrazinkle",
 }
 
 local state = {
@@ -55,6 +67,7 @@ local state = {
 	autoBuySeeds = false,
 	autoCollectRainbowSeeds = false,
 	autoBuyPets = false,
+	performanceMode = false,
 	lastStatus = "Ready",
 }
 
@@ -164,7 +177,30 @@ local function getObjectPath(instance)
 	return table.concat(parts, ".")
 end
 
+local cache = {
+	workspaceAt = 0,
+	workspaceDescendants = {},
+	remoteKey = "",
+	remoteMatches = {},
+	seedFrames = {},
+}
+
+local function getWorkspaceDescendants()
+	local now = os.clock()
+	if now - cache.workspaceAt > CONFIG.cacheRefreshInterval then
+		cache.workspaceAt = now
+		cache.workspaceDescendants = workspace:GetDescendants()
+	end
+
+	return cache.workspaceDescendants
+end
+
 local function scanRemotes(terms)
+	local key = table.concat(terms, "|")
+	if cache.remoteMatches[key] then
+		return cache.remoteMatches[key]
+	end
+
 	local matches = {}
 
 	for _, descendant in ipairs(ReplicatedStorage:GetDescendants()) do
@@ -185,6 +221,7 @@ local function scanRemotes(terms)
 		end
 	end
 
+	cache.remoteMatches[key] = matches
 	return matches
 end
 
@@ -263,7 +300,7 @@ end
 local function collectFruit()
 	local fired = 0
 
-	for _, descendant in ipairs(workspace:GetDescendants()) do
+	for _, descendant in ipairs(getWorkspaceDescendants()) do
 		if descendant:IsA("ProximityPrompt") and textMatches(descendant, { "collect", "harvest", "pick", "fruit" }) then
 			if triggerPrompt(descendant) then
 				fired += 1
@@ -273,7 +310,7 @@ local function collectFruit()
 
 	local pickupEvent = gameEvents and gameEvents:FindFirstChild("PickupEvent")
 	if pickupEvent and pickupEvent:IsA("BindableEvent") then
-		for _, descendant in ipairs(workspace:GetDescendants()) do
+		for _, descendant in ipairs(getWorkspaceDescendants()) do
 			if textMatches(descendant, { "fruit", "crop", "harvest" }) then
 				pcall(function()
 					pickupEvent:Fire(descendant)
@@ -321,6 +358,37 @@ local function getSelectedSeedList()
 	end
 
 	return selected
+end
+
+local function getSeedFrame(seedName)
+	if cache.seedFrames[seedName] and cache.seedFrames[seedName].Parent then
+		return cache.seedFrames[seedName]
+	end
+
+	local seedShop = playerGui:FindFirstChild("Seed_Shop")
+	if not seedShop then
+		return nil
+	end
+
+	local scrollingFrame = seedShop:FindFirstChild("Frame")
+		and seedShop.Frame:FindFirstChild("ScrollingFrame")
+
+	if scrollingFrame then
+		local direct = scrollingFrame:FindFirstChild(seedName)
+		if direct then
+			cache.seedFrames[seedName] = direct
+			return direct
+		end
+	end
+
+	for _, descendant in ipairs(seedShop:GetDescendants()) do
+		if descendant.Name == seedName then
+			cache.seedFrames[seedName] = descendant
+			return descendant
+		end
+	end
+
+	return nil
 end
 
 local function getSelectedPetList()
@@ -411,7 +479,7 @@ local function autoCollectRainbowSeeds()
 	local checked = 0
 	local pickupEvent = gameEvents and gameEvents:FindFirstChild("PickupEvent")
 
-	for _, descendant in ipairs(workspace:GetDescendants()) do
+	for _, descendant in ipairs(getWorkspaceDescendants()) do
 		local matchesRainbowSeed = textMatches(descendant, {
 			"rainbow",
 			"seedrain",
@@ -439,6 +507,51 @@ local function autoCollectRainbowSeeds()
 	end
 
 	setStatus(("Rainbow seeds: %d target(s) checked"):format(checked))
+end
+
+local function enablePerformanceMode()
+	local changed = 0
+
+	pcall(function()
+		settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+	end)
+
+	pcall(function()
+		workspace.Terrain.WaterWaveSize = 0
+		workspace.Terrain.WaterWaveSpeed = 0
+		workspace.Terrain.WaterReflectance = 0
+		workspace.Terrain.WaterTransparency = 1
+		workspace.Terrain.Decoration = false
+	end)
+
+	for _, descendant in ipairs(workspace:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.Material = Enum.Material.SmoothPlastic
+			descendant.Reflectance = 0
+			descendant.CastShadow = false
+			changed += 1
+		elseif descendant:IsA("Decal") or descendant:IsA("Texture") then
+			descendant.Transparency = 1
+			changed += 1
+		elseif descendant:IsA("ParticleEmitter")
+			or descendant:IsA("Trail")
+			or descendant:IsA("Beam")
+			or descendant:IsA("Smoke")
+			or descendant:IsA("Fire")
+			or descendant:IsA("Sparkles")
+		then
+			descendant.Enabled = false
+			changed += 1
+		elseif descendant:IsA("PointLight")
+			or descendant:IsA("SpotLight")
+			or descendant:IsA("SurfaceLight")
+		then
+			descendant.Enabled = false
+			changed += 1
+		end
+	end
+
+	setStatus(("Performance mode: simplified %d object(s)"):format(changed))
 end
 
 local function plantSeed()
@@ -514,7 +627,7 @@ local function autoSell()
 	end
 
 	local fired = 0
-	for _, descendant in ipairs(workspace:GetDescendants()) do
+	for _, descendant in ipairs(getWorkspaceDescendants()) do
 		if descendant:IsA("ProximityPrompt") and textMatches(descendant, { "sell" }) then
 			if triggerPrompt(descendant) then
 				fired += 1
@@ -557,16 +670,7 @@ local function buyOneSeed(seedName)
 		return true, ("Auto buy: fired %s for %s"):format(path, seedName)
 	end
 
-	local seedShop = playerGui:FindFirstChild("Seed_Shop")
-	local seedFrame
-	if seedShop then
-		for _, descendant in ipairs(seedShop:GetDescendants()) do
-			if descendant.Name == seedName then
-				seedFrame = descendant
-				break
-			end
-		end
-	end
+	local seedFrame = getSeedFrame(seedName)
 
 	local clicked = false
 	if seedFrame then
@@ -613,10 +717,10 @@ local function buySeed()
 end
 
 local function buyOnePet(petName)
-	for _, descendant in ipairs(workspace:GetDescendants()) do
+	for _, descendant in ipairs(getWorkspaceDescendants()) do
 		if descendant:IsA("ProximityPrompt") then
 			local isBuyPrompt = textMatches(descendant, { "buy", "purchase", "adopt" })
-			local isPetPrompt = textMatches(descendant, { "pet", petName })
+			local isPetPrompt = textMatches(descendant, { petName })
 
 			if isBuyPrompt and isPetPrompt and triggerBuyPrompt(descendant) then
 				return true, ("Auto pets: triggered prompt for %s"):format(petName)
@@ -758,6 +862,10 @@ local function makeToggle(label, key, order)
 		button.Text = ("%s: %s"):format(label, state[key] and "ON" or "OFF")
 		button.BackgroundColor3 = state[key] and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(34, 41, 42)
 		setStatus(("%s %s"):format(label, state[key] and "enabled" or "disabled"))
+
+		if key == "performanceMode" and state[key] then
+			task.spawn(enablePerformanceMode)
+		end
 	end)
 end
 
@@ -767,6 +875,7 @@ makeToggle("Auto Sell", "autoSell", 3)
 makeToggle("Auto Buy Seeds", "autoBuySeeds", 4)
 makeToggle("Rainbow Seeds", "autoCollectRainbowSeeds", 5)
 makeToggle("Auto Buy Pets", "autoBuyPets", 6)
+makeToggle("Performance Mode", "performanceMode", 7)
 
 local selectedSeedLabel = make("TextLabel", {
 	Name = "SelectedSeedLabel",
