@@ -24,6 +24,7 @@ local CONFIG = {
 	cacheRefreshInterval = 7.0,
 	maxVisualPets = 24,
 	maxVisualPetTools = 24,
+	maxEquippedVisualPets = 3,
 	visualPetAmount = 3,
 	visualPetVariant = "Normal",
 	selectedSeed = "Carrot",
@@ -985,6 +986,7 @@ local function buyPets()
 end
 
 local visualPetFolder
+local showPetInfo = function() end
 
 local function getPetsFolder()
 	local assets = ReplicatedStorage:FindFirstChild("Assets")
@@ -1380,6 +1382,10 @@ local function makeLocalPetTool(petName, template, slot, variant, usedVariantAss
 		weld.Parent = handle
 	end
 
+	tool.Activated:Connect(function()
+		showPetInfo(petName, variant or "Normal", icon, tool)
+	end)
+
 	tool.Parent = backpack
 	return true
 end
@@ -1434,6 +1440,63 @@ local function moveVisualPet(instance, target)
 			instance.CFrame = target
 		end
 	end)
+end
+
+local function addVisualPetNameplate(instance, petName, variant)
+	local rootPart = getModelRootPart(instance)
+	if not rootPart then
+		return
+	end
+
+	local labelText = petName
+	if variant and variant ~= "Normal" then
+		labelText = variant .. " " .. petName
+	end
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "PetNameplate"
+	billboard.AlwaysOnTop = true
+	billboard.LightInfluence = 0
+	billboard.MaxDistance = 90
+	billboard.Size = UDim2.fromOffset(150, 34)
+	billboard.StudsOffsetWorldSpace = Vector3.new(0, 3.2, 0)
+	billboard.Parent = rootPart
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 0.35
+	label.BackgroundColor3 = Color3.fromRGB(36, 23, 16)
+	label.BorderSizePixel = 0
+	label.Font = Enum.Font.GothamBold
+	label.Text = labelText
+	label.TextColor3 = Color3.fromRGB(255, 246, 220)
+	label.TextScaled = true
+	label.TextStrokeColor3 = Color3.fromRGB(30, 17, 10)
+	label.TextStrokeTransparency = 0
+	label.Size = UDim2.fromScale(1, 1)
+	label.Parent = billboard
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = label
+end
+
+local function attachVisualPetInfoPrompt(instance, petName, variant, icon)
+	local rootPart = getModelRootPart(instance)
+	if not rootPart then
+		return
+	end
+
+	local click = Instance.new("ClickDetector")
+	click.Name = "PetInfoClick"
+	click.MaxActivationDistance = 24
+	click.Parent = rootPart
+	click.MouseClick:Connect(function(player)
+		if player == localPlayer then
+			showPetInfo(petName, variant or "Normal", icon, instance)
+		end
+	end)
+
+	addVisualPetNameplate(instance, petName, variant)
 end
 
 local function updateVisualPetBehavior()
@@ -1526,11 +1589,18 @@ local function spawnVisualPets()
 	local toolCount = 0
 	local folder = getVisualPetFolder()
 	local amount = math.floor(tonumber(CONFIG.visualPetAmount) or 1)
-	amount = math.clamp(amount, 1, CONFIG.maxVisualPets)
+	local equipped = #folder:GetChildren()
+	local availableSlots = math.max(CONFIG.maxEquippedVisualPets - equipped, 0)
+	amount = math.clamp(amount, 1, CONFIG.maxEquippedVisualPets)
+	amount = math.min(amount, availableSlots)
+	if amount <= 0 then
+		setStatus(("Visual pets: max equipped %d/%d"):format(equipped, CONFIG.maxEquippedVisualPets))
+		return
+	end
 	local startSlot = #folder:GetChildren()
 
 	for index = 1, amount do
-		if #folder:GetChildren() >= CONFIG.maxVisualPets then
+		if #folder:GetChildren() >= CONFIG.maxEquippedVisualPets then
 			break
 		end
 
@@ -1547,6 +1617,8 @@ local function spawnVisualPets()
 			prepVisualPet(clone, true)
 			clone.Parent = folder
 			playPetAnimations(clone)
+			local icon = getPetIcon(petName, template)
+			attachVisualPetInfoPrompt(clone, petName, CONFIG.visualPetVariant, icon)
 
 			local angle = ((index - 1) / amount) * math.pi * 2
 			local radius = 6 + (spawned % 3) * 2
@@ -1576,7 +1648,7 @@ local function spawnVisualPets()
 
 	trimVisualPets()
 	pcall(updateVisualPetBehavior)
-	setStatus(("Visual pets: spawned %d clone(s), %d backpack item(s)"):format(spawned, toolCount))
+	setStatus(("Visual pets: equipped %d/%d, %d backpack item(s)"):format(#folder:GetChildren(), CONFIG.maxEquippedVisualPets, toolCount))
 end
 
 local function make(className, properties, parent)
@@ -1669,6 +1741,164 @@ make("UIPadding", {
 statusValue.Changed:Connect(function(value)
 	statusLabel.Text = value
 end)
+
+local petInfoFrame = make("Frame", {
+	Name = "PetInfo",
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundColor3 = Color3.fromRGB(92, 47, 28),
+	BorderSizePixel = 0,
+	Position = UDim2.fromScale(0.5, 0.48),
+	Size = UDim2.fromOffset(520, 220),
+	Visible = false,
+	ZIndex = 20,
+}, gui)
+make("UICorner", { CornerRadius = UDim.new(0, 8) }, petInfoFrame)
+make("UIStroke", { Color = Color3.fromRGB(38, 20, 12), Thickness = 4 }, petInfoFrame)
+
+local petInfoHeader = make("Frame", {
+	Name = "Header",
+	BackgroundColor3 = Color3.fromRGB(93, 190, 69),
+	BorderSizePixel = 0,
+	Size = UDim2.new(1, 0, 0, 52),
+	ZIndex = 21,
+}, petInfoFrame)
+make("UICorner", { CornerRadius = UDim.new(0, 8) }, petInfoHeader)
+
+make("TextLabel", {
+	Name = "Heart",
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBlack,
+	Text = "<3",
+	TextColor3 = Color3.fromRGB(225, 36, 32),
+	TextScaled = true,
+	TextStrokeColor3 = Color3.fromRGB(104, 16, 16),
+	TextStrokeTransparency = 0,
+	Position = UDim2.fromOffset(12, 7),
+	Size = UDim2.fromOffset(38, 38),
+	ZIndex = 22,
+}, petInfoHeader)
+
+make("TextLabel", {
+	Name = "Title",
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBlack,
+	Text = "Pet Info",
+	TextColor3 = Color3.fromRGB(255, 255, 245),
+	TextScaled = true,
+	TextStrokeColor3 = Color3.fromRGB(25, 25, 25),
+	TextStrokeTransparency = 0,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Position = UDim2.fromOffset(62, 8),
+	Size = UDim2.new(1, -120, 0, 36),
+	ZIndex = 22,
+}, petInfoHeader)
+
+local petInfoClose = make("TextButton", {
+	Name = "Close",
+	AutoButtonColor = true,
+	BackgroundColor3 = Color3.fromRGB(222, 35, 35),
+	BorderSizePixel = 0,
+	Font = Enum.Font.GothamBlack,
+	Text = "X",
+	TextColor3 = Color3.fromRGB(255, 255, 255),
+	TextScaled = true,
+	TextStrokeColor3 = Color3.fromRGB(80, 0, 0),
+	TextStrokeTransparency = 0,
+	Position = UDim2.new(1, -46, 0, 8),
+	Size = UDim2.fromOffset(34, 34),
+	ZIndex = 23,
+}, petInfoHeader)
+make("UICorner", { CornerRadius = UDim.new(0, 4) }, petInfoClose)
+petInfoClose.Activated:Connect(function()
+	petInfoFrame.Visible = false
+end)
+
+local petInfoIcon = make("ImageLabel", {
+	Name = "Icon",
+	BackgroundColor3 = Color3.fromRGB(61, 29, 16),
+	BorderSizePixel = 0,
+	Image = "",
+	Position = UDim2.fromOffset(28, 80),
+	ScaleType = Enum.ScaleType.Fit,
+	Size = UDim2.fromOffset(118, 118),
+	ZIndex = 21,
+}, petInfoFrame)
+make("UIStroke", { Color = Color3.fromRGB(24, 12, 8), Thickness = 4 }, petInfoIcon)
+
+local petInfoName = make("TextLabel", {
+	Name = "PetName",
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBlack,
+	Text = "Pet",
+	TextColor3 = Color3.fromRGB(255, 255, 255),
+	TextScaled = true,
+	TextStrokeColor3 = Color3.fromRGB(18, 18, 18),
+	TextStrokeTransparency = 0,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Position = UDim2.fromOffset(168, 74),
+	Size = UDim2.new(1, -190, 0, 44),
+	ZIndex = 21,
+}, petInfoFrame)
+
+local petInfoDesc = make("TextLabel", {
+	Name = "Description",
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold,
+	Text = "Follows you around the garden.",
+	TextColor3 = Color3.fromRGB(255, 240, 225),
+	TextSize = 17,
+	TextWrapped = true,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextYAlignment = Enum.TextYAlignment.Top,
+	Position = UDim2.fromOffset(170, 120),
+	Size = UDim2.new(1, -190, 0, 48),
+	ZIndex = 21,
+}, petInfoFrame)
+
+local petInfoTag1 = make("TextLabel", {
+	Name = "Tag1",
+	BackgroundColor3 = Color3.fromRGB(140, 53, 204),
+	BorderSizePixel = 0,
+	Font = Enum.Font.GothamBlack,
+	Text = "NORMAL",
+	TextColor3 = Color3.fromRGB(255, 255, 255),
+	TextScaled = true,
+	Position = UDim2.fromOffset(172, 172),
+	Size = UDim2.fromOffset(116, 34),
+	ZIndex = 21,
+}, petInfoFrame)
+make("UICorner", { CornerRadius = UDim.new(0, 5) }, petInfoTag1)
+
+local petInfoTag2 = make("TextLabel", {
+	Name = "Tag2",
+	BackgroundColor3 = Color3.fromRGB(237, 65, 139),
+	BorderSizePixel = 0,
+	Font = Enum.Font.GothamBlack,
+	Text = "Visual",
+	TextColor3 = Color3.fromRGB(255, 255, 255),
+	TextScaled = true,
+	Position = UDim2.fromOffset(304, 172),
+	Size = UDim2.fromOffset(116, 34),
+	ZIndex = 21,
+}, petInfoFrame)
+make("UICorner", { CornerRadius = UDim.new(0, 5) }, petInfoTag2)
+
+showPetInfo = function(petName, variant, icon)
+	variant = variant or "Normal"
+	local displayName = petName
+	if variant ~= "Normal" then
+		displayName = variant .. " " .. petName
+	end
+
+	petInfoName.Text = displayName
+	petInfoDesc.Text = ("Follows you around the garden. Equipped visual pet %d/%d."):format(math.min(#getVisualPetFolder():GetChildren(), CONFIG.maxEquippedVisualPets), CONFIG.maxEquippedVisualPets)
+	petInfoIcon.Image = icon or ""
+	petInfoTag1.Text = string.upper(variant)
+	petInfoTag1.BackgroundColor3 = string.find(variant, "Rainbow", 1, true) and Color3.fromRGB(140, 53, 204) or Color3.fromRGB(73, 148, 215)
+	petInfoTag2.Text = string.find(variant, "Giant", 1, true) and "Huge" or "Visual"
+	petInfoTag2.BackgroundColor3 = string.find(variant, "Giant", 1, true) and Color3.fromRGB(243, 78, 134) or Color3.fromRGB(88, 162, 72)
+	petInfoFrame.Visible = true
+end
 
 local function makeToggle(label, key, order)
 	local button = make("TextButton", {
@@ -2186,7 +2416,7 @@ make("UIPadding", {
 
 local function refreshVisualPetAmount()
 	local amount = math.floor(tonumber(visualPetAmountBox.Text) or CONFIG.visualPetAmount)
-	amount = math.clamp(amount, 1, CONFIG.maxVisualPets)
+	amount = math.clamp(amount, 1, CONFIG.maxEquippedVisualPets)
 	CONFIG.visualPetAmount = amount
 	visualPetAmountBox.Text = tostring(amount)
 	setStatus(("Visual pet amount set to %d"):format(amount))
