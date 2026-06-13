@@ -119,11 +119,18 @@ local selectedVisualPets = {
 	Dragonfly = true,
 }
 
-local visualPetVariants = {
-	"Normal",
+local visualVariantWords = {
+	"Huge",
 	"Giant",
 	"Rainbow",
-	"Giant Rainbow",
+	"Super",
+	"Gold",
+	"Golden",
+	"Shiny",
+}
+
+local visualPetVariants = {
+	"Normal",
 }
 
 local statusValue
@@ -149,6 +156,34 @@ local function addUniqueName(list, name)
 	table.insert(list, name)
 end
 
+local function trimText(value)
+	return string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
+end
+
+local function stripVariantWords(name)
+	local result = tostring(name or "")
+	for _, word in ipairs(visualVariantWords) do
+		result = string.gsub(result, "^" .. word .. "%s+", "")
+		result = string.gsub(result, "%s+" .. word .. "$", "")
+	end
+	return trimText(result)
+end
+
+local function extractVariantLabel(assetName, petName)
+	if not assetName or assetName == petName then
+		return ""
+	end
+
+	local startAt, endAt = string.find(assetName, petName, 1, true)
+	if not startAt then
+		return ""
+	end
+
+	local before = trimText(string.sub(assetName, 1, startAt - 1))
+	local after = trimText(string.sub(assetName, endAt + 1))
+	return trimText((before .. " " .. after))
+end
+
 local function refreshPetNamesFromAssets()
 	local assets = ReplicatedStorage:FindFirstChild("Assets")
 	local pets = assets and assets:FindFirstChild("Pets")
@@ -157,7 +192,7 @@ local function refreshPetNamesFromAssets()
 	end
 
 	for _, pet in ipairs(pets:GetChildren()) do
-		addUniqueName(petNames, pet.Name)
+		addUniqueName(petNames, stripVariantWords(pet.Name))
 	end
 
 	table.sort(petNames)
@@ -1172,49 +1207,77 @@ end
 
 local function getVariantFlags(variant)
 	variant = tostring(variant or "Normal")
-	return string.find(variant, "Giant", 1, true) ~= nil, string.find(variant, "Rainbow", 1, true) ~= nil
+	local isHuge = string.find(variant, "Giant", 1, true) ~= nil or string.find(variant, "Huge", 1, true) ~= nil
+	return isHuge, string.find(variant, "Rainbow", 1, true) ~= nil
 end
 
 local function findVisualPetTemplate(petsFolder, petName, variant)
-	local wantsGiant, wantsRainbow = getVariantFlags(variant)
-	local names = { petName }
-
-	if wantsGiant and wantsRainbow then
-		table.insert(names, "Giant Rainbow " .. petName)
-		table.insert(names, "Rainbow Giant " .. petName)
-		table.insert(names, petName .. " Giant Rainbow")
-		table.insert(names, petName .. " Rainbow Giant")
-		table.insert(names, "Giant " .. petName .. " Rainbow")
-		table.insert(names, "Rainbow " .. petName .. " Giant")
-	elseif wantsGiant then
-		table.insert(names, "Giant " .. petName)
-		table.insert(names, petName .. " Giant")
-	elseif wantsRainbow then
-		table.insert(names, "Rainbow " .. petName)
-		table.insert(names, petName .. " Rainbow")
+	variant = variant or "Normal"
+	if variant == "Normal" then
+		return petsFolder:FindFirstChild(petName), "Normal", false
 	end
 
-	for index = 2, #names do
-		local template = petsFolder:FindFirstChild(names[index])
-		if template then
-			return template, true
+	local compactPet = compactName(petName)
+	local compactVariant = compactName(variant)
+	for _, child in ipairs(petsFolder:GetChildren()) do
+		local childVariant = extractVariantLabel(child.Name, stripVariantWords(child.Name))
+		local baseName = stripVariantWords(child.Name)
+		if compactName(baseName) == compactPet and compactName(childVariant) == compactVariant then
+			return child, childVariant, true
 		end
 	end
 
-	if wantsGiant or wantsRainbow then
-		local compactPet = compactName(petName)
-		for _, child in ipairs(petsFolder:GetChildren()) do
-			local compactChild = compactName(child.Name)
-			local hasPet = string.find(compactChild, compactPet, 1, true) ~= nil
-			local hasGiant = not wantsGiant or string.find(compactChild, "giant", 1, true) ~= nil
-			local hasRainbow = not wantsRainbow or string.find(compactChild, "rainbow", 1, true) ~= nil
-			if hasPet and hasGiant and hasRainbow then
-				return child, true
-			end
+	return nil, nil, false
+end
+
+local function refreshVisualPetVariantsFromAssets()
+	local petsFolder = getPetsFolder()
+	if not petsFolder then
+		return
+	end
+
+	for _, pet in ipairs(petsFolder:GetChildren()) do
+		local baseName = stripVariantWords(pet.Name)
+		local variant = extractVariantLabel(pet.Name, baseName)
+		if variant ~= "" then
+			addUniqueName(visualPetVariants, variant)
 		end
 	end
 
-	return petsFolder:FindFirstChild(petName), false
+	table.sort(visualPetVariants, function(a, b)
+		if a == "Normal" then
+			return true
+		elseif b == "Normal" then
+			return false
+		end
+		return a < b
+	end)
+end
+
+local function isVisualVariantAvailable(variant)
+	if variant == "Normal" then
+		return true
+	end
+
+	local petsFolder = getPetsFolder()
+	if not petsFolder then
+		return false
+	end
+
+	local selected = getSelectedVisualPetList()
+	if #selected == 0 then
+		for _, petName in ipairs(petNames) do
+			table.insert(selected, petName)
+		end
+	end
+
+	for _, petName in ipairs(selected) do
+		if findVisualPetTemplate(petsFolder, petName, variant) then
+			return true
+		end
+	end
+
+	return false
 end
 
 local function applyVisualPetVariant(instance, variant, usedVariantAsset)
@@ -1231,25 +1294,6 @@ local function applyVisualPetVariant(instance, variant, usedVariantAsset)
 	if wantsRainbow then
 		instance:SetAttribute("Mutation", "Rainbow")
 		instance:SetAttribute("Rainbow", true)
-	end
-
-	if wantsGiant and not usedVariantAsset then
-		pcall(function()
-			if instance:IsA("Model") then
-				instance:ScaleTo(2)
-			elseif instance:IsA("BasePart") then
-				instance.Size *= 2
-			end
-		end)
-	end
-
-	if wantsRainbow and not usedVariantAsset then
-		for index, descendant in ipairs(instance:GetDescendants()) do
-			if descendant:IsA("BasePart") then
-				descendant.Color = Color3.fromHSV((index * 0.11) % 1, 0.8, 1)
-				descendant.Material = Enum.Material.Neon
-			end
-		end
 	end
 end
 
@@ -1598,6 +1642,7 @@ local function spawnVisualPets()
 		return
 	end
 	local startSlot = #folder:GetChildren()
+	local unavailable = 0
 
 	for index = 1, amount do
 		if #folder:GetChildren() >= CONFIG.maxEquippedVisualPets then
@@ -1605,7 +1650,7 @@ local function spawnVisualPets()
 		end
 
 		local petName = selected[((index - 1) % #selected) + 1]
-		local template, usedVariantAsset = findVisualPetTemplate(petsFolder, petName, CONFIG.visualPetVariant)
+		local template, actualVariant, usedVariantAsset = findVisualPetTemplate(petsFolder, petName, CONFIG.visualPetVariant)
 		if template then
 			local slot = startSlot + spawned + 1
 			local clone = template:Clone()
@@ -1613,12 +1658,12 @@ local function spawnVisualPets()
 			clone:SetAttribute("PetName", petName)
 			clone:SetAttribute("Slot", slot)
 			clone:SetAttribute("SpawnedAt", os.clock())
-			applyVisualPetVariant(clone, CONFIG.visualPetVariant, usedVariantAsset)
+			applyVisualPetVariant(clone, actualVariant, usedVariantAsset)
 			prepVisualPet(clone, true)
 			clone.Parent = folder
 			playPetAnimations(clone)
 			local icon = getPetIcon(petName, template)
-			attachVisualPetInfoPrompt(clone, petName, CONFIG.visualPetVariant, icon)
+			attachVisualPetInfoPrompt(clone, petName, actualVariant, icon)
 
 			local angle = ((index - 1) / amount) * math.pi * 2
 			local radius = 6 + (spawned % 3) * 2
@@ -1637,17 +1682,23 @@ local function spawnVisualPets()
 
 			moveVisualPet(clone, target)
 
-			if toolCount < CONFIG.maxVisualPetTools and makeLocalPetTool(petName, template, slot, CONFIG.visualPetVariant, usedVariantAsset) then
+			if toolCount < CONFIG.maxVisualPetTools and makeLocalPetTool(petName, template, slot, actualVariant, usedVariantAsset) then
 				toolCount += 1
 			end
 
 			spawned += 1
 			task.wait(0.03)
+		else
+			unavailable += 1
 		end
 	end
 
 	trimVisualPets()
 	pcall(updateVisualPetBehavior)
+	if spawned == 0 and unavailable > 0 then
+		setStatus(("Visual pets: %s not available for selected pet(s)"):format(CONFIG.visualPetVariant))
+		return
+	end
 	setStatus(("Visual pets: equipped %d/%d, %d backpack item(s)"):format(#folder:GetChildren(), CONFIG.maxEquippedVisualPets, toolCount))
 end
 
@@ -2276,6 +2327,7 @@ make("UIGridLayout", {
 local visualPetLayout = visualPetRow:FindFirstChildOfClass("UIGridLayout")
 local visualPetButtons = {}
 local visualPetButtonCount = 0
+local refreshVariantButtons
 
 local function refreshVisualPetButton(petName)
 	local button = visualPetButtons[petName]
@@ -2321,6 +2373,9 @@ local function makeVisualPetButton(petName)
 	button.Activated:Connect(function()
 		selectedVisualPets[petName] = not selectedVisualPets[petName]
 		refreshVisualPetButton(petName)
+		if refreshVariantButtons then
+			refreshVariantButtons()
+		end
 		setStatus((selectedVisualPets[petName] and "Selected spawn " or "Unselected spawn ") .. petName)
 	end)
 
@@ -2348,29 +2403,32 @@ local selectedVisualVariantLabel = make("TextLabel", {
 	LayoutOrder = 18,
 }, content)
 
-local variantRow = make("Frame", {
+local variantRow = make("ScrollingFrame", {
 	Name = "VisualPetVariantSelector",
 	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	CanvasSize = UDim2.fromOffset(0, 0),
+	ScrollBarThickness = 4,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 70),
 	LayoutOrder = 19,
 }, content)
-make("UIGridLayout", {
+local variantLayout = make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
 	CellSize = UDim2.fromOffset(118, 28),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, variantRow)
 
 local variantButtons = {}
+local variantButtonCount = 0
 
-local function refreshVariantButtons()
-	for variantName, button in pairs(variantButtons) do
-		local enabled = CONFIG.visualPetVariant == variantName
-		button.Text = (enabled and "[x] " or "[ ] ") .. variantName
-		button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
+local function makeVariantButton(variantName)
+	if variantButtons[variantName] then
+		return
 	end
-end
 
-for index, variantName in ipairs(visualPetVariants) do
+	variantButtonCount += 1
+
 	local button = make("TextButton", {
 		Name = "Variant" .. string.gsub(variantName, "%s+", ""),
 		AutoButtonColor = false,
@@ -2382,16 +2440,41 @@ for index, variantName in ipairs(visualPetVariants) do
 		TextSize = 12,
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		Size = UDim2.fromOffset(118, 28),
-		LayoutOrder = index,
+		LayoutOrder = variantButtonCount,
 	}, variantRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
 
 	variantButtons[variantName] = button
 	button.Activated:Connect(function()
+		if not isVisualVariantAvailable(variantName) then
+			setStatus("Variant unavailable for selected pet(s): " .. variantName)
+			return
+		end
 		CONFIG.visualPetVariant = variantName
 		refreshVariantButtons()
 		setStatus("Visual pet variant set to " .. variantName)
 	end)
+end
+
+refreshVariantButtons = function()
+	refreshVisualPetVariantsFromAssets()
+	for _, variantName in ipairs(visualPetVariants) do
+		makeVariantButton(variantName)
+	end
+	variantRow.CanvasSize = UDim2.fromOffset(0, variantLayout.AbsoluteContentSize.Y + 6)
+
+	if not isVisualVariantAvailable(CONFIG.visualPetVariant) then
+		CONFIG.visualPetVariant = "Normal"
+	end
+
+	for variantName, button in pairs(variantButtons) do
+		local available = isVisualVariantAvailable(variantName)
+		local enabled = CONFIG.visualPetVariant == variantName
+		button.Text = (enabled and "[x] " or "[ ] ") .. variantName
+		button.TextColor3 = available and Color3.fromRGB(242, 247, 239) or Color3.fromRGB(150, 150, 150)
+		button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67)
+			or (available and Color3.fromRGB(52, 60, 54) or Color3.fromRGB(33, 35, 34))
+	end
 end
 refreshVariantButtons()
 
@@ -2428,9 +2511,11 @@ local assets = ReplicatedStorage:FindFirstChild("Assets")
 local petsFolder = assets and assets:FindFirstChild("Pets")
 if petsFolder then
 	petsFolder.ChildAdded:Connect(function(pet)
-		addUniqueName(petNames, pet.Name)
-		makePetButton(pet.Name)
-		makeVisualPetButton(pet.Name)
+		local baseName = stripVariantWords(pet.Name)
+		addUniqueName(petNames, baseName)
+		makePetButton(baseName)
+		makeVisualPetButton(baseName)
+		refreshVariantButtons()
 	end)
 end
 
