@@ -1352,20 +1352,29 @@ local function updateVisualPetBehavior()
 	local now = os.clock()
 
 	for index, pet in ipairs(pets) do
-		local row = math.floor((index - 1) / 3)
-		local column = ((index - 1) % 3) - 1
-		local sideOffset = column * 3.2
-		local backOffset = 5.5 + row * 3.0
-		local sway = math.sin(now * 1.8 + index) * 0.45
-		local desired = root.Position - (root.CFrame.LookVector * backOffset) + (root.CFrame.RightVector * (sideOffset + sway))
+		local ring = math.floor((index - 1) / 6)
+		local ringIndex = (index - 1) % 6
+		local ringCount = math.min(#pets - ring * 6, 6)
+		local arc = math.rad(150)
+		local step = ringCount > 1 and arc / (ringCount - 1) or 0
+		local angle = -math.rad(75) + step * ringIndex
+		local radius = 7 + ring * 4
+		local sideOffset = math.sin(angle) * radius
+		local backOffset = math.cos(angle) * radius + 3 + ring * 1.5
+		local bob = math.sin(now * 2.4 + index) * 0.18
+		local desired = root.Position - (root.CFrame.LookVector * backOffset) + (root.CFrame.RightVector * sideOffset)
 		local rayResult = workspace:Raycast(desired + Vector3.new(0, 24, 0), Vector3.new(0, -90, 0), rayParams)
 		if rayResult then
-			desired = rayResult.Position + Vector3.new(0, 1.4 + math.sin(now * 2.4 + index) * 0.18, 0)
+			desired = rayResult.Position + Vector3.new(0, 1.4 + bob, 0)
 		else
 			desired += Vector3.new(0, 1.2, 0)
 		end
 
-		local target = CFrame.new(desired, desired + root.CFrame.LookVector)
+		local lookAt = Vector3.new(root.Position.X, desired.Y, root.Position.Z)
+		if (lookAt - desired).Magnitude < 0.1 then
+			lookAt = desired + root.CFrame.LookVector
+		end
+		local target = CFrame.new(desired, lookAt)
 		local current = getPetPivot(pet)
 		if current and (current.Position - desired).Magnitude < 45 then
 			moveVisualPet(pet, current:Lerp(target, 0.35))
