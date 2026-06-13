@@ -48,14 +48,6 @@ local seedNames = {
 	"Burning Bud",
 }
 
-local petNames = {
-	"Common Egg",
-	"Rare Egg",
-	"Legendary Egg",
-	"Mythical Egg",
-	"Bug Egg",
-}
-
 local state = {
 	fruitCollector = false,
 	seedPlacer = false,
@@ -70,9 +62,7 @@ local selectedSeeds = {
 	Carrot = true,
 }
 
-local selectedPets = {
-	["Common Egg"] = true,
-}
+local selectedPetText = ""
 
 local function setStatus(message)
 	state.lastStatus = tostring(message)
@@ -336,9 +326,10 @@ end
 local function getSelectedPetList()
 	local selected = {}
 
-	for _, petName in ipairs(petNames) do
-		if selectedPets[petName] then
-			table.insert(selected, petName)
+	for petName in string.gmatch(selectedPetText, "[^,%s][^,]*") do
+		local cleaned = string.gsub(petName, "^%s*(.-)%s*$", "%1")
+		if cleaned ~= "" then
+			table.insert(selected, cleaned)
 		end
 	end
 
@@ -393,6 +384,27 @@ local function touchPart(part)
 	end)
 
 	return ok
+end
+
+local function getPromptPart(prompt)
+	local current = prompt.Parent
+	while current and current ~= workspace do
+		if current:IsA("BasePart") then
+			return current
+		end
+		current = current.Parent
+	end
+	return nil
+end
+
+local function triggerBuyPrompt(prompt)
+	local part = getPromptPart(prompt)
+	if part then
+		touchPart(part)
+		task.wait(0.05)
+	end
+
+	return triggerPrompt(prompt)
 end
 
 local function autoCollectRainbowSeeds()
@@ -601,67 +613,18 @@ local function buySeed()
 end
 
 local function buyOnePet(petName)
-	local petShop = playerGui:FindFirstChild("PetShop_UI")
-	local petFrame
-	if petShop then
-		for _, descendant in ipairs(petShop:GetDescendants()) do
-			if descendant.Name == petName then
-				petFrame = descendant
-				break
+	for _, descendant in ipairs(workspace:GetDescendants()) do
+		if descendant:IsA("ProximityPrompt") then
+			local isBuyPrompt = textMatches(descendant, { "buy", "purchase", "adopt" })
+			local isPetPrompt = textMatches(descendant, { "pet", petName })
+
+			if isBuyPrompt and isPetPrompt and triggerBuyPrompt(descendant) then
+				return true, ("Auto pets: triggered prompt for %s"):format(petName)
 			end
 		end
 	end
 
-	local clicked = false
-	if petFrame then
-		local mainFrame = petFrame:FindFirstChild("Main_Frame", true)
-		if mainFrame and mainFrame:IsA("GuiButton") then
-			activateButton(mainFrame)
-			task.wait(0.08)
-		end
-
-		for _, buttonName in ipairs({ "Sheckles_Buy", "Buy", "CashBuy" }) do
-			local button = petFrame:FindFirstChild(buttonName, true)
-			if button and button:IsA("GuiButton") and button.Visible and activateButton(button) then
-				clicked = true
-				break
-			end
-		end
-	end
-
-	if clicked then
-		return true, ("Auto pets: clicked %s"):format(petName)
-	end
-
-	local petCallSets = {
-		{ petName },
-		{ "Buy", petName },
-		{ "BuyEgg", petName },
-		{ "Purchase", petName },
-		{ "PurchaseEgg", petName },
-		{ petName, 1 },
-	}
-
-	local petRemotes = {}
-	local petEggService = gameEvents and gameEvents:FindFirstChild("PetEggService")
-	if petEggService then
-		table.insert(petRemotes, petEggService)
-	end
-
-	for _, remote in ipairs(scanRemotes({ "pet", "egg" })) do
-		table.insert(petRemotes, remote)
-	end
-
-	for _, remote in ipairs(scanRemotes({ "egg", "shop" })) do
-		table.insert(petRemotes, remote)
-	end
-
-	local usedRemote, path = tryRemoteCalls(petRemotes, petCallSets)
-	if usedRemote then
-		return true, ("Auto pets: fired %s for %s"):format(path, petName)
-	end
-
-	return false, ("Auto pets: no working remote/button for %s"):format(petName)
+	return false, ("Auto pets: no matching prompt for %s"):format(petName)
 end
 
 local function buyPets()
@@ -888,7 +851,7 @@ local selectedPetLabel = make("TextLabel", {
 	Name = "SelectedPetLabel",
 	BackgroundTransparency = 1,
 	Font = Enum.Font.GothamSemibold,
-	Text = "Pets to buy",
+	Text = "Pet names to buy",
 	TextColor3 = Color3.fromRGB(221, 236, 216),
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
@@ -896,71 +859,35 @@ local selectedPetLabel = make("TextLabel", {
 	LayoutOrder = 9,
 }, content)
 
-local petRow = make("ScrollingFrame", {
-	Name = "PetSelector",
-	BackgroundTransparency = 1,
+local petBox = make("TextBox", {
+	Name = "PetNameBox",
+	BackgroundColor3 = Color3.fromRGB(52, 60, 54),
 	BorderSizePixel = 0,
-	CanvasSize = UDim2.fromOffset(0, 0),
-	ScrollBarThickness = 4,
-	ScrollingDirection = Enum.ScrollingDirection.Y,
-	Size = UDim2.new(1, 0, 0, 72),
+	ClearTextOnFocus = false,
+	Font = Enum.Font.GothamSemibold,
+	PlaceholderText = "Type names, comma separated",
+	Text = selectedPetText,
+	TextColor3 = Color3.fromRGB(242, 247, 239),
+	TextSize = 13,
+	TextWrapped = true,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Size = UDim2.new(1, 0, 0, 46),
 	LayoutOrder = 10,
 }, content)
-make("UIGridLayout", {
-	CellPadding = UDim2.fromOffset(6, 6),
-	CellSize = UDim2.fromOffset(118, 28),
-	SortOrder = Enum.SortOrder.LayoutOrder,
-}, petRow)
+make("UICorner", { CornerRadius = UDim.new(0, 6) }, petBox)
+make("UIPadding", {
+	PaddingLeft = UDim.new(0, 10),
+	PaddingRight = UDim.new(0, 10),
+}, petBox)
 
-local petLayout = petRow:FindFirstChildOfClass("UIGridLayout")
-local petButtons = {}
+petBox.FocusLost:Connect(function()
+	selectedPetText = petBox.Text
+	setStatus("Pet filter: " .. (selectedPetText ~= "" and selectedPetText or "none"))
+end)
 
-local function refreshPetButton(petName)
-	local button = petButtons[petName]
-	if not button then
-		return
-	end
-
-	local enabled = selectedPets[petName] == true
-	button.Text = (enabled and "[x] " or "[ ] ") .. petName
-	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
-end
-
-local function refreshPetCanvas()
-	local rows = math.ceil(#petNames / 2)
-	petRow.CanvasSize = UDim2.fromOffset(0, rows * 34)
-end
-
-for index, petName in ipairs(petNames) do
-	local button = make("TextButton", {
-		Name = petName,
-		AutoButtonColor = false,
-		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
-		BorderSizePixel = 0,
-		Font = Enum.Font.GothamSemibold,
-		Text = petName,
-		TextColor3 = Color3.fromRGB(242, 247, 239),
-		TextSize = 12,
-		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(118, 28),
-		LayoutOrder = index,
-	}, petRow)
-	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
-
-	petButtons[petName] = button
-	refreshPetButton(petName)
-
-	button.Activated:Connect(function()
-		selectedPets[petName] = not selectedPets[petName]
-		refreshPetButton(petName)
-		setStatus((selectedPets[petName] and "Selected " or "Unselected ") .. petName)
-	end)
-end
-
-if petLayout then
-	petLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshPetCanvas)
-end
-refreshPetCanvas()
+petBox:GetPropertyChangedSignal("Text"):Connect(function()
+	selectedPetText = petBox.Text
+end)
 
 local dragStart
 local startPos
