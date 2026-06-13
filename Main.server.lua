@@ -1,10 +1,11 @@
 -- Main.server.lua
--- Client-safe script hub loader for loadstring/executor-style environments.
--- This does not bypass server authority. Gameplay actions only work when the
--- place already has compatible DevScriptHubRemotes exposed by your own server.
+-- Client-safe script hub loader. It can be used as a loadstring, but it does
+-- not bypass server authority. Farm actions only work when your own server has
+-- compatible DevScriptHubRemotes in ReplicatedStorage.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
@@ -18,6 +19,21 @@ local playerGui = player:WaitForChild("PlayerGui")
 local REMOTE_FOLDER_NAME = "DevScriptHubRemotes"
 local ACTION_REMOTE_NAME = "Action"
 local STATUS_REMOTE_NAME = "Status"
+
+local COLORS = {
+	bg = Color3.fromRGB(9, 12, 18),
+	panel = Color3.fromRGB(15, 20, 30),
+	panel2 = Color3.fromRGB(21, 28, 40),
+	card = Color3.fromRGB(25, 34, 48),
+	stroke = Color3.fromRGB(76, 90, 112),
+	text = Color3.fromRGB(241, 245, 249),
+	muted = Color3.fromRGB(148, 163, 184),
+	green = Color3.fromRGB(31, 122, 73),
+	green2 = Color3.fromRGB(19, 83, 45),
+	blue = Color3.fromRGB(37, 99, 235),
+	red = Color3.fromRGB(153, 43, 43),
+	yellow = Color3.fromRGB(202, 138, 4),
+}
 
 local SEED_OPTIONS = {
 	"Carrot",
@@ -41,6 +57,42 @@ local SEED_OPTIONS = {
 	"Moon Bloom",
 }
 
+local PRESETS = {
+	{
+		name = "Balanced",
+		buyAmount = 1,
+		harvestRadius = 250,
+		modes = {
+			autoBuy = true,
+			autoPlant = true,
+			autoHarvest = true,
+			autoSell = false,
+		},
+	},
+	{
+		name = "Harvest",
+		buyAmount = 1,
+		harvestRadius = 500,
+		modes = {
+			autoBuy = false,
+			autoPlant = false,
+			autoHarvest = true,
+			autoSell = true,
+		},
+	},
+	{
+		name = "Full Auto",
+		buyAmount = 5,
+		harvestRadius = 750,
+		modes = {
+			autoBuy = true,
+			autoPlant = true,
+			autoHarvest = true,
+			autoSell = true,
+		},
+	},
+}
+
 local state = {
 	enabled = false,
 	autoBuy = false,
@@ -57,9 +109,17 @@ local state = {
 	lastResult = "server hub not found",
 }
 
-local refs = {}
+local refs = {
+	tabButtons = {},
+	pages = {},
+	statLabels = {},
+}
+
 local actionRemote = nil
 local statusRemote = nil
+local actionConnection = nil
+local activeTab = "Farm"
+local seedIndex = 1
 
 local function create(className, props, children)
 	local object = Instance.new(className)
@@ -81,7 +141,7 @@ end
 local function stroke(color, thickness, transparency)
 	return create("UIStroke", {
 		Color = color,
-		Thickness = thickness,
+		Thickness = thickness or 1,
 		Transparency = transparency or 0,
 	})
 end
@@ -95,12 +155,12 @@ local function padding(left, top, right, bottom)
 	})
 end
 
-local function label(text, size, color)
+local function label(text, size, color, font)
 	return create("TextLabel", {
 		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamMedium,
+		Font = font or Enum.Font.GothamMedium,
 		Text = text,
-		TextColor3 = color or Color3.fromRGB(226, 232, 240),
+		TextColor3 = color or COLORS.text,
 		TextSize = size or 13,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Center,
@@ -111,97 +171,130 @@ end
 local function button(text, color)
 	return create("TextButton", {
 		AutoButtonColor = true,
-		BackgroundColor3 = color or Color3.fromRGB(38, 50, 68),
+		BackgroundColor3 = color or COLORS.card,
 		BorderSizePixel = 0,
 		Font = Enum.Font.GothamBold,
 		Text = text,
-		TextColor3 = Color3.fromRGB(248, 250, 252),
+		TextColor3 = COLORS.text,
 		TextSize = 13,
 		TextWrapped = true,
 	}, {
 		corner(8),
-		stroke(Color3.fromRGB(87, 100, 125), 1, 0.3),
+		stroke(COLORS.stroke, 1, 0.35),
 	})
 end
 
 local function field(text)
 	return create("TextBox", {
-		BackgroundColor3 = Color3.fromRGB(15, 23, 42),
+		BackgroundColor3 = COLORS.bg,
 		BorderSizePixel = 0,
 		ClearTextOnFocus = false,
 		Font = Enum.Font.GothamMedium,
-		PlaceholderColor3 = Color3.fromRGB(148, 163, 184),
+		PlaceholderColor3 = COLORS.muted,
 		Text = text,
-		TextColor3 = Color3.fromRGB(248, 250, 252),
+		TextColor3 = COLORS.text,
 		TextSize = 13,
 		TextWrapped = true,
 	}, {
 		corner(8),
-		stroke(Color3.fromRGB(71, 85, 105), 1, 0.2),
+		stroke(COLORS.stroke, 1, 0.3),
 		padding(10, 0, 10, 0),
 	})
 end
 
-local function findRemotes()
-	local folder = ReplicatedStorage:FindFirstChild(REMOTE_FOLDER_NAME)
-	if not folder then
-		actionRemote = nil
-		statusRemote = nil
-		return false
+local function card(parent, y, height)
+	local frame = create("Frame", {
+		BackgroundColor3 = COLORS.card,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 0, 0, y),
+		Size = UDim2.new(1, 0, 0, height),
+	}, {
+		corner(10),
+		stroke(COLORS.stroke, 1, 0.55),
+		padding(12, 10, 12, 10),
+	})
+	frame.Parent = parent
+	return frame
+end
+
+local function setStatus(message, color)
+	state.lastResult = message
+	if refs.status then
+		refs.status.Text = "Status: " .. tostring(message)
+		refs.status.TextColor3 = color or COLORS.muted
+	end
+end
+
+local function connectActionRemote()
+	if actionConnection then
+		actionConnection:Disconnect()
+		actionConnection = nil
 	end
 
-	local foundAction = folder:FindFirstChild(ACTION_REMOTE_NAME)
-	local foundStatus = folder:FindFirstChild(STATUS_REMOTE_NAME)
-	if foundAction and foundAction:IsA("RemoteEvent") then
-		actionRemote = foundAction
+	if actionRemote then
+		actionConnection = actionRemote.OnClientEvent:Connect(function(success, result)
+			if success then
+				if typeof(result) == "table" then
+					for key, value in pairs(result) do
+						state[key] = value
+					end
+					setStatus(state.lastResult or "updated", COLORS.green)
+				else
+					setStatus("updated", COLORS.green)
+				end
+			else
+				setStatus(tostring(result), COLORS.red)
+			end
+			if refs.panel then
+				task.defer(function()
+					if refs.refresh then
+						refs.refresh()
+					end
+				end)
+			end
+		end)
 	end
-	if foundStatus and foundStatus:IsA("RemoteFunction") then
-		statusRemote = foundStatus
+end
+
+local function findRemotes()
+	local folder = ReplicatedStorage:FindFirstChild(REMOTE_FOLDER_NAME)
+	local previousAction = actionRemote
+
+	actionRemote = nil
+	statusRemote = nil
+
+	if folder then
+		local foundAction = folder:FindFirstChild(ACTION_REMOTE_NAME)
+		local foundStatus = folder:FindFirstChild(STATUS_REMOTE_NAME)
+		if foundAction and foundAction:IsA("RemoteEvent") then
+			actionRemote = foundAction
+		end
+		if foundStatus and foundStatus:IsA("RemoteFunction") then
+			statusRemote = foundStatus
+		end
+	end
+
+	if previousAction ~= actionRemote then
+		connectActionRemote()
 	end
 
 	return actionRemote ~= nil or statusRemote ~= nil
 end
 
-local function formatEnabled(value)
-	return value and "ON" or "OFF"
-end
-
-local function setButtonState(buttonRef, enabled)
-	buttonRef.Text = buttonRef:GetAttribute("Label") .. ": " .. formatEnabled(enabled)
-	buttonRef.BackgroundColor3 = enabled and Color3.fromRGB(22, 101, 52) or Color3.fromRGB(38, 50, 68)
-end
-
-local function updateStatus(nextState)
-	if typeof(nextState) == "table" then
-		for key, value in pairs(nextState) do
-			state[key] = value
-		end
+local function send(actionName, payload)
+	findRemotes()
+	if not actionRemote then
+		setStatus("server hub not found", COLORS.yellow)
+		return
 	end
 
-	if refs.masterToggle then
-		setButtonState(refs.masterToggle, state.enabled)
-		setButtonState(refs.buyToggle, state.autoBuy)
-		setButtonState(refs.plantToggle, state.autoPlant)
-		setButtonState(refs.harvestToggle, state.autoHarvest)
-		setButtonState(refs.sellToggle, state.autoSell)
-		refs.seedBox.Text = state.seedName or ""
-		refs.amountBox.Text = tostring(state.buyAmount or 1)
-		refs.radiusBox.Text = tostring(state.harvestRadius or 250)
-		refs.status.Text = "Status: " .. tostring(state.lastResult or "idle")
-		refs.counters.Text = ("Bought %d  Planted %d  Harvested %d  Sold %d"):format(
-			tonumber(state.totalBought) or 0,
-			tonumber(state.totalPlanted) or 0,
-			tonumber(state.totalHarvested) or 0,
-			tonumber(state.totalSold) or 0
-		)
-	end
+	actionRemote:FireServer(actionName, payload or {})
 end
 
 local function requestStatus()
 	findRemotes()
 	if not statusRemote then
-		state.lastResult = "server hub not found"
-		updateStatus()
+		setStatus("server hub not found", COLORS.yellow)
 		return
 	end
 
@@ -210,31 +303,72 @@ local function requestStatus()
 	end)
 
 	if not ok then
-		state.lastResult = "server did not answer"
-		updateStatus()
+		setStatus("server did not answer", COLORS.red)
 	elseif success then
-		updateStatus(result)
+		if typeof(result) == "table" then
+			for key, value in pairs(result) do
+				state[key] = value
+			end
+		end
+		setStatus(state.lastResult or "ready", COLORS.green)
 	else
-		state.lastResult = tostring(result)
-		updateStatus()
+		setStatus(tostring(result), COLORS.red)
 	end
 end
 
-local function send(actionName, payload)
-	findRemotes()
-	if not actionRemote then
-		state.lastResult = "server hub not found"
-		updateStatus()
+local function setButtonState(buttonRef, enabled)
+	buttonRef.Text = buttonRef:GetAttribute("Label") .. ": " .. (enabled and "ON" or "OFF")
+	buttonRef.BackgroundColor3 = enabled and COLORS.green2 or COLORS.card
+end
+
+local function refreshUi()
+	if not refs.panel then
 		return
 	end
 
-	actionRemote:FireServer(actionName, payload or {})
+	setButtonState(refs.masterToggle, state.enabled)
+	setButtonState(refs.buyToggle, state.autoBuy)
+	setButtonState(refs.plantToggle, state.autoPlant)
+	setButtonState(refs.harvestToggle, state.autoHarvest)
+	setButtonState(refs.sellToggle, state.autoSell)
+
+	refs.seedBox.Text = state.seedName or "Carrot"
+	refs.amountBox.Text = tostring(state.buyAmount or 1)
+	refs.radiusBox.Text = tostring(state.harvestRadius or 250)
+
+	refs.statLabels.bought.Text = tostring(state.totalBought or 0)
+	refs.statLabels.planted.Text = tostring(state.totalPlanted or 0)
+	refs.statLabels.harvested.Text = tostring(state.totalHarvested or 0)
+	refs.statLabels.sold.Text = tostring(state.totalSold or 0)
+
+	refs.connection.Text = ("Remotes: %s / %s"):format(actionRemote and "Action" or "No action", statusRemote and "Status" or "No status")
+	refs.connection.TextColor3 = (actionRemote or statusRemote) and COLORS.green or COLORS.yellow
+	refs.status.Text = "Status: " .. tostring(state.lastResult or "idle")
 end
 
-local function makeToggle(parent, text, stateKey, modeName)
+refs.refresh = refreshUi
+
+local function applyPreset(preset)
+	send("setBuyAmount", {
+		amount = preset.buyAmount,
+	})
+	send("setHarvestRadius", {
+		radius = preset.harvestRadius,
+	})
+	for modeName, enabled in pairs(preset.modes) do
+		send("setMode", {
+			mode = modeName,
+			enabled = enabled,
+		})
+	end
+	setStatus("applied " .. preset.name, COLORS.green)
+end
+
+local function makeToggle(parent, text, stateKey, modeName, position)
 	local item = button(text .. ": OFF")
 	item:SetAttribute("Label", text)
-	item.Size = UDim2.new(1, 0, 0, 38)
+	item.Position = position
+	item.Size = UDim2.new(0.5, -6, 0, 38)
 	item.Parent = parent
 	item.MouseButton1Click:Connect(function()
 		send("setMode", {
@@ -243,6 +377,67 @@ local function makeToggle(parent, text, stateKey, modeName)
 		})
 	end)
 	return item
+end
+
+local function makeStat(parent, title, key, x)
+	local item = create("Frame", {
+		BackgroundColor3 = COLORS.panel2,
+		BorderSizePixel = 0,
+		Position = UDim2.new(x, 0, 0, 0),
+		Size = UDim2.new(0.25, -7, 1, 0),
+	}, {
+		corner(8),
+		padding(8, 6, 8, 6),
+	})
+	item.Parent = parent
+
+	local value = label("0", 16, COLORS.text, Enum.Font.GothamBold)
+	value.Size = UDim2.new(1, 0, 0, 22)
+	value.Parent = item
+
+	local name = label(title, 10, COLORS.muted)
+	name.Position = UDim2.new(0, 0, 0, 23)
+	name.Size = UDim2.new(1, 0, 0, 16)
+	name.Parent = item
+
+	refs.statLabels[key] = value
+end
+
+local function setTab(tabName)
+	activeTab = tabName
+	for name, page in pairs(refs.pages) do
+		page.Visible = name == tabName
+	end
+	for name, tabButton in pairs(refs.tabButtons) do
+		tabButton.BackgroundColor3 = name == tabName and COLORS.blue or COLORS.panel2
+	end
+end
+
+local function enableDragging(handle, target)
+	local dragging = false
+	local dragStart = nil
+	local startPosition = nil
+
+	handle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPosition = target.Position
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = input.Position - dragStart
+			target.Position = UDim2.new(startPosition.X.Scale, startPosition.X.Offset + delta.X, startPosition.Y.Scale, startPosition.Y.Offset + delta.Y)
+		end
+	end)
 end
 
 local function buildGui()
@@ -259,127 +454,159 @@ local function buildGui()
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	})
 
-	local launcher = button("Hub", Color3.fromRGB(20, 83, 45))
+	local launcher = button("Hub", COLORS.green2)
 	launcher.Name = "Launcher"
 	launcher.Position = UDim2.new(0, 18, 0.5, -22)
-	launcher.Size = UDim2.new(0, 72, 0, 44)
+	launcher.Size = UDim2.new(0, 74, 0, 44)
 	launcher.Parent = screen
 
 	local panel = create("Frame", {
 		Name = "Panel",
 		AnchorPoint = Vector2.new(0, 0.5),
-		BackgroundColor3 = Color3.fromRGB(8, 13, 24),
+		BackgroundColor3 = COLORS.panel,
 		BorderSizePixel = 0,
-		Position = UDim2.new(0, 104, 0.5, 0),
-		Size = UDim2.new(0, 360, 0, 482),
+		Position = UDim2.new(0, 110, 0.5, 0),
+		Size = UDim2.new(0, 430, 0, 520),
 		Visible = true,
 	}, {
-		corner(10),
-		stroke(Color3.fromRGB(71, 85, 105), 1, 0.1),
+		corner(12),
+		stroke(COLORS.stroke, 1, 0.2),
 		padding(14, 14, 14, 14),
 	})
 	panel.Parent = screen
+	refs.panel = panel
 
-	local title = label("Grow a Garden 2 Script Hub", 16, Color3.fromRGB(250, 250, 250))
-	title.Font = Enum.Font.GothamBold
-	title.Size = UDim2.new(1, -46, 0, 28)
-	title.Parent = panel
+	local header = create("Frame", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 54),
+	})
+	header.Parent = panel
+	enableDragging(header, panel)
 
-	local close = button("X", Color3.fromRGB(69, 26, 26))
-	close.Position = UDim2.new(1, -36, 0, 0)
-	close.Size = UDim2.new(0, 36, 0, 30)
-	close.Parent = panel
+	local title = label("Grow a Garden 2 Hub", 18, COLORS.text, Enum.Font.GothamBold)
+	title.Size = UDim2.new(1, -92, 0, 26)
+	title.Parent = header
 
-	refs.status = label("Status: loading", 12, Color3.fromRGB(203, 213, 225))
-	refs.status.Position = UDim2.new(0, 0, 0, 34)
-	refs.status.Size = UDim2.new(1, 0, 0, 22)
-	refs.status.Parent = panel
+	refs.status = label("Status: loading", 12, COLORS.muted)
+	refs.status.Position = UDim2.new(0, 0, 0, 27)
+	refs.status.Size = UDim2.new(1, -92, 0, 20)
+	refs.status.Parent = header
 
-	refs.counters = label("Bought 0  Planted 0  Harvested 0  Sold 0", 12, Color3.fromRGB(148, 163, 184))
-	refs.counters.Position = UDim2.new(0, 0, 0, 58)
-	refs.counters.Size = UDim2.new(1, 0, 0, 34)
-	refs.counters.Parent = panel
+	local refresh = button("Sync", COLORS.blue)
+	refresh.Position = UDim2.new(1, -88, 0, 2)
+	refresh.Size = UDim2.new(0, 48, 0, 30)
+	refresh.Parent = header
+	refresh.MouseButton1Click:Connect(function()
+		requestStatus()
+		refreshUi()
+	end)
 
-	refs.masterToggle = button("Auto Farm: OFF", Color3.fromRGB(38, 50, 68))
+	local close = button("X", COLORS.red)
+	close.Position = UDim2.new(1, -34, 0, 2)
+	close.Size = UDim2.new(0, 34, 0, 30)
+	close.Parent = header
+
+	local tabs = create("Frame", {
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, 0, 0, 62),
+		Size = UDim2.new(1, 0, 0, 36),
+	})
+	tabs.Parent = panel
+
+	local tabLayout = create("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		Padding = UDim.new(0, 8),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	})
+	tabLayout.Parent = tabs
+
+	for _, tabName in ipairs({ "Farm", "Presets", "Tools" }) do
+		local tabButton = button(tabName, tabName == activeTab and COLORS.blue or COLORS.panel2)
+		tabButton.Size = UDim2.new(0.333, -6, 1, 0)
+		tabButton.Parent = tabs
+		tabButton.MouseButton1Click:Connect(function()
+			setTab(tabName)
+		end)
+		refs.tabButtons[tabName] = tabButton
+	end
+
+	local pageHolder = create("Frame", {
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, 0, 0, 112),
+		Size = UDim2.new(1, 0, 1, -112),
+	})
+	pageHolder.Parent = panel
+
+	for _, tabName in ipairs({ "Farm", "Presets", "Tools" }) do
+		refs.pages[tabName] = create("Frame", {
+			BackgroundTransparency = 1,
+			Size = UDim2.new(1, 0, 1, 0),
+			Visible = tabName == activeTab,
+		})
+		refs.pages[tabName].Parent = pageHolder
+	end
+
+	local farmPage = refs.pages.Farm
+
+	local stats = card(farmPage, 0, 58)
+	stats.Size = UDim2.new(1, 0, 0, 58)
+	makeStat(stats, "Bought", "bought", 0)
+	makeStat(stats, "Planted", "planted", 0.25)
+	makeStat(stats, "Harvested", "harvested", 0.5)
+	makeStat(stats, "Sold", "sold", 0.75)
+
+	refs.masterToggle = button("Auto Farm: OFF", COLORS.card)
 	refs.masterToggle:SetAttribute("Label", "Auto Farm")
-	refs.masterToggle.Position = UDim2.new(0, 0, 0, 102)
+	refs.masterToggle.Position = UDim2.new(0, 0, 0, 72)
 	refs.masterToggle.Size = UDim2.new(1, 0, 0, 42)
-	refs.masterToggle.Parent = panel
+	refs.masterToggle.Parent = farmPage
 	refs.masterToggle.MouseButton1Click:Connect(function()
 		send("setEnabled", {
 			enabled = not state.enabled,
 		})
 	end)
 
-	local grid = create("Frame", {
-		BackgroundTransparency = 1,
-		Position = UDim2.new(0, 0, 0, 156),
-		Size = UDim2.new(1, 0, 0, 86),
-	}, {
-		create("UIGridLayout", {
-			CellPadding = UDim2.new(0, 8, 0, 8),
-			CellSize = UDim2.new(0.5, -4, 0, 38),
-			SortOrder = Enum.SortOrder.LayoutOrder,
-		}),
-	})
-	grid.Parent = panel
+	local toggleCard = card(farmPage, 128, 98)
+	refs.buyToggle = makeToggle(toggleCard, "Buy", "autoBuy", "autoBuy", UDim2.new(0, 0, 0, 0))
+	refs.plantToggle = makeToggle(toggleCard, "Plant", "autoPlant", "autoPlant", UDim2.new(0.5, 6, 0, 0))
+	refs.harvestToggle = makeToggle(toggleCard, "Harvest", "autoHarvest", "autoHarvest", UDim2.new(0, 0, 0, 46))
+	refs.sellToggle = makeToggle(toggleCard, "Sell", "autoSell", "autoSell", UDim2.new(0.5, 6, 0, 46))
 
-	refs.buyToggle = makeToggle(grid, "Buy", "autoBuy", "autoBuy")
-	refs.plantToggle = makeToggle(grid, "Plant", "autoPlant", "autoPlant")
-	refs.harvestToggle = makeToggle(grid, "Harvest", "autoHarvest", "autoHarvest")
-	refs.sellToggle = makeToggle(grid, "Sell", "autoSell", "autoSell")
+	local form = card(farmPage, 240, 124)
 
-	local form = create("Frame", {
-		BackgroundTransparency = 1,
-		Position = UDim2.new(0, 0, 0, 256),
-		Size = UDim2.new(1, 0, 0, 122),
-	}, {
-		create("UIListLayout", {
-			Padding = UDim.new(0, 8),
-			SortOrder = Enum.SortOrder.LayoutOrder,
-		}),
-	})
-	form.Parent = panel
-
-	local function row(rowLabel, boxRef, applyText, applyAction)
-		local item = create("Frame", {
-			BackgroundTransparency = 1,
-			Size = UDim2.new(1, 0, 0, 34),
-		})
-		local text = label(rowLabel, 12, Color3.fromRGB(203, 213, 225))
-		text.Size = UDim2.new(0, 92, 1, 0)
-		text.Parent = item
+	local function row(rowLabel, boxRef, y, applyAction)
+		local text = label(rowLabel, 12, COLORS.muted)
+		text.Position = UDim2.new(0, 0, 0, y)
+		text.Size = UDim2.new(0, 96, 0, 34)
+		text.Parent = form
 
 		local input = field("")
-		input.Position = UDim2.new(0, 98, 0, 0)
-		input.Size = UDim2.new(1, -174, 1, 0)
-		input.Parent = item
+		input.Position = UDim2.new(0, 104, 0, y)
+		input.Size = UDim2.new(1, -178, 0, 34)
+		input.Parent = form
 
-		local apply = button(applyText, Color3.fromRGB(30, 64, 175))
-		apply.Position = UDim2.new(1, -68, 0, 0)
-		apply.Size = UDim2.new(0, 68, 1, 0)
-		apply.Parent = item
+		local apply = button("Set", COLORS.blue)
+		apply.Position = UDim2.new(1, -64, 0, y)
+		apply.Size = UDim2.new(0, 64, 0, 34)
+		apply.Parent = form
 		apply.MouseButton1Click:Connect(function()
 			applyAction(input.Text)
 		end)
 
-		item.Parent = form
 		refs[boxRef] = input
 	end
 
-	row("Seed", "seedBox", "Set", function(text)
+	row("Seed", "seedBox", 0, function(text)
 		send("setSeed", {
 			seedName = text,
 		})
 	end)
-
-	row("Buy amount", "amountBox", "Set", function(text)
+	row("Buy amount", "amountBox", 42, function(text)
 		send("setBuyAmount", {
 			amount = tonumber(text),
 		})
 	end)
-
-	row("Radius", "radiusBox", "Set", function(text)
+	row("Radius", "radiusBox", 84, function(text)
 		send("setHarvestRadius", {
 			radius = tonumber(text),
 		})
@@ -387,29 +614,25 @@ local function buildGui()
 
 	local quickSeeds = create("Frame", {
 		BackgroundTransparency = 1,
-		Position = UDim2.new(0, 0, 0, 388),
+		Position = UDim2.new(0, 0, 0, 378),
 		Size = UDim2.new(1, 0, 0, 38),
-	}, {
-		create("UIListLayout", {
-			FillDirection = Enum.FillDirection.Horizontal,
-			Padding = UDim.new(0, 8),
-			SortOrder = Enum.SortOrder.LayoutOrder,
-		}),
 	})
-	quickSeeds.Parent = panel
+	quickSeeds.Parent = farmPage
 
-	local seedIndex = 1
-	local previousSeed = button("<", Color3.fromRGB(51, 65, 85))
-	previousSeed.Size = UDim2.new(0, 42, 1, 0)
-	previousSeed.Parent = quickSeeds
+	local prevSeed = button("<", COLORS.panel2)
+	prevSeed.Position = UDim2.new(0, 0, 0, 0)
+	prevSeed.Size = UDim2.new(0, 42, 1, 0)
+	prevSeed.Parent = quickSeeds
 
-	local nextSeed = button("Next seed", Color3.fromRGB(51, 65, 85))
-	nextSeed.Size = UDim2.new(1, -100, 1, 0)
+	local seedPick = button("Next seed", COLORS.panel2)
+	seedPick.Position = UDim2.new(0, 50, 0, 0)
+	seedPick.Size = UDim2.new(1, -100, 1, 0)
+	seedPick.Parent = quickSeeds
+
+	local nextSeed = button(">", COLORS.panel2)
+	nextSeed.Position = UDim2.new(1, -42, 0, 0)
+	nextSeed.Size = UDim2.new(0, 42, 1, 0)
 	nextSeed.Parent = quickSeeds
-
-	local nextArrow = button(">", Color3.fromRGB(51, 65, 85))
-	nextArrow.Size = UDim2.new(0, 42, 1, 0)
-	nextArrow.Parent = quickSeeds
 
 	local function chooseSeed(delta)
 		seedIndex += delta
@@ -423,13 +646,13 @@ local function buildGui()
 		})
 	end
 
-	previousSeed.MouseButton1Click:Connect(function()
+	prevSeed.MouseButton1Click:Connect(function()
 		chooseSeed(-1)
 	end)
-	nextSeed.MouseButton1Click:Connect(function()
+	seedPick.MouseButton1Click:Connect(function()
 		chooseSeed(1)
 	end)
-	nextArrow.MouseButton1Click:Connect(function()
+	nextSeed.MouseButton1Click:Connect(function()
 		chooseSeed(1)
 	end)
 
@@ -437,28 +660,85 @@ local function buildGui()
 		BackgroundTransparency = 1,
 		Position = UDim2.new(0, 0, 1, -42),
 		Size = UDim2.new(1, 0, 0, 42),
-	}, {
-		create("UIListLayout", {
-			FillDirection = Enum.FillDirection.Horizontal,
-			Padding = UDim.new(0, 8),
-			SortOrder = Enum.SortOrder.LayoutOrder,
-		}),
 	})
-	actions.Parent = panel
+	actions.Parent = farmPage
 
-	local step = button("Run once", Color3.fromRGB(30, 64, 175))
-	step.Size = UDim2.new(0.5, -4, 1, 0)
+	local step = button("Run once", COLORS.blue)
+	step.Position = UDim2.new(0, 0, 0, 0)
+	step.Size = UDim2.new(0.5, -5, 1, 0)
 	step.Parent = actions
 	step.MouseButton1Click:Connect(function()
 		send("stepOnce")
 	end)
 
-	local stop = button("Stop all", Color3.fromRGB(127, 29, 29))
-	stop.Size = UDim2.new(0.5, -4, 1, 0)
+	local stop = button("Stop all", COLORS.red)
+	stop.Position = UDim2.new(0.5, 5, 0, 0)
+	stop.Size = UDim2.new(0.5, -5, 1, 0)
 	stop.Parent = actions
 	stop.MouseButton1Click:Connect(function()
 		send("stopAll")
 	end)
+
+	local presetPage = refs.pages.Presets
+	for index, preset in ipairs(PRESETS) do
+		local presetCard = card(presetPage, (index - 1) * 98, 84)
+		local presetTitle = label(preset.name, 15, COLORS.text, Enum.Font.GothamBold)
+		presetTitle.Size = UDim2.new(1, -92, 0, 24)
+		presetTitle.Parent = presetCard
+
+		local presetText = label(("Buy %d | Radius %d"):format(preset.buyAmount, preset.harvestRadius), 12, COLORS.muted)
+		presetText.Position = UDim2.new(0, 0, 0, 28)
+		presetText.Size = UDim2.new(1, -92, 0, 22)
+		presetText.Parent = presetCard
+
+		local apply = button("Apply", COLORS.green2)
+		apply.Position = UDim2.new(1, -80, 0, 13)
+		apply.Size = UDim2.new(0, 80, 0, 40)
+		apply.Parent = presetCard
+		apply.MouseButton1Click:Connect(function()
+			applyPreset(preset)
+		end)
+	end
+
+	local toolsPage = refs.pages.Tools
+	local diag = card(toolsPage, 0, 148)
+
+	refs.connection = label("Remotes: checking", 13, COLORS.muted)
+	refs.connection.Size = UDim2.new(1, 0, 0, 28)
+	refs.connection.Parent = diag
+
+	local account = label(("Player: %s (%d)"):format(player.Name, player.UserId), 12, COLORS.muted)
+	account.Position = UDim2.new(0, 0, 0, 32)
+	account.Size = UDim2.new(1, 0, 0, 24)
+	account.Parent = diag
+
+	local place = label(("PlaceId: %d"):format(game.PlaceId), 12, COLORS.muted)
+	place.Position = UDim2.new(0, 0, 0, 56)
+	place.Size = UDim2.new(1, 0, 0, 24)
+	place.Parent = diag
+
+	local reconnect = button("Reconnect remotes", COLORS.blue)
+	reconnect.Position = UDim2.new(0, 0, 0, 92)
+	reconnect.Size = UDim2.new(0.5, -5, 0, 38)
+	reconnect.Parent = diag
+	reconnect.MouseButton1Click:Connect(function()
+		findRemotes()
+		requestStatus()
+		refreshUi()
+	end)
+
+	local hide = button("Hide panel", COLORS.panel2)
+	hide.Position = UDim2.new(0.5, 5, 0, 92)
+	hide.Size = UDim2.new(0.5, -5, 0, 38)
+	hide.Parent = diag
+	hide.MouseButton1Click:Connect(function()
+		panel.Visible = false
+	end)
+
+	local note = card(toolsPage, 164, 90)
+	local noteText = label("Actions require matching server remotes. If no remotes are found, the UI stays usable but farm buttons cannot affect gameplay.", 12, COLORS.muted)
+	noteText.Size = UDim2.new(1, 0, 1, 0)
+	noteText.Parent = note
 
 	launcher.MouseButton1Click:Connect(function()
 		panel.Visible = not panel.Visible
@@ -477,25 +757,24 @@ local function buildGui()
 	end)
 
 	screen.Parent = playerGui
+	setTab(activeTab)
+	refreshUi()
+
+	panel.BackgroundTransparency = 1
+	TweenService:Create(panel, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		BackgroundTransparency = 0,
+	}):Play()
 end
 
 buildGui()
+findRemotes()
 requestStatus()
-
-if actionRemote then
-	actionRemote.OnClientEvent:Connect(function(success, result)
-		if success then
-			updateStatus(result)
-		else
-			state.lastResult = tostring(result)
-			updateStatus()
-		end
-	end)
-end
+refreshUi()
 
 task.spawn(function()
 	while task.wait(2) do
 		requestStatus()
+		refreshUi()
 	end
 end)
 
