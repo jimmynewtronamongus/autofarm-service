@@ -25,6 +25,7 @@ local CONFIG = {
 	maxVisualPets = 24,
 	maxVisualPetTools = 24,
 	visualPetAmount = 3,
+	visualPetVariant = "Normal",
 	selectedSeed = "Carrot",
 	plantRadius = 18,
 }
@@ -115,6 +116,13 @@ local selectedPets = {
 
 local selectedVisualPets = {
 	Dragonfly = true,
+}
+
+local visualPetVariants = {
+	"Normal",
+	"Giant",
+	"Rainbow",
+	"Giant Rainbow",
 }
 
 local statusValue
@@ -1160,6 +1168,89 @@ local function getPetIcon(petName, template)
 	return ""
 end
 
+local function getVariantFlags(variant)
+	variant = tostring(variant or "Normal")
+	return string.find(variant, "Giant", 1, true) ~= nil, string.find(variant, "Rainbow", 1, true) ~= nil
+end
+
+local function findVisualPetTemplate(petsFolder, petName, variant)
+	local wantsGiant, wantsRainbow = getVariantFlags(variant)
+	local names = { petName }
+
+	if wantsGiant and wantsRainbow then
+		table.insert(names, "Giant Rainbow " .. petName)
+		table.insert(names, "Rainbow Giant " .. petName)
+		table.insert(names, petName .. " Giant Rainbow")
+		table.insert(names, petName .. " Rainbow Giant")
+		table.insert(names, "Giant " .. petName .. " Rainbow")
+		table.insert(names, "Rainbow " .. petName .. " Giant")
+	elseif wantsGiant then
+		table.insert(names, "Giant " .. petName)
+		table.insert(names, petName .. " Giant")
+	elseif wantsRainbow then
+		table.insert(names, "Rainbow " .. petName)
+		table.insert(names, petName .. " Rainbow")
+	end
+
+	for index = 2, #names do
+		local template = petsFolder:FindFirstChild(names[index])
+		if template then
+			return template, true
+		end
+	end
+
+	if wantsGiant or wantsRainbow then
+		local compactPet = compactName(petName)
+		for _, child in ipairs(petsFolder:GetChildren()) do
+			local compactChild = compactName(child.Name)
+			local hasPet = string.find(compactChild, compactPet, 1, true) ~= nil
+			local hasGiant = not wantsGiant or string.find(compactChild, "giant", 1, true) ~= nil
+			local hasRainbow = not wantsRainbow or string.find(compactChild, "rainbow", 1, true) ~= nil
+			if hasPet and hasGiant and hasRainbow then
+				return child, true
+			end
+		end
+	end
+
+	return petsFolder:FindFirstChild(petName), false
+end
+
+local function applyVisualPetVariant(instance, variant, usedVariantAsset)
+	local wantsGiant, wantsRainbow = getVariantFlags(variant)
+	if variant and variant ~= "Normal" then
+		instance:SetAttribute("Variant", variant)
+	end
+
+	if wantsGiant then
+		instance:SetAttribute("Giant", true)
+		instance:SetAttribute("SizeMultiplier", 2)
+	end
+
+	if wantsRainbow then
+		instance:SetAttribute("Mutation", "Rainbow")
+		instance:SetAttribute("Rainbow", true)
+	end
+
+	if wantsGiant and not usedVariantAsset then
+		pcall(function()
+			if instance:IsA("Model") then
+				instance:ScaleTo(2)
+			elseif instance:IsA("BasePart") then
+				instance.Size *= 2
+			end
+		end)
+	end
+
+	if wantsRainbow and not usedVariantAsset then
+		for index, descendant in ipairs(instance:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				descendant.Color = Color3.fromHSV((index * 0.11) % 1, 0.8, 1)
+				descendant.Material = Enum.Material.Neon
+			end
+		end
+	end
+end
+
 local function playPetAnimations(instance)
 	local animator
 	for _, descendant in ipairs(instance:GetDescendants()) do
@@ -1203,15 +1294,21 @@ local function playPetAnimations(instance)
 	end
 end
 
-local function makeLocalPetTool(petName, template, slot)
+local function makeLocalPetTool(petName, template, slot, variant, usedVariantAsset)
 	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
 	if not backpack then
 		return false
 	end
 
+	local wantsGiant, wantsRainbow = getVariantFlags(variant)
+	local toolName = petName
+	if variant and variant ~= "Normal" then
+		toolName = variant .. " " .. petName
+	end
+
 	local tool = Instance.new("Tool")
-	tool.Name = petName
-	tool.ToolTip = petName
+	tool.Name = toolName
+	tool.ToolTip = toolName
 	tool.RequiresHandle = true
 	tool.CanBeDropped = false
 	tool:SetAttribute("VisualPetTool", true)
@@ -1220,6 +1317,17 @@ local function makeLocalPetTool(petName, template, slot)
 	tool:SetAttribute("PetId", ("local-%s-%d-%d"):format(string.gsub(petName, "%s+", "-"), slot or 0, math.floor(os.clock() * 1000)))
 	tool:SetAttribute("Count", 0)
 	tool:SetAttribute("Slot", slot or 0)
+	if variant and variant ~= "Normal" then
+		tool:SetAttribute("Variant", variant)
+	end
+	if wantsGiant then
+		tool:SetAttribute("Giant", true)
+		tool:SetAttribute("SizeMultiplier", 2)
+	end
+	if wantsRainbow then
+		tool:SetAttribute("Mutation", "Rainbow")
+		tool:SetAttribute("Rainbow", true)
+	end
 
 	local icon = getPetIcon(petName, template)
 	if icon ~= "" then
@@ -1240,6 +1348,7 @@ local function makeLocalPetTool(petName, template, slot)
 
 	local clone = template:Clone()
 	clone.Name = "PetPreview"
+	applyVisualPetVariant(clone, variant, usedVariantAsset)
 	prepVisualPet(clone)
 	clone.Parent = tool
 
@@ -1426,7 +1535,7 @@ local function spawnVisualPets()
 		end
 
 		local petName = selected[((index - 1) % #selected) + 1]
-		local template = petsFolder:FindFirstChild(petName)
+		local template, usedVariantAsset = findVisualPetTemplate(petsFolder, petName, CONFIG.visualPetVariant)
 		if template then
 			local slot = startSlot + spawned + 1
 			local clone = template:Clone()
@@ -1434,6 +1543,7 @@ local function spawnVisualPets()
 			clone:SetAttribute("PetName", petName)
 			clone:SetAttribute("Slot", slot)
 			clone:SetAttribute("SpawnedAt", os.clock())
+			applyVisualPetVariant(clone, CONFIG.visualPetVariant, usedVariantAsset)
 			prepVisualPet(clone, true)
 			clone.Parent = folder
 			playPetAnimations(clone)
@@ -1455,7 +1565,7 @@ local function spawnVisualPets()
 
 			moveVisualPet(clone, target)
 
-			if toolCount < CONFIG.maxVisualPetTools and makeLocalPetTool(petName, template, slot) then
+			if toolCount < CONFIG.maxVisualPetTools and makeLocalPetTool(petName, template, slot, CONFIG.visualPetVariant, usedVariantAsset) then
 				toolCount += 1
 			end
 
@@ -1996,6 +2106,65 @@ if visualPetLayout then
 end
 refreshVisualPetCanvas()
 
+local selectedVisualVariantLabel = make("TextLabel", {
+	Name = "SelectedVisualVariantLabel",
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold,
+	Text = "Visual pet variant",
+	TextColor3 = Color3.fromRGB(221, 236, 216),
+	TextSize = 13,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Size = UDim2.new(1, 0, 0, 18),
+	LayoutOrder = 18,
+}, content)
+
+local variantRow = make("Frame", {
+	Name = "VisualPetVariantSelector",
+	BackgroundTransparency = 1,
+	Size = UDim2.new(1, 0, 0, 70),
+	LayoutOrder = 19,
+}, content)
+make("UIGridLayout", {
+	CellPadding = UDim2.fromOffset(6, 6),
+	CellSize = UDim2.fromOffset(118, 28),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, variantRow)
+
+local variantButtons = {}
+
+local function refreshVariantButtons()
+	for variantName, button in pairs(variantButtons) do
+		local enabled = CONFIG.visualPetVariant == variantName
+		button.Text = (enabled and "[x] " or "[ ] ") .. variantName
+		button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
+	end
+end
+
+for index, variantName in ipairs(visualPetVariants) do
+	local button = make("TextButton", {
+		Name = "Variant" .. string.gsub(variantName, "%s+", ""),
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = variantName,
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 12,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.fromOffset(118, 28),
+		LayoutOrder = index,
+	}, variantRow)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
+
+	variantButtons[variantName] = button
+	button.Activated:Connect(function()
+		CONFIG.visualPetVariant = variantName
+		refreshVariantButtons()
+		setStatus("Visual pet variant set to " .. variantName)
+	end)
+end
+refreshVariantButtons()
+
 local visualPetAmountBox = make("TextBox", {
 	Name = "VisualPetAmountBox",
 	BackgroundColor3 = Color3.fromRGB(34, 41, 42),
@@ -2007,7 +2176,7 @@ local visualPetAmountBox = make("TextBox", {
 	TextColor3 = Color3.fromRGB(242, 247, 239),
 	TextSize = 13,
 	Size = UDim2.new(1, 0, 0, 34),
-	LayoutOrder = 18,
+	LayoutOrder = 20,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, visualPetAmountBox)
 make("UIPadding", {
@@ -2035,8 +2204,8 @@ if petsFolder then
 	end)
 end
 
-makeActionButton("Spawn Visual Pets", 19, spawnVisualPets)
-makeActionButton("Clear Visual Pets", 20, clearVisualPets)
+makeActionButton("Spawn Visual Pets", 21, spawnVisualPets)
+makeActionButton("Clear Visual Pets", 22, clearVisualPets)
 
 local dragStart
 local startPos
