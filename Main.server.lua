@@ -59,29 +59,29 @@ local SEED_OPTIONS = {
 
 local PRESETS = {
 	{
-		name = "Balanced",
+		name = "Collector",
 		buyAmount = 1,
 		harvestRadius = 250,
 		modes = {
-			autoBuy = true,
+			autoBuy = false,
+			autoPlant = false,
+			autoHarvest = true,
+			autoSell = false,
+		},
+	},
+	{
+		name = "Replant",
+		buyAmount = 1,
+		harvestRadius = 500,
+		modes = {
+			autoBuy = false,
 			autoPlant = true,
 			autoHarvest = true,
 			autoSell = false,
 		},
 	},
 	{
-		name = "Harvest",
-		buyAmount = 1,
-		harvestRadius = 500,
-		modes = {
-			autoBuy = false,
-			autoPlant = false,
-			autoHarvest = true,
-			autoSell = true,
-		},
-	},
-	{
-		name = "Full Auto",
+		name = "Full Autofarm",
 		buyAmount = 5,
 		harvestRadius = 750,
 		modes = {
@@ -120,6 +120,7 @@ local statusRemote = nil
 local actionConnection = nil
 local activeTab = "Farm"
 local seedIndex = 1
+local refreshUi = nil
 
 local function create(className, props, children)
 	local object = Instance.new(className)
@@ -284,7 +285,25 @@ end
 local function send(actionName, payload)
 	findRemotes()
 	if not actionRemote then
-		setStatus("server hub not found", COLORS.yellow)
+		if actionName == "setEnabled" then
+			state.enabled = payload and payload.enabled == true
+		elseif actionName == "setMode" and payload then
+			state[payload.mode] = payload.enabled == true
+		elseif actionName == "setSeed" and payload then
+			state.seedName = payload.seedName or state.seedName
+		elseif actionName == "setBuyAmount" and payload then
+			state.buyAmount = tonumber(payload.amount) or state.buyAmount
+		elseif actionName == "setHarvestRadius" and payload then
+			state.harvestRadius = tonumber(payload.radius) or state.harvestRadius
+		elseif actionName == "stopAll" then
+			state.enabled = false
+			state.autoBuy = false
+			state.autoPlant = false
+			state.autoHarvest = false
+			state.autoSell = false
+		end
+		setStatus("server remotes required", COLORS.yellow)
+		refreshUi()
 		return
 	end
 
@@ -321,7 +340,7 @@ local function setButtonState(buttonRef, enabled)
 	buttonRef.BackgroundColor3 = enabled and COLORS.green2 or COLORS.card
 end
 
-local function refreshUi()
+refreshUi = function()
 	if not refs.panel then
 		return
 	end
@@ -483,7 +502,7 @@ local function buildGui()
 	header.Parent = panel
 	enableDragging(header, panel)
 
-	local title = label("Grow a Garden 2 Hub", 18, COLORS.text, Enum.Font.GothamBold)
+	local title = label("Grow a Garden 2 Autofarm", 18, COLORS.text, Enum.Font.GothamBold)
 	title.Size = UDim2.new(1, -92, 0, 26)
 	title.Parent = header
 
@@ -567,10 +586,10 @@ local function buildGui()
 	end)
 
 	local toggleCard = card(farmPage, 128, 98)
-	refs.buyToggle = makeToggle(toggleCard, "Buy", "autoBuy", "autoBuy", UDim2.new(0, 0, 0, 0))
-	refs.plantToggle = makeToggle(toggleCard, "Plant", "autoPlant", "autoPlant", UDim2.new(0.5, 6, 0, 0))
-	refs.harvestToggle = makeToggle(toggleCard, "Harvest", "autoHarvest", "autoHarvest", UDim2.new(0, 0, 0, 46))
-	refs.sellToggle = makeToggle(toggleCard, "Sell", "autoSell", "autoSell", UDim2.new(0.5, 6, 0, 46))
+	refs.harvestToggle = makeToggle(toggleCard, "Fruit Collector", "autoHarvest", "autoHarvest", UDim2.new(0, 0, 0, 0))
+	refs.plantToggle = makeToggle(toggleCard, "Seed Placer", "autoPlant", "autoPlant", UDim2.new(0.5, 6, 0, 0))
+	refs.sellToggle = makeToggle(toggleCard, "Auto Sell", "autoSell", "autoSell", UDim2.new(0, 0, 0, 46))
+	refs.buyToggle = makeToggle(toggleCard, "Auto Buy Seeds", "autoBuy", "autoBuy", UDim2.new(0.5, 6, 0, 46))
 
 	local form = card(farmPage, 240, 124)
 
@@ -601,12 +620,12 @@ local function buildGui()
 			seedName = text,
 		})
 	end)
-	row("Buy amount", "amountBox", 42, function(text)
+	row("Seed buy x", "amountBox", 42, function(text)
 		send("setBuyAmount", {
 			amount = tonumber(text),
 		})
 	end)
-	row("Radius", "radiusBox", 84, function(text)
+	row("Collect radius", "radiusBox", 84, function(text)
 		send("setHarvestRadius", {
 			radius = tonumber(text),
 		})
@@ -686,7 +705,7 @@ local function buildGui()
 		presetTitle.Size = UDim2.new(1, -92, 0, 24)
 		presetTitle.Parent = presetCard
 
-		local presetText = label(("Buy %d | Radius %d"):format(preset.buyAmount, preset.harvestRadius), 12, COLORS.muted)
+		local presetText = label(("Auto buy x%d | Collect radius %d"):format(preset.buyAmount, preset.harvestRadius), 12, COLORS.muted)
 		presetText.Position = UDim2.new(0, 0, 0, 28)
 		presetText.Size = UDim2.new(1, -92, 0, 22)
 		presetText.Parent = presetCard
@@ -736,7 +755,7 @@ local function buildGui()
 	end)
 
 	local note = card(toolsPage, 164, 90)
-	local noteText = label("Actions require matching server remotes. If no remotes are found, the UI stays usable but farm buttons cannot affect gameplay.", 12, COLORS.muted)
+	local noteText = label("Fruit Collector, Seed Placer, Auto Sell, and Auto Buy Seeds require matching server remotes. Without them, the UI can save choices but cannot change gameplay.", 12, COLORS.muted)
 	noteText.Size = UDim2.new(1, 0, 1, 0)
 	noteText.Parent = note
 
