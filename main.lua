@@ -1113,16 +1113,10 @@ local function playPetAnimations(instance)
 	end
 end
 
-local function makeLocalPetTool(petName, template)
+local function makeLocalPetTool(petName, template, slot)
 	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
 	if not backpack then
 		return false
-	end
-
-	for _, child in ipairs(backpack:GetChildren()) do
-		if child:IsA("Tool") and child:GetAttribute("VisualPetTool") and child:GetAttribute("PetName") == petName then
-			return true
-		end
 	end
 
 	local tool = Instance.new("Tool")
@@ -1133,8 +1127,9 @@ local function makeLocalPetTool(petName, template)
 	tool:SetAttribute("VisualPetTool", true)
 	tool:SetAttribute("PetName", petName)
 	tool:SetAttribute("Pet", petName)
-	tool:SetAttribute("PetId", ("local-%s-%d"):format(string.gsub(petName, "%s+", "-"), math.floor(os.clock() * 1000)))
+	tool:SetAttribute("PetId", ("local-%s-%d-%d"):format(string.gsub(petName, "%s+", "-"), slot or 0, math.floor(os.clock() * 1000)))
 	tool:SetAttribute("Count", 0)
+	tool:SetAttribute("Slot", slot or 0)
 
 	local icon = getPetIcon(template)
 	if icon ~= "" then
@@ -1250,6 +1245,14 @@ local function updateVisualPetBehavior()
 	if #pets == 0 then
 		return
 	end
+	table.sort(pets, function(a, b)
+		local slotA = a:GetAttribute("Slot") or 0
+		local slotB = b:GetAttribute("Slot") or 0
+		if slotA == slotB then
+			return (a:GetAttribute("SpawnedAt") or 0) < (b:GetAttribute("SpawnedAt") or 0)
+		end
+		return slotA < slotB
+	end)
 
 	local rayParams = RaycastParams.new()
 	rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -1257,9 +1260,12 @@ local function updateVisualPetBehavior()
 	local now = os.clock()
 
 	for index, pet in ipairs(pets) do
-		local row = math.floor((index - 1) / 4)
-		local column = ((index - 1) % 4) - 1.5
-		local desired = root.Position - (root.CFrame.LookVector * (5 + row * 2.5)) + (root.CFrame.RightVector * (column * 2.8))
+		local row = math.floor((index - 1) / 3)
+		local column = ((index - 1) % 3) - 1
+		local sideOffset = column * 3.2
+		local backOffset = 5.5 + row * 3.0
+		local sway = math.sin(now * 1.8 + index) * 0.45
+		local desired = root.Position - (root.CFrame.LookVector * backOffset) + (root.CFrame.RightVector * (sideOffset + sway))
 		local rayResult = workspace:Raycast(desired + Vector3.new(0, 24, 0), Vector3.new(0, -90, 0), rayParams)
 		if rayResult then
 			desired = rayResult.Position + Vector3.new(0, 1.4 + math.sin(now * 2.4 + index) * 0.18, 0)
@@ -1267,9 +1273,13 @@ local function updateVisualPetBehavior()
 			desired += Vector3.new(0, 1.2, 0)
 		end
 
-		local target = CFrame.new(desired, Vector3.new(root.Position.X, desired.Y, root.Position.Z))
+		local target = CFrame.new(desired, desired + root.CFrame.LookVector)
 		local current = getPetPivot(pet)
-		moveVisualPet(pet, current and current:Lerp(target, 0.16) or target)
+		if current and (current.Position - desired).Magnitude < 45 then
+			moveVisualPet(pet, current:Lerp(target, 0.35))
+		else
+			moveVisualPet(pet, target)
+		end
 	end
 end
 
@@ -1307,6 +1317,7 @@ local function spawnVisualPets()
 	local folder = getVisualPetFolder()
 	local amount = math.floor(tonumber(CONFIG.visualPetAmount) or 1)
 	amount = math.clamp(amount, 1, CONFIG.maxVisualPets)
+	local startSlot = #folder:GetChildren()
 
 	for index = 1, amount do
 		if #folder:GetChildren() >= CONFIG.maxVisualPets then
@@ -1316,9 +1327,11 @@ local function spawnVisualPets()
 		local petName = selected[((index - 1) % #selected) + 1]
 		local template = petsFolder:FindFirstChild(petName)
 		if template then
+			local slot = startSlot + spawned + 1
 			local clone = template:Clone()
 			clone.Name = petName
 			clone:SetAttribute("PetName", petName)
+			clone:SetAttribute("Slot", slot)
 			clone:SetAttribute("SpawnedAt", os.clock())
 			prepVisualPet(clone, true)
 			clone.Parent = folder
@@ -1341,7 +1354,7 @@ local function spawnVisualPets()
 
 			moveVisualPet(clone, target)
 
-			if toolCount < CONFIG.maxVisualPetTools and makeLocalPetTool(petName, template) then
+			if toolCount < CONFIG.maxVisualPetTools and makeLocalPetTool(petName, template, slot) then
 				toolCount += 1
 			end
 
@@ -1351,6 +1364,7 @@ local function spawnVisualPets()
 	end
 
 	trimVisualPets()
+	pcall(updateVisualPetBehavior)
 	setStatus(("Visual pets: spawned %d clone(s), %d backpack item(s)"):format(spawned, toolCount))
 end
 
@@ -2027,7 +2041,10 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		runGuarded("visualPetTroll", spawnVisualPets)
 	end
 
-	updateVisualPetBehavior()
+	local ok, err = pcall(updateVisualPetBehavior)
+	if not ok then
+		setStatus(("visualPetFollow error: %s"):format(tostring(err)))
+	end
 end)
 
 setStatus("Garden Tools loaded")
