@@ -21,7 +21,6 @@ local CONFIG = {
 	buyInterval = 5.0,
 	rainbowCollectInterval = 2.5,
 	petBuyInterval = 6.0,
-	visualPetInterval = 4.0,
 	cacheRefreshInterval = 7.0,
 	maxVisualPets = 24,
 	maxVisualPetTools = 24,
@@ -66,7 +65,6 @@ local state = {
 	autoBuyGear = false,
 	autoCollectRainbowSeeds = false,
 	autoBuyPets = false,
-	visualPetTroll = false,
 	performanceMode = false,
 	lastStatus = "Ready",
 }
@@ -1515,8 +1513,7 @@ makeToggle("Auto Buy Seeds", "autoBuySeeds", 4)
 makeToggle("Auto Buy Gear", "autoBuyGear", 5)
 makeToggle("AutoCollect Gold/Rainbow Seeds", "autoCollectRainbowSeeds", 6)
 makeToggle("Auto Buy Pets", "autoBuyPets", 7)
-makeToggle("Visual Pet Troll", "visualPetTroll", 8)
-makeToggle("Performance Mode", "performanceMode", 9)
+makeToggle("Performance Mode", "performanceMode", 8)
 
 local selectedSeedLabel = make("TextLabel", {
 	Name = "SelectedSeedLabel",
@@ -1971,7 +1968,6 @@ local timers = {
 	autoBuyGear = 0,
 	autoCollectRainbowSeeds = 0,
 	autoBuyPets = 0,
-	visualPetTroll = 0,
 }
 
 local running = {}
@@ -1999,7 +1995,6 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	timers.autoBuyGear += deltaTime
 	timers.autoCollectRainbowSeeds += deltaTime
 	timers.autoBuyPets += deltaTime
-	timers.visualPetTroll += deltaTime
 
 	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
 		timers.fruitCollector = 0
@@ -2034,11 +2029,6 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval then
 		timers.autoBuyPets = 0
 		runGuarded("autoBuyPets", buyPets)
-	end
-
-	if state.visualPetTroll and timers.visualPetTroll >= CONFIG.visualPetInterval then
-		timers.visualPetTroll = 0
-		runGuarded("visualPetTroll", spawnVisualPets)
 	end
 
 	local ok, err = pcall(updateVisualPetBehavior)
