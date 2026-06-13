@@ -18,3 +18,14 @@ Wire these `BindableFunction` objects to your own game systems:
 - `BuySeed(player, seedName, amount)` -> return `true` when bought
 
 The executor GUI sends only high-level requests. The server bridge performs permission checks and owns the real gameplay actions.
+
+## Clean Remote API
+
+The GUI calls:
+
+- `Action:FireServer("collectFruit", { radius = 250 })`
+- `Action:FireServer("placeSeed", { seedName = "Carrot" })`
+- `Action:FireServer("sellInventory")`
+- `Action:FireServer("buySeed", { seedName = "Carrot", amount = 1 })`
+- `Action:FireServer("setMode", { mode = "autoHarvest", enabled = true })`
+- `Action:FireServer("setEnabled", { enabled = true })`

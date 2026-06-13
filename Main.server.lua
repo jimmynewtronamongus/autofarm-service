@@ -301,6 +301,14 @@ local function send(actionName, payload)
 			state.autoPlant = false
 			state.autoHarvest = false
 			state.autoSell = false
+		elseif actionName == "buySeed" then
+			state.totalBought += tonumber(state.buyAmount) or 1
+		elseif actionName == "placeSeed" then
+			state.totalPlanted += 1
+		elseif actionName == "collectFruit" then
+			state.totalHarvested += 1
+		elseif actionName == "sellInventory" then
+			state.totalSold += 1
 		end
 		setStatus("server remotes required", COLORS.yellow)
 		refreshUi()
@@ -485,7 +493,7 @@ local function buildGui()
 		BackgroundColor3 = COLORS.panel,
 		BorderSizePixel = 0,
 		Position = UDim2.new(0, 110, 0.5, 0),
-		Size = UDim2.new(0, 430, 0, 520),
+		Size = UDim2.new(0, 430, 0, 610),
 		Visible = true,
 	}, {
 		corner(12),
@@ -673,6 +681,46 @@ local function buildGui()
 	end)
 	nextSeed.MouseButton1Click:Connect(function()
 		chooseSeed(1)
+	end)
+
+	local directActions = card(farmPage, 420, 70)
+	local collectNow = button("Collect Fruit", COLORS.green2)
+	collectNow.Position = UDim2.new(0, 0, 0, 0)
+	collectNow.Size = UDim2.new(0.5, -6, 0, 28)
+	collectNow.Parent = directActions
+	collectNow.MouseButton1Click:Connect(function()
+		send("collectFruit", {
+			radius = tonumber(refs.radiusBox.Text) or state.harvestRadius,
+		})
+	end)
+
+	local placeNow = button("Place Seed", COLORS.green2)
+	placeNow.Position = UDim2.new(0.5, 6, 0, 0)
+	placeNow.Size = UDim2.new(0.5, -6, 0, 28)
+	placeNow.Parent = directActions
+	placeNow.MouseButton1Click:Connect(function()
+		send("placeSeed", {
+			seedName = refs.seedBox.Text,
+		})
+	end)
+
+	local sellNow = button("Sell Inventory", COLORS.blue)
+	sellNow.Position = UDim2.new(0, 0, 0, 34)
+	sellNow.Size = UDim2.new(0.5, -6, 0, 28)
+	sellNow.Parent = directActions
+	sellNow.MouseButton1Click:Connect(function()
+		send("sellInventory")
+	end)
+
+	local buyNow = button("Buy Seeds", COLORS.blue)
+	buyNow.Position = UDim2.new(0.5, 6, 0, 34)
+	buyNow.Size = UDim2.new(0.5, -6, 0, 28)
+	buyNow.Parent = directActions
+	buyNow.MouseButton1Click:Connect(function()
+		send("buySeed", {
+			seedName = refs.seedBox.Text,
+			amount = tonumber(refs.amountBox.Text) or state.buyAmount,
+		})
 	end)
 
 	local actions = create("Frame", {

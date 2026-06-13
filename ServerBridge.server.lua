@@ -204,6 +204,88 @@ local function stepOnce(player)
 	return true, status(player)
 end
 
+local function buySeed(player, payload)
+	if not canUse(player) then
+		return false, "not authorized"
+	end
+	local session = getSession(player)
+	if typeof(payload) == "table" then
+		if typeof(payload.seedName) == "string" and payload.seedName ~= "" then
+			session.seedName = payload.seedName
+		end
+		local amount = tonumber(payload.amount)
+		if amount then
+			session.buyAmount = math.floor(math.clamp(amount, 1, 100))
+		end
+	end
+	local ok, message = invokeAdapter("BuySeed", player, session.seedName, session.buyAmount)
+	if ok then
+		session.totalBought += session.buyAmount
+		session.lastResult = "bought " .. session.seedName
+		return true, status(player)
+	end
+	session.lastResult = tostring(message or "buy failed")
+	return false, session.lastResult
+end
+
+local function placeSeed(player, payload)
+	if not canUse(player) then
+		return false, "not authorized"
+	end
+	local session = getSession(player)
+	if typeof(payload) == "table" and typeof(payload.seedName) == "string" and payload.seedName ~= "" then
+		session.seedName = payload.seedName
+	end
+	local ok, message = invokeAdapter("PlaceSeed", player, session.seedName)
+	if ok then
+		session.totalPlanted += 1
+		session.lastResult = "placed " .. session.seedName
+		return true, status(player)
+	end
+	session.lastResult = tostring(message or "place failed")
+	return false, session.lastResult
+end
+
+local function collectFruit(player, payload)
+	if not canUse(player) then
+		return false, "not authorized"
+	end
+	local session = getSession(player)
+	if typeof(payload) == "table" then
+		local radius = tonumber(payload.radius)
+		if radius then
+			session.harvestRadius = math.floor(math.clamp(radius, 5, 1000))
+		end
+	end
+	local collected, message = invokeAdapter("CollectFruit", player, session.harvestRadius)
+	if typeof(collected) == "number" and collected > 0 then
+		session.totalHarvested += collected
+		session.lastResult = "collected " .. tostring(collected)
+		return true, status(player)
+	elseif collected == true then
+		session.totalHarvested += 1
+		session.lastResult = "collected fruit"
+		return true, status(player)
+	end
+	session.lastResult = tostring(message or "collect failed")
+	return false, session.lastResult
+end
+
+local function sellInventory(player)
+	if not canUse(player) then
+		return false, "not authorized"
+	end
+	local session = getSession(player)
+	local ok, message = invokeAdapter("SellInventory", player)
+	if ok then
+		session.totalSold += 1
+		session.lastResult = "sold inventory"
+		return true, status(player)
+	end
+	session.lastResult = tostring(message or "sell failed")
+	return false, session.lastResult
+end
+
 local actions = {
 	setEnabled = function(player, payload)
 		if not canUse(player) then
@@ -265,6 +347,10 @@ local actions = {
 		return true, status(player)
 	end,
 	stepOnce = stepOnce,
+	buySeed = buySeed,
+	placeSeed = placeSeed,
+	collectFruit = collectFruit,
+	sellInventory = sellInventory,
 	stopAll = function(player)
 		if not canUse(player) then
 			return false, "not authorized"
