@@ -21,7 +21,9 @@ local CONFIG = {
 	buyInterval = 5.0,
 	rainbowCollectInterval = 2.5,
 	petBuyInterval = 6.0,
+	visualPetInterval = 4.0,
 	cacheRefreshInterval = 7.0,
+	maxVisualPets = 24,
 	selectedSeed = "Carrot",
 	plantRadius = 18,
 }
@@ -62,6 +64,7 @@ local state = {
 	autoBuyGear = false,
 	autoCollectRainbowSeeds = false,
 	autoBuyPets = false,
+	visualPetTroll = false,
 	performanceMode = false,
 	lastStatus = "Ready",
 }
@@ -861,6 +864,131 @@ local function buyPets()
 	end
 end
 
+local visualPetFolder
+
+local function getPetsFolder()
+	local assets = ReplicatedStorage:FindFirstChild("Assets")
+	return assets and assets:FindFirstChild("Pets")
+end
+
+local function getVisualPetFolder()
+	if visualPetFolder and visualPetFolder.Parent then
+		return visualPetFolder
+	end
+
+	visualPetFolder = workspace:FindFirstChild("GardenToolsVisualPets")
+	if not visualPetFolder then
+		visualPetFolder = Instance.new("Folder")
+		visualPetFolder.Name = "GardenToolsVisualPets"
+		visualPetFolder.Parent = workspace
+	end
+
+	return visualPetFolder
+end
+
+local function prepVisualPet(instance)
+	for _, descendant in ipairs(instance:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanCollide = false
+			descendant.CanTouch = false
+			descendant.CanQuery = false
+			descendant.CastShadow = false
+		elseif descendant:IsA("Script") or descendant:IsA("LocalScript") then
+			descendant.Disabled = true
+		end
+	end
+
+	if instance:IsA("BasePart") then
+		instance.Anchored = true
+		instance.CanCollide = false
+		instance.CanTouch = false
+		instance.CanQuery = false
+		instance.CastShadow = false
+	end
+end
+
+local function trimVisualPets()
+	local folder = getVisualPetFolder()
+	local children = folder:GetChildren()
+	table.sort(children, function(a, b)
+		return (a:GetAttribute("SpawnedAt") or 0) < (b:GetAttribute("SpawnedAt") or 0)
+	end)
+
+	while #children > CONFIG.maxVisualPets do
+		local oldest = table.remove(children, 1)
+		if oldest then
+			oldest:Destroy()
+		end
+	end
+end
+
+local function clearVisualPets()
+	local folder = getVisualPetFolder()
+	for _, child in ipairs(folder:GetChildren()) do
+		child:Destroy()
+	end
+	setStatus("Visual pets cleared")
+end
+
+local function spawnVisualPets()
+	local root = getRoot()
+	local petsFolder = getPetsFolder()
+	if not root then
+		setStatus("Visual pets: character root missing")
+		return
+	end
+
+	if not petsFolder then
+		setStatus("Visual pets: Assets.Pets missing")
+		return
+	end
+
+	local selected = getSelectedPetList()
+	if #selected == 0 then
+		for _, petName in ipairs(petNames) do
+			table.insert(selected, petName)
+		end
+	end
+
+	local spawned = 0
+	local folder = getVisualPetFolder()
+
+	for index, petName in ipairs(selected) do
+		if #folder:GetChildren() >= CONFIG.maxVisualPets then
+			break
+		end
+
+		local template = petsFolder:FindFirstChild(petName)
+		if template then
+			local clone = template:Clone()
+			clone.Name = "Visual_" .. petName
+			clone:SetAttribute("SpawnedAt", os.clock())
+			prepVisualPet(clone)
+			clone.Parent = folder
+
+			local angle = ((index - 1) / math.max(#selected, 1)) * math.pi * 2
+			local radius = 6 + (spawned % 3) * 2
+			local offset = Vector3.new(math.cos(angle) * radius, 1 + (spawned % 2), math.sin(angle) * radius)
+			local target = CFrame.new(root.Position + offset, root.Position)
+
+			pcall(function()
+				if clone:IsA("Model") then
+					clone:PivotTo(target)
+				elseif clone:IsA("BasePart") then
+					clone.CFrame = target
+				end
+			end)
+
+			spawned += 1
+			task.wait(0.03)
+		end
+	end
+
+	trimVisualPets()
+	setStatus(("Visual pets: spawned %d local clone(s)"):format(spawned))
+end
+
 local function make(className, properties, parent)
 	local instance = Instance.new(className)
 	for key, value in pairs(properties or {}) do
@@ -979,6 +1107,28 @@ local function makeToggle(label, key, order)
 	end)
 end
 
+local function makeActionButton(label, order, callback)
+	local button = make("TextButton", {
+		Name = string.gsub(label, "%s+", ""),
+		AutoButtonColor = true,
+		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = label,
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 13,
+		Size = UDim2.new(1, 0, 0, 34),
+		LayoutOrder = order,
+	}, content)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
+
+	button.Activated:Connect(function()
+		task.spawn(callback)
+	end)
+
+	return button
+end
+
 makeToggle("Fruit Collector", "fruitCollector", 1)
 makeToggle("Seed Placer", "seedPlacer", 2)
 makeToggle("Auto Sell", "autoSell", 3)
@@ -986,7 +1136,8 @@ makeToggle("Auto Buy Seeds", "autoBuySeeds", 4)
 makeToggle("Auto Buy Gear", "autoBuyGear", 5)
 makeToggle("AutoCollect Gold/Rainbow Seeds", "autoCollectRainbowSeeds", 6)
 makeToggle("Auto Buy Pets", "autoBuyPets", 7)
-makeToggle("Performance Mode", "performanceMode", 8)
+makeToggle("Visual Pet Troll", "visualPetTroll", 8)
+makeToggle("Performance Mode", "performanceMode", 9)
 
 local selectedSeedLabel = make("TextLabel", {
 	Name = "SelectedSeedLabel",
@@ -997,7 +1148,7 @@ local selectedSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 9,
+	LayoutOrder = 10,
 }, content)
 
 local seedRow = make("ScrollingFrame", {
@@ -1008,7 +1159,7 @@ local seedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 92),
-	LayoutOrder = 10,
+	LayoutOrder = 11,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -1076,7 +1227,7 @@ local selectedGearLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 11,
+	LayoutOrder = 12,
 }, content)
 
 local gearRow = make("ScrollingFrame", {
@@ -1087,7 +1238,7 @@ local gearRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 92),
-	LayoutOrder = 12,
+	LayoutOrder = 13,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -1154,7 +1305,7 @@ local selectedPetLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 13,
+	LayoutOrder = 14,
 }, content)
 
 local petRow = make("ScrollingFrame", {
@@ -1165,7 +1316,7 @@ local petRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 92),
-	LayoutOrder = 14,
+	LayoutOrder = 15,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -1245,6 +1396,9 @@ if petsFolder then
 	end)
 end
 
+makeActionButton("Spawn Visual Pets", 16, spawnVisualPets)
+makeActionButton("Clear Visual Pets", 17, clearVisualPets)
+
 local dragStart
 local startPos
 local dragging = false
@@ -1278,6 +1432,7 @@ local timers = {
 	autoBuyGear = 0,
 	autoCollectRainbowSeeds = 0,
 	autoBuyPets = 0,
+	visualPetTroll = 0,
 }
 
 local running = {}
@@ -1305,6 +1460,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	timers.autoBuyGear += deltaTime
 	timers.autoCollectRainbowSeeds += deltaTime
 	timers.autoBuyPets += deltaTime
+	timers.visualPetTroll += deltaTime
 
 	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
 		timers.fruitCollector = 0
@@ -1339,6 +1495,11 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval then
 		timers.autoBuyPets = 0
 		runGuarded("autoBuyPets", buyPets)
+	end
+
+	if state.visualPetTroll and timers.visualPetTroll >= CONFIG.visualPetInterval then
+		timers.visualPetTroll = 0
+		runGuarded("visualPetTroll", spawnVisualPets)
 	end
 end)
 
