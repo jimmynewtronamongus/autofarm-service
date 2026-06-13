@@ -101,6 +101,7 @@ local petNames = {
 	"Frog",
 	"Bunny",
 	"Deer",
+	"Dragonfly",
 }
 
 local selectedPets = {
@@ -117,6 +118,36 @@ local function setStatus(message)
 		statusValue.Value = state.lastStatus
 	end
 end
+
+local function addUniqueName(list, name)
+	if not name or name == "" then
+		return
+	end
+
+	for _, existing in ipairs(list) do
+		if existing == name then
+			return
+		end
+	end
+
+	table.insert(list, name)
+end
+
+local function refreshPetNamesFromAssets()
+	local assets = ReplicatedStorage:FindFirstChild("Assets")
+	local pets = assets and assets:FindFirstChild("Pets")
+	if not pets then
+		return
+	end
+
+	for _, pet in ipairs(pets:GetChildren()) do
+		addUniqueName(petNames, pet.Name)
+	end
+
+	table.sort(petNames)
+end
+
+refreshPetNamesFromAssets()
 
 local function getCharacter()
 	return localPlayer.Character or localPlayer.CharacterAdded:Wait()
@@ -792,12 +823,12 @@ end
 
 local function buyOnePet(petName)
 	local wildPetSpawns = getWildPetSpawns()
-	local petTerm = string.lower(petName)
+	local petTerm = string.lower(string.gsub(petName, "%s+", ""))
 
 	for _, descendant in ipairs(getCachedDescendants("wildPets", wildPetSpawns)) do
 		if descendant:IsA("ProximityPrompt") then
 			local model = descendant:FindFirstAncestorWhichIsA("Model")
-			local modelName = model and string.lower(model.Name) or ""
+			local modelName = model and string.lower(string.gsub(model.Name, "%s+", "")) or ""
 			local isBuyPrompt = descendant.Name == "BuyPrompt" or textMatches(descendant, { "buy", "purchase", "adopt" })
 			local isPetPrompt = string.find(modelName, petTerm, 1, true) ~= nil or textMatches(descendant, { petName })
 
@@ -1126,11 +1157,14 @@ local selectedPetLabel = make("TextLabel", {
 	LayoutOrder = 13,
 }, content)
 
-local petRow = make("Frame", {
+local petRow = make("ScrollingFrame", {
 	Name = "PetSelector",
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
-	Size = UDim2.new(1, 0, 0, 64),
+	CanvasSize = UDim2.fromOffset(0, 0),
+	ScrollBarThickness = 4,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
+	Size = UDim2.new(1, 0, 0, 92),
 	LayoutOrder = 14,
 }, content)
 make("UIGridLayout", {
@@ -1139,7 +1173,9 @@ make("UIGridLayout", {
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, petRow)
 
+local petLayout = petRow:FindFirstChildOfClass("UIGridLayout")
 local petButtons = {}
+local petButtonCount = 0
 
 local function refreshPetButton(petName)
 	local button = petButtons[petName]
@@ -1152,7 +1188,18 @@ local function refreshPetButton(petName)
 	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
 end
 
-for index, petName in ipairs(petNames) do
+local function refreshPetCanvas()
+	local rows = math.ceil(#petNames / 2)
+	petRow.CanvasSize = UDim2.fromOffset(0, rows * 34)
+end
+
+local function makePetButton(petName)
+	if petButtons[petName] then
+		return
+	end
+
+	petButtonCount += 1
+
 	local button = make("TextButton", {
 		Name = petName,
 		AutoButtonColor = false,
@@ -1164,7 +1211,7 @@ for index, petName in ipairs(petNames) do
 		TextSize = 12,
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		Size = UDim2.fromOffset(118, 28),
-		LayoutOrder = index,
+		LayoutOrder = petButtonCount,
 	}, petRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
 
@@ -1175,6 +1222,26 @@ for index, petName in ipairs(petNames) do
 		selectedPets[petName] = not selectedPets[petName]
 		refreshPetButton(petName)
 		setStatus((selectedPets[petName] and "Selected " or "Unselected ") .. petName)
+	end)
+
+	refreshPetCanvas()
+end
+
+for _, petName in ipairs(petNames) do
+	makePetButton(petName)
+end
+
+if petLayout then
+	petLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshPetCanvas)
+end
+refreshPetCanvas()
+
+local assets = ReplicatedStorage:FindFirstChild("Assets")
+local petsFolder = assets and assets:FindFirstChild("Pets")
+if petsFolder then
+	petsFolder.ChildAdded:Connect(function(pet)
+		addUniqueName(petNames, pet.Name)
+		makePetButton(pet.Name)
 	end)
 end
 
