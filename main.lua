@@ -2455,6 +2455,31 @@ local function makeActionButton(label, order, callback)
 	return button
 end
 
+local visualControls = {}
+local visualControlsVisible = false
+local visualControlsToggle
+
+local function refreshVisualControlsVisibility()
+	for _, control in ipairs(visualControls) do
+		if control and control.Parent then
+			control.Visible = visualControlsVisible
+		end
+	end
+
+	if visualControlsToggle then
+		visualControlsToggle.Text = "Visuals: " .. (visualControlsVisible and "ON" or "OFF")
+		visualControlsToggle.BackgroundColor3 = visualControlsVisible and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(34, 41, 42)
+	end
+
+	content.CanvasSize = UDim2.fromOffset(0, contentLayout.AbsoluteContentSize.Y + 8)
+end
+
+local function registerVisualControl(control)
+	table.insert(visualControls, control)
+	control.Visible = visualControlsVisible
+	return control
+end
+
 makeToggle("Collect", "fruitCollector", 1)
 makeToggle("Plant", "seedPlacer", 2)
 makeToggle("Sell", "autoSell", 3)
@@ -2463,6 +2488,25 @@ makeToggle("Gear", "autoBuyGear", 5)
 makeToggle("Drops", "autoCollectRainbowSeeds", 6)
 makeToggle("Pets", "autoBuyPets", 7)
 makeToggle("FPS", "performanceMode", 8)
+
+visualControlsToggle = make("TextButton", {
+	Name = "VisualControlsToggle",
+	AutoButtonColor = false,
+	BackgroundColor3 = Color3.fromRGB(34, 41, 42),
+	BorderSizePixel = 0,
+	Font = Enum.Font.GothamSemibold,
+	Text = "Visuals: OFF",
+	TextColor3 = Color3.fromRGB(235, 244, 233),
+	TextSize = 14,
+	Size = UDim2.new(1, 0, 0, 38),
+	LayoutOrder = 9,
+}, content)
+make("UICorner", { CornerRadius = UDim.new(0, 6) }, visualControlsToggle)
+visualControlsToggle.Activated:Connect(function()
+	visualControlsVisible = not visualControlsVisible
+	refreshVisualControlsVisibility()
+	setStatus("Visual controls " .. (visualControlsVisible and "shown" or "hidden"))
+end)
 
 local selectedSeedLabel = make("TextLabel", {
 	Name = "SelectedSeedLabel",
@@ -2762,6 +2806,7 @@ local selectedVisualPetLabel = make("TextLabel", {
 	Size = UDim2.new(1, 0, 0, 18),
 	LayoutOrder = 16,
 }, content)
+registerVisualControl(selectedVisualPetLabel)
 
 local visualPetRow = make("ScrollingFrame", {
 	Name = "VisualPetSelector",
@@ -2773,6 +2818,7 @@ local visualPetRow = make("ScrollingFrame", {
 	Size = UDim2.new(1, 0, 0, 92),
 	LayoutOrder = 17,
 }, content)
+registerVisualControl(visualPetRow)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
 	CellSize = UDim2.fromOffset(118, 28),
@@ -2857,6 +2903,7 @@ local selectedVisualVariantLabel = make("TextLabel", {
 	Size = UDim2.new(1, 0, 0, 18),
 	LayoutOrder = 18,
 }, content)
+registerVisualControl(selectedVisualVariantLabel)
 
 local variantRow = make("ScrollingFrame", {
 	Name = "VisualPetVariantSelector",
@@ -2868,6 +2915,7 @@ local variantRow = make("ScrollingFrame", {
 	Size = UDim2.new(1, 0, 0, 70),
 	LayoutOrder = 19,
 }, content)
+registerVisualControl(variantRow)
 local variantLayout = make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
 	CellSize = UDim2.fromOffset(118, 28),
@@ -2946,6 +2994,7 @@ local visualPetAmountBox = make("TextBox", {
 	Size = UDim2.new(1, 0, 0, 34),
 	LayoutOrder = 20,
 }, content)
+registerVisualControl(visualPetAmountBox)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, visualPetAmountBox)
 make("UIPadding", {
 	PaddingLeft = UDim.new(0, 10),
@@ -2989,8 +3038,9 @@ if gearImages then
 	end)
 end
 
-makeActionButton("Spawn", 21, spawnVisualPets)
-makeActionButton("Clear", 22, clearVisualPets)
+registerVisualControl(makeActionButton("Spawn", 21, spawnVisualPets))
+registerVisualControl(makeActionButton("Clear", 22, clearVisualPets))
+refreshVisualControlsVisibility()
 
 local dragStart
 local startPos
