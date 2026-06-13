@@ -58,6 +58,7 @@ local state = {
 	seedPlacer = false,
 	autoSell = false,
 	autoBuySeeds = false,
+	autoBuyGear = false,
 	autoCollectRainbowSeeds = false,
 	autoBuyPets = false,
 	performanceMode = false,
@@ -66,6 +67,33 @@ local state = {
 
 local selectedSeeds = {
 	Carrot = true,
+}
+
+local gearNames = {
+	"Common Watering Can",
+	"Super Watering Can",
+	"Common Sprinkler",
+	"Uncommon Sprinkler",
+	"Rare Sprinkler",
+	"Super Sprinkler",
+	"Legendary Sprinkler",
+	"Trowel",
+	"Basic Pot",
+	"Wheelbarrow",
+	"Teleporter",
+	"Gnome",
+	"Sign",
+	"Lantern",
+	"Flashbang",
+	"Jump Mushroom",
+	"Speed Mushroom",
+	"Shrink Mushroom",
+	"Supersize Mushroom",
+	"Invisibility Mushroom",
+}
+
+local selectedGears = {
+	["Common Watering Can"] = true,
 }
 
 local selectedPetText = "Frog, Bunny, Deer"
@@ -112,6 +140,7 @@ end
 
 local cache = {
 	seedFrames = {},
+	gearFrames = {},
 }
 
 local function getCachedDescendants(key, root)
@@ -294,6 +323,18 @@ local function getSelectedSeedList()
 	return selected
 end
 
+local function getSelectedGearList()
+	local selected = {}
+
+	for _, gearName in ipairs(gearNames) do
+		if selectedGears[gearName] then
+			table.insert(selected, gearName)
+		end
+	end
+
+	return selected
+end
+
 local function getSeedFrame(seedName)
 	if cache.seedFrames[seedName] and cache.seedFrames[seedName].Parent then
 		return cache.seedFrames[seedName]
@@ -324,6 +365,34 @@ local function getSeedFrame(seedName)
 	for _, descendant in ipairs(seedShop:GetDescendants()) do
 		if descendant.Name == seedName and descendant.Name ~= "ItemTemplate" then
 			cache.seedFrames[seedName] = descendant
+			return descendant
+		end
+	end
+
+	return nil
+end
+
+local function getGearFrame(gearName)
+	if cache.gearFrames[gearName] and cache.gearFrames[gearName].Parent then
+		return cache.gearFrames[gearName]
+	end
+
+	local gearShop = playerGui:FindFirstChild("GearShop")
+	if not gearShop then
+		return nil
+	end
+
+	local frame = gearShop:FindFirstChild("Frame")
+	local scrollingFrame = frame and frame:FindFirstChild("ScrollingFrame")
+	local direct = scrollingFrame and scrollingFrame:FindFirstChild(gearName)
+	if direct then
+		cache.gearFrames[gearName] = direct
+		return direct
+	end
+
+	for _, descendant in ipairs(gearShop:GetDescendants()) do
+		if descendant.Name == gearName and descendant.Name ~= "ItemTemplate" then
+			cache.gearFrames[gearName] = descendant
 			return descendant
 		end
 	end
@@ -561,6 +630,54 @@ local function buySeed()
 	end
 end
 
+local function buyOneGear(gearName)
+	local gearFrame = getGearFrame(gearName)
+
+	local clicked = false
+	if gearFrame then
+		local mainFrame = gearFrame:FindFirstChild("Main_Frame", true)
+		local rowButton = mainFrame and mainFrame:FindFirstChild("TextButton")
+		if rowButton and rowButton:IsA("GuiButton") and rowButton.Visible and activateButton(rowButton) then
+			clicked = true
+			task.wait(0.08)
+		end
+
+		for _, buttonName in ipairs({ "TextButton", "Sheckles_Buy", "Buy", "CashBuy" }) do
+			local button = gearFrame:FindFirstChild(buttonName, true)
+			if button and button:IsA("GuiButton") and button.Visible and activateButton(button) then
+				clicked = true
+				break
+			end
+		end
+	end
+
+	if clicked then
+		return true, ("Auto gear: clicked %s"):format(gearName)
+	else
+		return false, ("Auto gear: no working button for %s"):format(gearName)
+	end
+end
+
+local function buyGear()
+	local bought = 0
+	local lastMessage = "Auto gear: no gear selected"
+
+	for _, gearName in ipairs(getSelectedGearList()) do
+		local ok, message = buyOneGear(gearName)
+		lastMessage = message
+		if ok then
+			bought += 1
+			task.wait(0.12)
+		end
+	end
+
+	if bought > 0 then
+		setStatus(("Auto gear: tried %d selected item(s)"):format(bought))
+	else
+		setStatus(lastMessage)
+	end
+end
+
 local function buyOnePet(petName)
 	local wildPetSpawns = getWildPetSpawns()
 	local petTerm = string.lower(petName)
@@ -723,9 +840,10 @@ makeToggle("Fruit Collector", "fruitCollector", 1)
 makeToggle("Seed Placer", "seedPlacer", 2)
 makeToggle("Auto Sell", "autoSell", 3)
 makeToggle("Auto Buy Seeds", "autoBuySeeds", 4)
-makeToggle("Rainbow Seeds", "autoCollectRainbowSeeds", 5)
-makeToggle("Auto Buy Pets", "autoBuyPets", 6)
-makeToggle("Performance Mode", "performanceMode", 7)
+makeToggle("Auto Buy Gear", "autoBuyGear", 5)
+makeToggle("Rainbow Seeds", "autoCollectRainbowSeeds", 6)
+makeToggle("Auto Buy Pets", "autoBuyPets", 7)
+makeToggle("Performance Mode", "performanceMode", 8)
 
 local selectedSeedLabel = make("TextLabel", {
 	Name = "SelectedSeedLabel",
@@ -736,7 +854,7 @@ local selectedSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 7,
+	LayoutOrder = 9,
 }, content)
 
 local seedRow = make("ScrollingFrame", {
@@ -747,7 +865,7 @@ local seedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 92),
-	LayoutOrder = 8,
+	LayoutOrder = 10,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -806,6 +924,84 @@ if seedLayout then
 end
 refreshSeedCanvas()
 
+local selectedGearLabel = make("TextLabel", {
+	Name = "SelectedGearLabel",
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold,
+	Text = "Gear to buy",
+	TextColor3 = Color3.fromRGB(221, 236, 216),
+	TextSize = 13,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Size = UDim2.new(1, 0, 0, 18),
+	LayoutOrder = 11,
+}, content)
+
+local gearRow = make("ScrollingFrame", {
+	Name = "GearSelector",
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	CanvasSize = UDim2.fromOffset(0, 0),
+	ScrollBarThickness = 4,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
+	Size = UDim2.new(1, 0, 0, 92),
+	LayoutOrder = 12,
+}, content)
+make("UIGridLayout", {
+	CellPadding = UDim2.fromOffset(6, 6),
+	CellSize = UDim2.fromOffset(118, 28),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, gearRow)
+
+local gearLayout = gearRow:FindFirstChildOfClass("UIGridLayout")
+local gearButtons = {}
+
+local function refreshGearButton(gearName)
+	local button = gearButtons[gearName]
+	if not button then
+		return
+	end
+
+	local enabled = selectedGears[gearName] == true
+	button.Text = (enabled and "[x] " or "[ ] ") .. gearName
+	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
+end
+
+local function refreshGearCanvas()
+	local rows = math.ceil(#gearNames / 2)
+	gearRow.CanvasSize = UDim2.fromOffset(0, rows * 34)
+end
+
+for index, gearName in ipairs(gearNames) do
+	local button = make("TextButton", {
+		Name = gearName,
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = gearName,
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 12,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.fromOffset(118, 28),
+		LayoutOrder = index,
+	}, gearRow)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
+
+	gearButtons[gearName] = button
+	refreshGearButton(gearName)
+
+	button.Activated:Connect(function()
+		selectedGears[gearName] = not selectedGears[gearName]
+		refreshGearButton(gearName)
+		setStatus((selectedGears[gearName] and "Selected " or "Unselected ") .. gearName)
+	end)
+end
+
+if gearLayout then
+	gearLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshGearCanvas)
+end
+refreshGearCanvas()
+
 local selectedPetLabel = make("TextLabel", {
 	Name = "SelectedPetLabel",
 	BackgroundTransparency = 1,
@@ -815,7 +1011,7 @@ local selectedPetLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 9,
+	LayoutOrder = 13,
 }, content)
 
 local petBox = make("TextBox", {
@@ -831,7 +1027,7 @@ local petBox = make("TextBox", {
 	TextWrapped = true,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 46),
-	LayoutOrder = 10,
+	LayoutOrder = 14,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, petBox)
 make("UIPadding", {
@@ -878,6 +1074,7 @@ local timers = {
 	seedPlacer = 0,
 	autoSell = 0,
 	autoBuySeeds = 0,
+	autoBuyGear = 0,
 	autoCollectRainbowSeeds = 0,
 	autoBuyPets = 0,
 }
@@ -904,6 +1101,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	timers.seedPlacer += deltaTime
 	timers.autoSell += deltaTime
 	timers.autoBuySeeds += deltaTime
+	timers.autoBuyGear += deltaTime
 	timers.autoCollectRainbowSeeds += deltaTime
 	timers.autoBuyPets += deltaTime
 
@@ -925,6 +1123,11 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	if state.autoBuySeeds and timers.autoBuySeeds >= CONFIG.buyInterval then
 		timers.autoBuySeeds = 0
 		runGuarded("autoBuySeeds", buySeed)
+	end
+
+	if state.autoBuyGear and timers.autoBuyGear >= CONFIG.buyInterval then
+		timers.autoBuyGear = 0
+		runGuarded("autoBuyGear", buyGear)
 	end
 
 	if state.autoCollectRainbowSeeds and timers.autoCollectRainbowSeeds >= CONFIG.rainbowCollectInterval then
