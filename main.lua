@@ -2,7 +2,6 @@
 -- Drop this LocalScript in StarterPlayerScripts, or run it from a local test client.
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local virtualInputManager
@@ -15,49 +14,43 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 local CONFIG = {
-	collectInterval = 1.5,
-	plantInterval = 1.0,
+	collectInterval = 2.5,
+	plantInterval = 1.5,
 	sellInterval = 12.0,
 	buyInterval = 5.0,
-	rainbowCollectInterval = 1.5,
-	petBuyInterval = 5.0,
-	cacheRefreshInterval = 5.0,
+	rainbowCollectInterval = 2.5,
+	petBuyInterval = 6.0,
+	cacheRefreshInterval = 7.0,
 	selectedSeed = "Carrot",
 	plantRadius = 18,
 }
 
 local seedNames = {
 	"Carrot",
-	"Alien Apple",
 	"Strawberry",
 	"Blueberry",
+	"Tulip",
 	"Tomato",
-	"Corn",
-	"Watermelon",
-	"Pumpkin",
 	"Apple",
 	"Bamboo",
-	"Coconut",
+	"Corn",
 	"Cactus",
-	"Dragon Fruit",
-	"Mango",
+	"Banana",
+	"Acorn",
 	"Grape",
+	"Cherry",
+	"Dragon's Breath",
+	"Dragon Fruit",
 	"Mushroom",
-	"Pepper",
-	"Cacao",
-	"Beanstalk",
-	"Sugar Apple",
-	"Burning Bud",
-	"Buttercup",
-	"Crimson Thorn",
-	"Elder Strawberry",
-	"Ember Lily",
-	"Firefly Spiral",
-	"Giant Pinecone",
-	"Octobloom",
-	"Romanesco",
 	"Sunflower",
-	"Zebrazinkle",
+	"Coconut",
+	"Green Bean",
+	"Mango",
+	"Pineapple",
+	"Pomegranate",
+	"Poison Apple",
+	"Venus Fly Trap",
+	"Moon Bloom",
 }
 
 local state = {
@@ -75,12 +68,13 @@ local selectedSeeds = {
 	Carrot = true,
 }
 
-local selectedPetText = ""
+local selectedPetText = "Frog, Bunny, Deer"
+local statusValue
 
 local function setStatus(message)
 	state.lastStatus = tostring(message)
-	if script:FindFirstChild("StatusValue") then
-		script.StatusValue.Value = state.lastStatus
+	if statusValue then
+		statusValue.Value = state.lastStatus
 	end
 end
 
@@ -106,67 +100,6 @@ local function getPath(root, path)
 	return current
 end
 
-local gameEvents = ReplicatedStorage:FindFirstChild("GameEvents")
-local plantUpdate = gameEvents and getPath(gameEvents, "Plant.Update")
-
-local remoteCandidates = {
-	buySeed = {
-		"GameEvents.BuySeedStock",
-		"GameEvents.BuySeedStock_RE",
-		"GameEvents.BuySeedStockEvent",
-		"GameEvents.BuySeed",
-		"GameEvents.Buy_Seed",
-		"GameEvents.PurchaseSeed",
-		"GameEvents.Purchase_Seed",
-		"GameEvents.SeedShop",
-		"GameEvents.SeedShop.BuySeed",
-		"GameEvents.SeedShopService.BuySeed",
-		"GameEvents.SeedShopService.BuySeedStock",
-	},
-	sell = {
-		"GameEvents.Sell_Inventory",
-		"GameEvents.SellInventory",
-		"GameEvents.Sell_Item",
-		"GameEvents.SellItem",
-		"GameEvents.SellFruit",
-		"GameEvents.Sell_Fruit",
-		"GameEvents.ShopEvents.SellInventory",
-	},
-}
-
-local function resolveRemote(path)
-	return getPath(ReplicatedStorage, path)
-end
-
-local function fireRemote(remote, ...)
-	if not remote then
-		return false
-	end
-
-	if remote:IsA("RemoteEvent") then
-		remote:FireServer(...)
-		return true
-	end
-
-	if remote:IsA("RemoteFunction") then
-		remote:InvokeServer(...)
-		return true
-	end
-
-	return false
-end
-
-local function fireFirstRemote(paths, ...)
-	for _, path in ipairs(paths) do
-		local remote = resolveRemote(path)
-		local ok = pcall(fireRemote, remote, ...)
-		if ok and remote then
-			return true, path
-		end
-	end
-	return false
-end
-
 local function getObjectPath(instance)
 	local parts = {}
 	local current = instance
@@ -178,72 +111,78 @@ local function getObjectPath(instance)
 end
 
 local cache = {
-	workspaceAt = 0,
-	workspaceDescendants = {},
-	remoteKey = "",
-	remoteMatches = {},
 	seedFrames = {},
 }
 
-local function getWorkspaceDescendants()
+local function getCachedDescendants(key, root)
 	local now = os.clock()
-	if now - cache.workspaceAt > CONFIG.cacheRefreshInterval then
-		cache.workspaceAt = now
-		cache.workspaceDescendants = workspace:GetDescendants()
+	local atKey = key .. "At"
+	local listKey = key .. "Descendants"
+
+	if not root then
+		cache[atKey] = now
+		cache[listKey] = {}
+		return cache[listKey]
 	end
 
-	return cache.workspaceDescendants
+	if not cache[atKey] or now - cache[atKey] > CONFIG.cacheRefreshInterval then
+		cache[atKey] = now
+		cache[listKey] = root:GetDescendants()
+	end
+
+	return cache[listKey]
 end
 
-local function scanRemotes(terms)
-	local key = table.concat(terms, "|")
-	if cache.remoteMatches[key] then
-		return cache.remoteMatches[key]
+local function getMap()
+	return workspace:FindFirstChild("Map")
+end
+
+local function getGardens()
+	return workspace:FindFirstChild("Gardens")
+end
+
+local function getWildPetSpawns()
+	local map = getMap()
+	return map and map:FindFirstChild("WildPetSpawns")
+end
+
+local function getOwnGardenRoots()
+	local gardens = getGardens()
+	local userId = tostring(localPlayer.UserId)
+	local roots = {}
+
+	if not gardens then
+		return roots
 	end
 
-	local matches = {}
-
-	for _, descendant in ipairs(ReplicatedStorage:GetDescendants()) do
-		if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") then
-			local haystack = string.lower(getObjectPath(descendant))
-			local matched = true
-
-			for _, term in ipairs(terms) do
-				if not string.find(haystack, string.lower(term), 1, true) then
-					matched = false
+	for _, plot in ipairs(gardens:GetChildren()) do
+		local plants = plot:FindFirstChild("Plants")
+		if plants then
+			for _, plant in ipairs(plants:GetChildren()) do
+				if string.sub(plant.Name, 1, #userId + 1) == userId .. "_" then
+					table.insert(roots, plants)
 					break
 				end
 			end
-
-			if matched then
-				table.insert(matches, descendant)
-			end
 		end
 	end
 
-	cache.remoteMatches[key] = matches
-	return matches
-end
-
-local function tryRemoteCalls(remotes, callSets)
-	for _, remote in ipairs(remotes) do
-		for _, args in ipairs(callSets) do
-			local ok = pcall(function()
-				fireRemote(remote, table.unpack(args))
-			end)
-
-			if ok then
-				return true, getObjectPath(remote)
-			end
-		end
+	if #roots == 0 then
+		table.insert(roots, gardens)
 	end
 
-	return false
+	return roots
 end
 
 local function textMatches(instance, terms)
+	local instanceText = ""
+	pcall(function()
+		instanceText = instance.Text or ""
+	end)
+
 	local haystack = string.lower(table.concat({
 		instance.Name or "",
+		instanceText,
 		getObjectPath(instance),
 		instance:IsA("ProximityPrompt") and instance.ActionText or "",
 		instance:IsA("ProximityPrompt") and instance.ObjectText or "",
@@ -300,22 +239,17 @@ end
 local function collectFruit()
 	local fired = 0
 
-	for _, descendant in ipairs(getWorkspaceDescendants()) do
-		if descendant:IsA("ProximityPrompt") and textMatches(descendant, { "collect", "harvest", "pick", "fruit" }) then
-			if triggerPrompt(descendant) then
-				fired += 1
-			end
-		end
-	end
-
-	local pickupEvent = gameEvents and gameEvents:FindFirstChild("PickupEvent")
-	if pickupEvent and pickupEvent:IsA("BindableEvent") then
-		for _, descendant in ipairs(getWorkspaceDescendants()) do
-			if textMatches(descendant, { "fruit", "crop", "harvest" }) then
-				pcall(function()
-					pickupEvent:Fire(descendant)
-				end)
-				fired += 1
+	for index, root in ipairs(getOwnGardenRoots()) do
+		for _, descendant in ipairs(getCachedDescendants("garden" .. index, root)) do
+			if descendant:IsA("ProximityPrompt")
+				and descendant.Name ~= "StealPrompt"
+				and descendant.ActionText ~= "Steal"
+				and textMatches(descendant, { "collect", "harvest", "pick", "fruit" })
+			then
+				if triggerPrompt(descendant) then
+					fired += 1
+					task.wait(0.03)
+				end
 			end
 		end
 	end
@@ -365,16 +299,22 @@ local function getSeedFrame(seedName)
 		return cache.seedFrames[seedName]
 	end
 
-	local seedShop = playerGui:FindFirstChild("Seed_Shop")
+	local seedShop = playerGui:FindFirstChild("SeedShop")
 	if not seedShop then
 		return nil
 	end
 
-	local scrollingFrame = seedShop:FindFirstChild("Frame")
-		and seedShop.Frame:FindFirstChild("ScrollingFrame")
+	local frame = seedShop:FindFirstChild("Frame")
+	if frame then
+		local normalShop = frame:FindFirstChild("NormalShop")
+		local direct = normalShop and normalShop:FindFirstChild(seedName)
+		if direct then
+			cache.seedFrames[seedName] = direct
+			return direct
+		end
 
-	if scrollingFrame then
-		local direct = scrollingFrame:FindFirstChild(seedName)
+		local scrollingFrame = frame:FindFirstChild("ScrollingFrame")
+		direct = scrollingFrame and scrollingFrame:FindFirstChild(seedName)
 		if direct then
 			cache.seedFrames[seedName] = direct
 			return direct
@@ -382,7 +322,7 @@ local function getSeedFrame(seedName)
 	end
 
 	for _, descendant in ipairs(seedShop:GetDescendants()) do
-		if descendant.Name == seedName then
+		if descendant.Name == seedName and descendant.Name ~= "ItemTemplate" then
 			cache.seedFrames[seedName] = descendant
 			return descendant
 		end
@@ -402,33 +342,6 @@ local function getSelectedPetList()
 	end
 
 	return selected
-end
-
-local function getFruitTools()
-	local tools = {}
-	local character = getCharacter()
-	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-
-	for _, container in ipairs({ character, backpack }) do
-		if container then
-			for _, item in ipairs(container:GetChildren()) do
-				if item:IsA("Tool") then
-					local name = string.lower(item.Name)
-					local isSeed = string.find(name, "seed", 1, true)
-					local isTool = string.find(name, "shovel", 1, true)
-						or string.find(name, "sprinkler", 1, true)
-						or string.find(name, "trowel", 1, true)
-						or string.find(name, "can", 1, true)
-
-					if not isSeed and not isTool then
-						table.insert(tools, item)
-					end
-				end
-			end
-		end
-	end
-
-	return tools
 end
 
 local function touchPart(part)
@@ -477,31 +390,30 @@ end
 
 local function autoCollectRainbowSeeds()
 	local checked = 0
-	local pickupEvent = gameEvents and gameEvents:FindFirstChild("PickupEvent")
+	local roots = { getMap(), getGardens() }
 
-	for _, descendant in ipairs(getWorkspaceDescendants()) do
-		local matchesRainbowSeed = textMatches(descendant, {
-			"rainbow",
-			"seedrain",
-			"seed rain",
-			"gold seed",
-			"seedpack",
-			"seed pack",
-		})
+	for rootIndex, root in ipairs(roots) do
+		for _, descendant in ipairs(getCachedDescendants("rainbow" .. rootIndex, root)) do
+			local matchesRainbowSeed = textMatches(descendant, {
+				"rainbow",
+				"seedrain",
+				"seed rain",
+				"gold seed",
+				"seedpack",
+				"seed pack",
+			})
 
-		if descendant:IsA("ProximityPrompt") and matchesRainbowSeed then
-			if triggerPrompt(descendant) then
-				checked += 1
-			end
-		elseif descendant:IsA("BasePart") and matchesRainbowSeed then
-			if touchPart(descendant) then
-				checked += 1
-			end
+			if descendant:IsA("ProximityPrompt") and descendant.Name ~= "StealPrompt" and matchesRainbowSeed then
+				if triggerPrompt(descendant) then
+					checked += 1
+					task.wait(0.03)
+				end
+			elseif descendant:IsA("BasePart") and matchesRainbowSeed then
+				if touchPart(descendant) then
+					checked += 1
+					task.wait(0.03)
+				end
 
-			if pickupEvent and pickupEvent:IsA("BindableEvent") then
-				pcall(function()
-					pickupEvent:Fire(descendant)
-				end)
 			end
 		end
 	end
@@ -567,70 +479,33 @@ local function plantSeed()
 		return
 	end
 
-	local origin = root.Position
-	local forward = root.CFrame.LookVector * math.random(4, CONFIG.plantRadius)
-	local side = root.CFrame.RightVector * math.random(-CONFIG.plantRadius, CONFIG.plantRadius)
-	local targetPosition = origin + forward + side
-
-	if plantUpdate and plantUpdate:IsA("RemoteEvent") then
-		local ok = pcall(function()
-			plantUpdate:FireServer(targetPosition, CONFIG.selectedSeed)
-		end)
-
-		if not ok then
-			pcall(function()
-				plantUpdate:FireServer(CONFIG.selectedSeed, targetPosition)
-			end)
-		end
-	else
-		pcall(function()
-			tool:Activate()
-		end)
-	end
+	pcall(function()
+		tool:Activate()
+	end)
 
 	setStatus(("Seed placer: attempted %s"):format(CONFIG.selectedSeed))
 end
 
 local function autoSell()
-	local fruitTools = getFruitTools()
-	local sellCallSets = {
-		{},
-		{ "SellInventory" },
-		{ "Sell_Inventory" },
-		{ "All" },
-		{ true },
-	}
-
-	for _, tool in ipairs(fruitTools) do
-		table.insert(sellCallSets, { tool })
-		table.insert(sellCallSets, { tool.Name })
-		table.insert(sellCallSets, { "Sell_Item", tool })
-		table.insert(sellCallSets, { "Sell_Item", tool.Name })
-	end
-
-	local sellRemotes = {}
-	for _, path in ipairs(remoteCandidates.sell) do
-		local remote = resolveRemote(path)
-		if remote then
-			table.insert(sellRemotes, remote)
-		end
-	end
-
-	for _, remote in ipairs(scanRemotes({ "sell" })) do
-		table.insert(sellRemotes, remote)
-	end
-
-	local usedRemote, path = tryRemoteCalls(sellRemotes, sellCallSets)
-	if usedRemote then
-		setStatus(("Auto sell: fired %s"):format(path))
-		return
-	end
-
 	local fired = 0
-	for _, descendant in ipairs(getWorkspaceDescendants()) do
-		if descendant:IsA("ProximityPrompt") and textMatches(descendant, { "sell" }) then
-			if triggerPrompt(descendant) then
+
+	local stand = getPath(workspace, "Map.Stands.Sell.Part")
+	if stand and stand:IsA("BasePart") and touchPart(stand) then
+		fired += 1
+		task.wait(0.15)
+	end
+
+	local stevenPrompt = getPath(workspace, "NPCS.Steven.HumanoidRootPart.ProximityPrompt")
+	if stevenPrompt and stevenPrompt:IsA("ProximityPrompt") and triggerBuyPrompt(stevenPrompt) then
+		fired += 1
+		task.wait(0.15)
+	end
+
+	for _, descendant in ipairs(playerGui:GetDescendants()) do
+		if descendant:IsA("GuiButton") and descendant.Visible and textMatches(descendant, { "sell" }) then
+			if activateButton(descendant) then
 				fired += 1
+				task.wait(0.05)
 			end
 		end
 	end
@@ -639,48 +514,18 @@ local function autoSell()
 end
 
 local function buyOneSeed(seedName)
-	local buyCallSets = {
-		{ seedName },
-		{ seedName .. " Seed" },
-		{ "BuySeedStock", seedName },
-		{ "BuySeed", seedName },
-		{ "Seed", seedName },
-		{ seedName, 1 },
-		{ seedName .. " Seed", 1 },
-	}
-
-	local buyRemotes = {}
-	for _, path in ipairs(remoteCandidates.buySeed) do
-		local remote = resolveRemote(path)
-		if remote then
-			table.insert(buyRemotes, remote)
-		end
-	end
-
-	for _, remote in ipairs(scanRemotes({ "buy", "seed" })) do
-		table.insert(buyRemotes, remote)
-	end
-
-	for _, remote in ipairs(scanRemotes({ "seed", "stock" })) do
-		table.insert(buyRemotes, remote)
-	end
-
-	local usedRemote, path = tryRemoteCalls(buyRemotes, buyCallSets)
-	if usedRemote then
-		return true, ("Auto buy: fired %s for %s"):format(path, seedName)
-	end
-
 	local seedFrame = getSeedFrame(seedName)
 
 	local clicked = false
 	if seedFrame then
 		local mainFrame = seedFrame:FindFirstChild("Main_Frame", true)
-		if mainFrame and mainFrame:IsA("GuiButton") then
-			activateButton(mainFrame)
+		local rowButton = mainFrame and mainFrame:FindFirstChild("TextButton")
+		if rowButton and rowButton:IsA("GuiButton") and rowButton.Visible and activateButton(rowButton) then
+			clicked = true
 			task.wait(0.08)
 		end
 
-		for _, buttonName in ipairs({ "Sheckles_Buy", "Buy", "CashBuy" }) do
+		for _, buttonName in ipairs({ "TextButton", "Sheckles_Buy", "Buy", "CashBuy" }) do
 			local button = seedFrame:FindFirstChild(buttonName, true)
 			if button and button:IsA("GuiButton") and button.Visible and activateButton(button) then
 				clicked = true
@@ -717,10 +562,15 @@ local function buySeed()
 end
 
 local function buyOnePet(petName)
-	for _, descendant in ipairs(getWorkspaceDescendants()) do
+	local wildPetSpawns = getWildPetSpawns()
+	local petTerm = string.lower(petName)
+
+	for _, descendant in ipairs(getCachedDescendants("wildPets", wildPetSpawns)) do
 		if descendant:IsA("ProximityPrompt") then
-			local isBuyPrompt = textMatches(descendant, { "buy", "purchase", "adopt" })
-			local isPetPrompt = textMatches(descendant, { petName })
+			local model = descendant:FindFirstAncestorWhichIsA("Model")
+			local modelName = model and string.lower(model.Name) or ""
+			local isBuyPrompt = descendant.Name == "BuyPrompt" or textMatches(descendant, { "buy", "purchase", "adopt" })
+			local isPetPrompt = string.find(modelName, petTerm, 1, true) ~= nil or textMatches(descendant, { petName })
 
 			if isBuyPrompt and isPetPrompt and triggerBuyPrompt(descendant) then
 				return true, ("Auto pets: triggered prompt for %s"):format(petName)
@@ -765,10 +615,9 @@ if existing then
 	existing:Destroy()
 end
 
-local statusValue = Instance.new("StringValue")
+statusValue = Instance.new("StringValue")
 statusValue.Name = "StatusValue"
 statusValue.Value = state.lastStatus
-statusValue.Parent = script
 
 local gui = make("ScreenGui", {
 	Name = "GardenAutomationGui",
@@ -776,6 +625,7 @@ local gui = make("ScreenGui", {
 	IgnoreGuiInset = false,
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 }, playerGui)
+statusValue.Parent = gui
 
 local panel = make("Frame", {
 	Name = "Panel",
@@ -1032,6 +882,23 @@ local timers = {
 	autoBuyPets = 0,
 }
 
+local running = {}
+
+local function runGuarded(key, callback)
+	if running[key] then
+		return
+	end
+
+	running[key] = true
+	task.spawn(function()
+		local ok, err = pcall(callback)
+		if not ok then
+			setStatus(("%s error: %s"):format(key, tostring(err)))
+		end
+		running[key] = false
+	end)
+end
+
 RunService.Heartbeat:Connect(function(deltaTime)
 	timers.fruitCollector += deltaTime
 	timers.seedPlacer += deltaTime
@@ -1042,32 +909,32 @@ RunService.Heartbeat:Connect(function(deltaTime)
 
 	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
 		timers.fruitCollector = 0
-		task.spawn(collectFruit)
+		runGuarded("fruitCollector", collectFruit)
 	end
 
 	if state.seedPlacer and timers.seedPlacer >= CONFIG.plantInterval then
 		timers.seedPlacer = 0
-		task.spawn(plantSeed)
+		runGuarded("seedPlacer", plantSeed)
 	end
 
 	if state.autoSell and timers.autoSell >= CONFIG.sellInterval then
 		timers.autoSell = 0
-		task.spawn(autoSell)
+		runGuarded("autoSell", autoSell)
 	end
 
 	if state.autoBuySeeds and timers.autoBuySeeds >= CONFIG.buyInterval then
 		timers.autoBuySeeds = 0
-		task.spawn(buySeed)
+		runGuarded("autoBuySeeds", buySeed)
 	end
 
 	if state.autoCollectRainbowSeeds and timers.autoCollectRainbowSeeds >= CONFIG.rainbowCollectInterval then
 		timers.autoCollectRainbowSeeds = 0
-		task.spawn(autoCollectRainbowSeeds)
+		runGuarded("autoCollectRainbowSeeds", autoCollectRainbowSeeds)
 	end
 
 	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval then
 		timers.autoBuyPets = 0
-		task.spawn(buyPets)
+		runGuarded("autoBuyPets", buyPets)
 	end
 end)
 
