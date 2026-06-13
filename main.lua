@@ -2,6 +2,7 @@
 -- Drop this LocalScript in StarterPlayerScripts, or run it from a local test client.
 
 local Players = game:GetService("Players")
+local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -25,7 +26,7 @@ local CONFIG = {
 	maxVisualPets = 24,
 	maxVisualPetTools = 24,
 	maxEquippedVisualPets = 3,
-	visualPetAmount = 3,
+	visualPetAmount = 24,
 	visualPetVariant = "Normal",
 	selectedSeed = "Carrot",
 	plantRadius = 18,
@@ -132,6 +133,11 @@ local visualVariantWords = {
 
 local visualPetVariants = {
 	"Normal",
+	"Big",
+	"Huge",
+	"Gold",
+	"Golden",
+	"Rainbow",
 }
 
 local statusValue
@@ -236,6 +242,14 @@ local function getObjectPath(instance)
 		current = current.Parent
 	end
 	return table.concat(parts, ".")
+end
+
+local function safeText(value)
+	if value == nil then
+		return ""
+	end
+
+	return tostring(value)
 end
 
 local packetModule
@@ -371,10 +385,24 @@ local function sendPacket(packetName, ...)
 	return firePacketRemote(packetName, ...)
 end
 
+local function sendAnyPacket(packetNames, ...)
+	for _, packetName in ipairs(packetNames) do
+		if sendPacket(packetName, ...) then
+			return true, packetName
+		end
+	end
+
+	return false, nil
+end
+
 local cache = {
 	seedFrames = {},
 	gearFrames = {},
 }
+
+local touchPart
+local getPromptPart
+local triggerPrompt
 
 local function getCachedDescendants(key, root)
 	local now = os.clock()
@@ -439,15 +467,36 @@ end
 local function textMatches(instance, terms)
 	local instanceText = ""
 	pcall(function()
-		instanceText = instance.Text or ""
+		instanceText = safeText(instance.Text)
 	end)
 
+	local metadata = {}
+	pcall(function()
+		for name, value in pairs(instance:GetAttributes()) do
+			table.insert(metadata, safeText(name))
+			table.insert(metadata, safeText(value))
+		end
+	end)
+	pcall(function()
+		for _, tag in ipairs(CollectionService:GetTags(instance)) do
+			table.insert(metadata, safeText(tag))
+		end
+	end)
+	for _, childName in ipairs({ "Variant", "Mutation", "Mutations", "Rarity" }) do
+		local child = instance:FindFirstChild(childName)
+		if child and child:IsA("ValueBase") then
+			table.insert(metadata, childName)
+			table.insert(metadata, safeText(child.Value))
+		end
+	end
+
 	local haystack = string.lower(table.concat({
-		instance.Name or "",
+		safeText(instance.Name),
 		instanceText,
 		getObjectPath(instance),
-		instance:IsA("ProximityPrompt") and instance.ActionText or "",
-		instance:IsA("ProximityPrompt") and instance.ObjectText or "",
+		table.concat(metadata, " "),
+		instance:IsA("ProximityPrompt") and safeText(instance.ActionText) or "",
+		instance:IsA("ProximityPrompt") and safeText(instance.ObjectText) or "",
 	}, " "))
 
 	for _, term in ipairs(terms) do
@@ -459,7 +508,91 @@ local function textMatches(instance, terms)
 	return false
 end
 
-local function triggerPrompt(prompt)
+local function treeTextMatches(instance, terms, maxAncestors)
+	local current = instance
+	local checked = 0
+
+	while current and current ~= workspace and checked <= (maxAncestors or 4) do
+		if textMatches(current, terms) then
+			return true
+		end
+		current = current.Parent
+		checked += 1
+	end
+
+	return false
+end
+
+local function isHarvestPrompt(prompt)
+	if not prompt or not prompt:IsA("ProximityPrompt") then
+		return false
+	end
+
+	if prompt.Name == "StealPrompt" or prompt.ActionText == "Steal" then
+		return false
+	end
+
+	return prompt.Name == "HarvestPrompt"
+		or treeTextMatches(prompt, { "harvestprompt", "collect", "harvest", "pick", "fruit" }, 3)
+end
+
+local function getCollectFruitTarget(prompt)
+	local current = prompt and prompt.Parent
+
+	while current and current ~= workspace do
+		if current.Parent and current.Parent.Name == "Fruits" then
+			return current
+		end
+		current = current.Parent
+	end
+
+	return prompt and prompt.Parent
+end
+
+local function collectPrompt(prompt)
+	local part = getPromptPart and getPromptPart(prompt)
+	if part and touchPart then
+		touchPart(part)
+		task.wait(0.03)
+	end
+
+	local prompted = triggerPrompt(prompt)
+	local target = getCollectFruitTarget(prompt)
+	local packeted = target ~= nil and sendPacket("CollectFruit", target)
+
+	return prompted or packeted
+end
+
+local function getFruitPriority(instance)
+	local haystack = string.lower(getObjectPath(instance))
+	local priority = 0
+
+	if string.find(haystack, "rainbow", 1, true) then
+		priority += 10000
+	end
+	if string.find(haystack, "golden", 1, true) or string.find(haystack, "gold", 1, true) then
+		priority += 6000
+	end
+	if string.find(haystack, "huge", 1, true) or string.find(haystack, "giant", 1, true) then
+		priority += 3000
+	end
+
+	for index, seedName in ipairs(seedNames) do
+		if string.find(haystack, string.lower(seedName), 1, true) then
+			priority += index * 10
+		end
+	end
+
+	return priority
+end
+
+function triggerPrompt(prompt)
+	local part = getPromptPart and getPromptPart(prompt)
+	if part and touchPart then
+		touchPart(part)
+		task.wait(0.03)
+	end
+
 	if typeof(fireproximityprompt) == "function" then
 		fireproximityprompt(prompt)
 		return true
@@ -522,34 +655,40 @@ end
 
 local function collectFruit()
 	local fired = 0
+	local prompts = {}
 
 	for index, root in ipairs(getOwnGardenRoots()) do
 		for _, descendant in ipairs(getCachedDescendants("garden" .. index, root)) do
-			if descendant:IsA("ProximityPrompt")
-				and descendant.Name ~= "StealPrompt"
-				and descendant.ActionText ~= "Steal"
-				and textMatches(descendant, { "collect", "harvest", "pick", "fruit" })
-			then
-				if triggerPrompt(descendant) then
-					fired += 1
-					task.wait(0.03)
-				end
+			if isHarvestPrompt(descendant) then
+				table.insert(prompts, descendant)
 			end
+		end
+	end
+
+	table.sort(prompts, function(left, right)
+		return getFruitPriority(left) > getFruitPriority(right)
+	end)
+
+	for _, prompt in ipairs(prompts) do
+		if collectPrompt(prompt) then
+			fired += 1
+			task.wait(0.03)
 		end
 	end
 
 	setStatus(("Fruit collector: %d target(s) checked"):format(fired))
 end
 
-local function getEquippedSeedTool()
+local function getEquippedSeedTool(seedName)
 	local character = getCharacter()
 	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
 	local humanoid = getHumanoid()
+	local targetSeed = seedName or CONFIG.selectedSeed
 
 	for _, container in ipairs({ character, backpack }) do
 		if container then
 			for _, item in ipairs(container:GetChildren()) do
-				if item:IsA("Tool") and string.find(string.lower(item.Name), string.lower(CONFIG.selectedSeed), 1, true) then
+				if item:IsA("Tool") and string.find(string.lower(item.Name), string.lower(targetSeed), 1, true) then
 					if item.Parent ~= character and humanoid then
 						humanoid:EquipTool(item)
 					end
@@ -576,6 +715,130 @@ local function getSelectedSeedList()
 	end
 
 	return selected
+end
+
+local function getSeedPlantPosition(index)
+	local root = getRoot()
+	if not root then
+		return nil
+	end
+
+	local angle = ((index or 1) - 1) * math.rad(45)
+	local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * math.min(CONFIG.plantRadius, 6)
+	local origin = root.Position + offset + Vector3.new(0, 12, 0)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { getCharacter() }
+
+	local result = workspace:Raycast(origin, Vector3.new(0, -80, 0), params)
+	if result then
+		return result.Position
+	end
+
+	return root.Position + offset
+end
+
+local function tryPlantSeedRemote(seedName, position)
+	local attempts = 0
+	local cframe = CFrame.new(position)
+	local packets = { "PlantSeed", "PlaceSeed", "Plant", "GrowPlant" }
+	local unpackArgs = table.unpack or unpack
+
+	for _, packetName in ipairs(packets) do
+		for _, args in ipairs({
+			{ seedName, position },
+			{ position, seedName },
+			{ seedName, cframe },
+			{ cframe, seedName },
+			{ seedName, position.X, position.Y, position.Z },
+			{ { seed = seedName, seedName = seedName, position = position, cframe = cframe } },
+		}) do
+			attempts += 1
+			sendPacket(packetName, unpackArgs(args))
+			task.wait(0.02)
+		end
+	end
+
+	return attempts
+end
+
+local function isInventorySeedTool(item)
+	if not item or not item:IsA("Tool") then
+		return false
+	end
+
+	local name = string.lower(item.Name)
+	if string.find(name, "seed", 1, true) then
+		return true
+	end
+
+	for _, seedName in ipairs(seedNames) do
+		if string.find(name, string.lower(seedName), 1, true) and string.find(name, "pack", 1, true) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function isLikelyFruitTool(item)
+	if not item or not item:IsA("Tool") or isInventorySeedTool(item) then
+		return false
+	end
+
+	local name = string.lower(item.Name)
+	if string.find(name, "kg", 1, true)
+		or string.find(name, "lb", 1, true)
+		or string.find(name, "fruit", 1, true)
+		or string.find(name, "harvest", 1, true)
+	then
+		return true
+	end
+
+	for _, seedName in ipairs(seedNames) do
+		if string.find(name, string.lower(seedName), 1, true) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function getSellableFruitTools()
+	local tools = {}
+	local character = getCharacter()
+	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
+
+	for _, container in ipairs({ character, backpack }) do
+		if container then
+			for _, item in ipairs(container:GetChildren()) do
+				if isLikelyFruitTool(item) then
+					table.insert(tools, item)
+				end
+			end
+		end
+	end
+
+	table.sort(tools, function(left, right)
+		local leftName = string.lower(left.Name)
+		local rightName = string.lower(right.Name)
+		local leftRare = (string.find(leftName, "rainbow", 1, true) and 3)
+			or (string.find(leftName, "gold", 1, true) and 2)
+			or (string.find(leftName, "golden", 1, true) and 2)
+			or 1
+		local rightRare = (string.find(rightName, "rainbow", 1, true) and 3)
+			or (string.find(rightName, "gold", 1, true) and 2)
+			or (string.find(rightName, "golden", 1, true) and 2)
+			or 1
+
+		if leftRare ~= rightRare then
+			return leftRare > rightRare
+		end
+
+		return left.Name < right.Name
+	end)
+
+	return tools
 end
 
 local function getSelectedGearList()
@@ -679,7 +942,7 @@ local function getSelectedVisualPetList()
 	return selected
 end
 
-local function touchPart(part)
+function touchPart(part)
 	local root = getRoot()
 	if not root or not part or not part:IsA("BasePart") then
 		return false
@@ -702,7 +965,7 @@ local function touchPart(part)
 	return ok
 end
 
-local function getPromptPart(prompt)
+function getPromptPart(prompt)
 	local current = prompt.Parent
 	while current and current ~= workspace do
 		if current:IsA("BasePart") then
@@ -749,21 +1012,27 @@ local function autoCollectRainbowSeeds()
 
 	for rootIndex, root in ipairs(roots) do
 		for _, descendant in ipairs(getCachedDescendants("rainbow" .. rootIndex, root)) do
-			local matchesRainbowSeed = textMatches(descendant, {
+			local matchesRainbowSeed = treeTextMatches(descendant, {
 				"rainbow",
+				"gold",
+				"golden",
 				"seedrain",
 				"seed rain",
 				"gold seed",
 				"seedpack",
 				"seed pack",
-			})
+			}, 3)
 
 			if descendant:IsA("ProximityPrompt") and descendant.Name ~= "StealPrompt" and matchesRainbowSeed then
 				if triggerPrompt(descendant) then
 					checked += 1
 					task.wait(0.03)
 				end
-			elseif descendant:IsA("BasePart") and matchesRainbowSeed then
+			elseif descendant:IsA("BasePart")
+				and descendant.CanTouch
+				and matchesRainbowSeed
+				and treeTextMatches(descendant, { "seed", "pack", "drop", "collect", "pickup", "rain" }, 3)
+			then
 				if touchPart(descendant) then
 					checked += 1
 					task.wait(0.03)
@@ -828,47 +1097,94 @@ local function plantSeed()
 		return
 	end
 
-	local tool = getEquippedSeedTool()
-	if not tool then
-		setStatus("Seed placer: no matching seed tool found")
-		return
+	local planted = 0
+	local attempts = 0
+	local missing = 0
+
+	for index, seedName in ipairs(getSelectedSeedList()) do
+		local tool = getEquippedSeedTool(seedName)
+		if tool then
+			local position = getSeedPlantPosition(index)
+			if position then
+				attempts += tryPlantSeedRemote(seedName, position)
+			end
+
+			pcall(function()
+				tool:Activate()
+			end)
+
+			planted += 1
+			task.wait(0.08)
+		else
+			missing += 1
+		end
 	end
 
-	pcall(function()
-		tool:Activate()
-	end)
-
-	setStatus(("Seed placer: attempted %s"):format(CONFIG.selectedSeed))
+	if planted > 0 then
+		setStatus(("Seed placer: %d seed(s), %d remote try(s)"):format(planted, attempts))
+	else
+		setStatus(("Seed placer: no selected seed tool found (%d missing)"):format(missing))
+	end
 end
 
 local function autoSell()
-	local fired = 0
-
+	local actions = 0
 	local stand = getPath(workspace, "Map.Stands.Sell.Part")
 	if stand and stand:IsA("BasePart") and touchPart(stand) then
-		fired += 1
+		actions += 1
 		task.wait(0.15)
 	end
 
 	local stevenPrompt = getPath(workspace, "NPCS.Steven.HumanoidRootPart.ProximityPrompt")
 	if stevenPrompt and stevenPrompt:IsA("ProximityPrompt") and triggerBuyPrompt(stevenPrompt) then
-		fired += 1
+		actions += 1
 		task.wait(0.15)
 	end
 
+	for _, packetName in ipairs({ "SellAll", "SellInventory", "PreviewSellAll" }) do
+		if sendPacket(packetName) then
+			actions += 1
+			task.wait(0.05)
+		end
+	end
+
+	for _, tool in ipairs(getSellableFruitTools()) do
+		if sendPacket("SellItem", tool) then
+			actions += 1
+			task.wait(0.03)
+		end
+
+		if sendPacket("SellFruit", tool) then
+			actions += 1
+			task.wait(0.03)
+		end
+
+		if sendPacket("SellItem", tool.Name) then
+			actions += 1
+			task.wait(0.03)
+		end
+	end
+
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
-		if descendant:IsA("GuiButton") and descendant.Visible and textMatches(descendant, { "sell" }) then
+		if descendant:IsA("GuiButton")
+			and descendant.Visible
+			and textMatches(descendant, { "sell all", "sell inventory", "sell" })
+		then
 			if activateButton(descendant) then
-				fired += 1
+				actions += 1
 				task.wait(0.05)
 			end
 		end
 	end
 
-	setStatus(("Auto sell: %d prompt(s) checked"):format(fired))
+	setStatus(("Sell: %d action(s) tried"):format(actions))
 end
 
 local function buyOneSeed(seedName)
+	if purchaseSeedRemote(seedName) then
+		return true, "Seed: " .. seedName
+	end
+
 	local seedFrame = getSeedFrame(seedName)
 
 	local clicked = false
@@ -896,14 +1212,10 @@ local function buyOneSeed(seedName)
 		end
 	end
 
-	if purchaseSeedRemote(seedName) then
-		return true, ("Auto buy: sent PurchaseSeed for %s"):format(seedName)
-	end
-
 	if clicked then
-		return true, ("Auto buy: clicked %s"):format(seedName)
+		return true, "Seed: fallback " .. seedName
 	else
-		return false, ("Auto buy: no working remote/button for %s"):format(seedName)
+		return false, "Seed: failed " .. seedName
 	end
 end
 
@@ -928,6 +1240,10 @@ local function buySeed()
 end
 
 local function buyOneGear(gearName)
+	if sendPacket("PurchaseGear", gearName) or sendPacket("PurchaseGear", gearName, 1) then
+		return true, "Gear: " .. gearName
+	end
+
 	local gearFrame = getGearFrame(gearName)
 
 	local clicked = false
@@ -955,14 +1271,10 @@ local function buyOneGear(gearName)
 		end
 	end
 
-	if sendPacket("PurchaseGear", gearName) or sendPacket("PurchaseGear", gearName, 1) then
-		return true, ("Auto gear: sent PurchaseGear for %s"):format(gearName)
-	end
-
 	if clicked then
-		return true, ("Auto gear: clicked %s"):format(gearName)
+		return true, "Gear: fallback " .. gearName
 	else
-		return false, ("Auto gear: no working button for %s"):format(gearName)
+		return false, "Gear: failed " .. gearName
 	end
 end
 
@@ -1292,7 +1604,9 @@ local function getVariantFlags(variant)
 	variant = tostring(variant or "Normal")
 	local isHuge = string.find(variant, "Giant", 1, true) ~= nil or string.find(variant, "Huge", 1, true) ~= nil
 	local isBig = string.find(variant, "Big", 1, true) ~= nil
-	return isHuge, string.find(variant, "Rainbow", 1, true) ~= nil, isBig
+	local isRainbow = string.find(variant, "Rainbow", 1, true) ~= nil
+	local isGold = string.find(variant, "Gold", 1, true) ~= nil or string.find(variant, "Golden", 1, true) ~= nil
+	return isHuge, isRainbow, isBig, isGold
 end
 
 local function findBasePetTemplate(petsFolder, petName)
@@ -1333,6 +1647,11 @@ local function findVisualPetTemplate(petsFolder, petName, variant)
 		if baseTemplate then
 			return baseTemplate, variant, false
 		end
+	end
+
+	local baseTemplate = findBasePetTemplate(petsFolder, petName)
+	if baseTemplate then
+		return baseTemplate, variant, false
 	end
 
 	return nil, nil, false
@@ -1400,7 +1719,7 @@ local function isVisualVariantAvailable(variant)
 end
 
 local function applyVisualPetVariant(instance, variant, usedVariantAsset)
-	local wantsGiant, wantsRainbow, wantsBig = getVariantFlags(variant)
+	local wantsGiant, wantsRainbow, wantsBig, wantsGold = getVariantFlags(variant)
 	if variant and variant ~= "Normal" then
 		instance:SetAttribute("Variant", variant)
 	end
@@ -1416,6 +1735,9 @@ local function applyVisualPetVariant(instance, variant, usedVariantAsset)
 	if wantsRainbow then
 		instance:SetAttribute("Mutation", "Rainbow")
 		instance:SetAttribute("Rainbow", true)
+	elseif wantsGold then
+		instance:SetAttribute("Mutation", "Gold")
+		instance:SetAttribute("Gold", true)
 	end
 
 	if (wantsGiant or wantsBig) and not usedVariantAsset and instance:IsA("Model") then
@@ -1423,46 +1745,58 @@ local function applyVisualPetVariant(instance, variant, usedVariantAsset)
 			instance:ScaleTo(wantsGiant and 2 or 1.45)
 		end)
 	end
+
+	if not usedVariantAsset and (wantsRainbow or wantsGold) then
+		local rootPart = getModelRootPart(instance)
+		if instance:IsA("BasePart") then
+			if wantsGold then
+				instance.Color = Color3.fromRGB(255, 198, 54)
+				instance.Material = Enum.Material.Neon
+				instance.Reflectance = math.max(instance.Reflectance, 0.18)
+			elseif wantsRainbow then
+				instance.Material = Enum.Material.Neon
+				instance.Reflectance = math.max(instance.Reflectance, 0.12)
+			end
+		end
+
+		for _, descendant in ipairs(instance:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				if wantsGold then
+					descendant.Color = Color3.fromRGB(255, 198, 54)
+					descendant.Material = Enum.Material.Neon
+					descendant.Reflectance = math.max(descendant.Reflectance, 0.18)
+				elseif wantsRainbow then
+					descendant.Material = Enum.Material.Neon
+					descendant.Reflectance = math.max(descendant.Reflectance, 0.12)
+				end
+			end
+		end
+
+		if rootPart then
+			local light = Instance.new("PointLight")
+			light.Name = "VariantGlow"
+			light.Brightness = wantsGold and 1.8 or 1.4
+			light.Range = wantsGold and 12 or 14
+			light.Color = wantsGold and Color3.fromRGB(255, 213, 74) or Color3.fromRGB(170, 92, 255)
+			light.Parent = rootPart
+
+			if wantsRainbow then
+				local sparkles = Instance.new("Sparkles")
+				sparkles.Name = "RainbowVariantSparkles"
+				sparkles.SparkleColor = Color3.fromRGB(160, 95, 255)
+				sparkles.Parent = rootPart
+			end
+		end
+	end
 end
 
 local function playPetAnimations(instance)
-	local animator
 	for _, descendant in ipairs(instance:GetDescendants()) do
 		if descendant:IsA("Animator") then
-			animator = descendant
-			break
-		end
-	end
-
-	if not animator then
-		local controller = instance:FindFirstChildWhichIsA("AnimationController", true)
-		if controller then
-			animator = Instance.new("Animator")
-			animator.Parent = controller
-		end
-	end
-
-	if not animator then
-		return
-	end
-
-	local played = 0
-	for _, descendant in ipairs(instance:GetDescendants()) do
-		if descendant:IsA("Animation") and descendant.AnimationId ~= "" then
-			local lowerName = string.lower(descendant.Name)
-			if string.find(lowerName, "idle", 1, true) or string.find(lowerName, "walk", 1, true) or played == 0 then
-				local ok, track = pcall(function()
-					return animator:LoadAnimation(descendant)
+			for _, track in ipairs(descendant:GetPlayingAnimationTracks()) do
+				pcall(function()
+					track:Stop(0)
 				end)
-				if ok and track then
-					track.Looped = true
-					track:Play(0.15, 1, string.find(lowerName, "walk", 1, true) and 1.15 or 1)
-					played += 1
-				end
-			end
-
-			if played >= 2 then
-				break
 			end
 		end
 	end
@@ -1474,7 +1808,7 @@ local function makeLocalPetTool(petName, template, slot, variant, usedVariantAss
 		return false
 	end
 
-	local wantsGiant, wantsRainbow, wantsBig = getVariantFlags(variant)
+	local wantsGiant, wantsRainbow, wantsBig, wantsGold = getVariantFlags(variant)
 	local toolName = petName
 	if variant and variant ~= "Normal" then
 		toolName = variant .. " " .. petName
@@ -1504,6 +1838,9 @@ local function makeLocalPetTool(petName, template, slot, variant, usedVariantAss
 	if wantsRainbow then
 		tool:SetAttribute("Mutation", "Rainbow")
 		tool:SetAttribute("Rainbow", true)
+	elseif wantsGold then
+		tool:SetAttribute("Mutation", "Gold")
+		tool:SetAttribute("Gold", true)
 	end
 
 	local icon = getPetIcon(petName, template, toolName)
@@ -1522,40 +1859,6 @@ local function makeLocalPetTool(petName, template, slot, variant, usedVariantAss
 	handle.CanQuery = false
 	handle.Massless = true
 	handle.Parent = tool
-
-	local clone = template:Clone()
-	clone.Name = "PetPreview"
-	applyVisualPetVariant(clone, variant, usedVariantAsset)
-	prepVisualPet(clone)
-	clone.Parent = tool
-
-	pcall(function()
-		if clone:IsA("Model") then
-			clone:PivotTo(handle.CFrame)
-		elseif clone:IsA("BasePart") then
-			clone.CFrame = handle.CFrame
-		end
-	end)
-
-	for _, descendant in ipairs(clone:GetDescendants()) do
-		if descendant:IsA("BasePart") then
-			descendant.Anchored = false
-			descendant.Massless = true
-			local weld = Instance.new("WeldConstraint")
-			weld.Part0 = handle
-			weld.Part1 = descendant
-			weld.Parent = handle
-		end
-	end
-
-	if clone:IsA("BasePart") then
-		clone.Anchored = false
-		clone.Massless = true
-		local weld = Instance.new("WeldConstraint")
-		weld.Part0 = handle
-		weld.Part1 = clone
-		weld.Parent = handle
-	end
 
 	tool.Activated:Connect(function()
 		showPetInfo(petName, variant or "Normal", icon, tool)
@@ -1578,6 +1881,24 @@ local function clearVisualPetTools()
 			end
 		end
 	end
+end
+
+local function countVisualPetTools()
+	local count = 0
+	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
+	local character = localPlayer.Character
+
+	for _, container in ipairs({ backpack, character }) do
+		if container then
+			for _, child in ipairs(container:GetChildren()) do
+				if child:IsA("Tool") and child:GetAttribute("VisualPetTool") then
+					count += 1
+				end
+			end
+		end
+	end
+
+	return count
 end
 
 local function trimVisualPets()
@@ -1622,7 +1943,7 @@ end
 local function applyVisualOrientationOffset(instance, target)
 	local offset = instance:FindFirstChild("VisualOrientationOffset")
 	if offset and offset:IsA("CFrameValue") then
-		return target * offset.Value
+		return CFrame.new(target.Position) * offset.Value
 	end
 
 	return target
@@ -1704,60 +2025,7 @@ local function attachVisualPetInfoPrompt(instance, petName, variant, icon)
 end
 
 local function updateVisualPetBehavior()
-	local root = getRoot()
-	if not root or not visualPetFolder or not visualPetFolder.Parent then
-		return
-	end
-
-	local pets = visualPetFolder:GetChildren()
-	if #pets == 0 then
-		return
-	end
-	table.sort(pets, function(a, b)
-		local slotA = a:GetAttribute("Slot") or 0
-		local slotB = b:GetAttribute("Slot") or 0
-		if slotA == slotB then
-			return (a:GetAttribute("SpawnedAt") or 0) < (b:GetAttribute("SpawnedAt") or 0)
-		end
-		return slotA < slotB
-	end)
-
-	local rayParams = RaycastParams.new()
-	rayParams.FilterType = Enum.RaycastFilterType.Exclude
-	rayParams.FilterDescendantsInstances = { localPlayer.Character, visualPetFolder }
-	local now = os.clock()
-
-	for index, pet in ipairs(pets) do
-		local ring = math.floor((index - 1) / 6)
-		local ringIndex = (index - 1) % 6
-		local ringCount = math.min(#pets - ring * 6, 6)
-		local arc = math.rad(150)
-		local step = ringCount > 1 and arc / (ringCount - 1) or 0
-		local angle = -math.rad(75) + step * ringIndex
-		local radius = 7 + ring * 4
-		local sideOffset = math.sin(angle) * radius
-		local backOffset = math.cos(angle) * radius + 3 + ring * 1.5
-		local bob = math.sin(now * 2.4 + index) * 0.18
-		local desired = root.Position - (root.CFrame.LookVector * backOffset) + (root.CFrame.RightVector * sideOffset)
-		local rayResult = workspace:Raycast(desired + Vector3.new(0, 24, 0), Vector3.new(0, -90, 0), rayParams)
-		if rayResult then
-			desired = rayResult.Position + Vector3.new(0, 1.4 + bob, 0)
-		else
-			desired += Vector3.new(0, 1.2, 0)
-		end
-
-		local lookAt = Vector3.new(root.Position.X, desired.Y, root.Position.Z)
-		if (lookAt - desired).Magnitude < 0.1 then
-			lookAt = desired + root.CFrame.LookVector
-		end
-		local target = CFrame.new(desired, lookAt)
-		local current = getPetPivot(pet)
-		if current and (current.Position - desired).Magnitude < 45 then
-			moveVisualPet(pet, current:Lerp(target, 0.35))
-		else
-			moveVisualPet(pet, target)
-		end
-	end
+	return
 end
 
 local function clearVisualPets()
@@ -1765,8 +2033,7 @@ local function clearVisualPets()
 	for _, child in ipairs(folder:GetChildren()) do
 		child:Destroy()
 	end
-	clearVisualPetTools()
-	setStatus("Visual pets cleared")
+	setStatus("Visuals cleared")
 end
 
 local function spawnVisualPets()
@@ -1795,60 +2062,62 @@ local function spawnVisualPets()
 	local amount = math.floor(tonumber(CONFIG.visualPetAmount) or 1)
 	local equipped = #folder:GetChildren()
 	local availableSlots = math.max(CONFIG.maxEquippedVisualPets - equipped, 0)
-	amount = math.clamp(amount, 1, CONFIG.maxEquippedVisualPets)
-	amount = math.min(amount, availableSlots)
-	if amount <= 0 then
-		setStatus(("Visual pets: max equipped %d/%d"):format(equipped, CONFIG.maxEquippedVisualPets))
+	local equippedAmount = math.clamp(amount, 1, CONFIG.maxEquippedVisualPets)
+	equippedAmount = math.min(equippedAmount, availableSlots)
+	local availableToolSlots = math.max(CONFIG.maxVisualPetTools - countVisualPetTools(), 0)
+	local toolAmount = availableToolSlots
+	local totalAmount = math.max(equippedAmount, toolAmount)
+	if totalAmount <= 0 then
+		setStatus(("Visual pets: max equipped %d/%d, backpack full %d/%d"):format(equipped, CONFIG.maxEquippedVisualPets, CONFIG.maxVisualPetTools, CONFIG.maxVisualPetTools))
 		return
 	end
 	local startSlot = #folder:GetChildren()
 	local unavailable = 0
 
-	for index = 1, amount do
-		if #folder:GetChildren() >= CONFIG.maxEquippedVisualPets then
-			break
-		end
-
+	for index = 1, totalAmount do
 		local petName = selected[((index - 1) % #selected) + 1]
 		local template, actualVariant, usedVariantAsset = findVisualPetTemplate(petsFolder, petName, CONFIG.visualPetVariant)
 		if template then
-			local slot = startSlot + spawned + 1
-			local clone = template:Clone()
-			clone.Name = petName
-			clone:SetAttribute("PetName", petName)
-			clone:SetAttribute("Slot", slot)
-			clone:SetAttribute("SpawnedAt", os.clock())
-			applyVisualPetVariant(clone, actualVariant, usedVariantAsset)
-			prepVisualPet(clone, true)
-			storeVisualOrientationOffset(clone)
-			clone.Parent = folder
-			playPetAnimations(clone)
+			local slot = startSlot + index
 			local displayName = actualVariant ~= "Normal" and (actualVariant .. " " .. petName) or petName
 			local icon = getPetIcon(petName, template, displayName)
-			attachVisualPetInfoPrompt(clone, petName, actualVariant, icon)
 
-			local angle = ((index - 1) / amount) * math.pi * 2
-			local radius = 6 + (spawned % 3) * 2
-			local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
-			local position = root.Position + offset
-			local rayParams = RaycastParams.new()
-			rayParams.FilterType = Enum.RaycastFilterType.Exclude
-			rayParams.FilterDescendantsInstances = { localPlayer.Character, folder }
-			local rayResult = workspace:Raycast(position + Vector3.new(0, 20, 0), Vector3.new(0, -80, 0), rayParams)
-			if rayResult then
-				position = rayResult.Position + Vector3.new(0, 1.5, 0)
-			else
-				position += Vector3.new(0, -2, 0)
+			if index <= equippedAmount and #folder:GetChildren() < CONFIG.maxEquippedVisualPets then
+				local clone = template:Clone()
+				clone.Name = petName
+				clone:SetAttribute("PetName", petName)
+				clone:SetAttribute("Slot", slot)
+				clone:SetAttribute("SpawnedAt", os.clock())
+				applyVisualPetVariant(clone, actualVariant, usedVariantAsset)
+				prepVisualPet(clone)
+				storeVisualOrientationOffset(clone)
+				clone.Parent = folder
+				playPetAnimations(clone)
+				attachVisualPetInfoPrompt(clone, petName, actualVariant, icon)
+
+				local angle = ((index - 1) / math.max(equippedAmount, 1)) * math.pi * 2
+				local radius = 6 + (spawned % 3) * 2
+				local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+				local position = root.Position + offset
+				local rayParams = RaycastParams.new()
+				rayParams.FilterType = Enum.RaycastFilterType.Exclude
+				rayParams.FilterDescendantsInstances = { localPlayer.Character, folder }
+				local rayResult = workspace:Raycast(position + Vector3.new(0, 20, 0), Vector3.new(0, -80, 0), rayParams)
+				if rayResult then
+					position = rayResult.Position + Vector3.new(0, 1.5, 0)
+				else
+					position += Vector3.new(0, -2, 0)
+				end
+				local target = CFrame.new(position, Vector3.new(root.Position.X, position.Y, root.Position.Z))
+
+				moveVisualPet(clone, target)
+				spawned += 1
 			end
-			local target = CFrame.new(position, Vector3.new(root.Position.X, position.Y, root.Position.Z))
 
-			moveVisualPet(clone, target)
-
-			if toolCount < CONFIG.maxVisualPetTools and makeLocalPetTool(petName, template, slot, actualVariant, usedVariantAsset) then
+			if toolCount < toolAmount and makeLocalPetTool(petName, template, slot, actualVariant, usedVariantAsset) then
 				toolCount += 1
 			end
 
-			spawned += 1
 			task.wait(0.03)
 		else
 			unavailable += 1
@@ -1857,7 +2126,7 @@ local function spawnVisualPets()
 
 	trimVisualPets()
 	pcall(updateVisualPetBehavior)
-	if spawned == 0 and unavailable > 0 then
+	if spawned == 0 and toolCount == 0 and unavailable > 0 then
 		setStatus(("Visual pets: %s not available for selected pet(s)"):format(CONFIG.visualPetVariant))
 		return
 	end
@@ -2180,14 +2449,14 @@ local function makeActionButton(label, order, callback)
 	return button
 end
 
-makeToggle("Fruit Collector", "fruitCollector", 1)
-makeToggle("Seed Placer", "seedPlacer", 2)
-makeToggle("Auto Sell", "autoSell", 3)
-makeToggle("Auto Buy Seeds", "autoBuySeeds", 4)
-makeToggle("Auto Buy Gear", "autoBuyGear", 5)
-makeToggle("AutoCollect Gold/Rainbow Seeds", "autoCollectRainbowSeeds", 6)
-makeToggle("Auto Buy Pets", "autoBuyPets", 7)
-makeToggle("Performance Mode", "performanceMode", 8)
+makeToggle("Collect", "fruitCollector", 1)
+makeToggle("Plant", "seedPlacer", 2)
+makeToggle("Sell", "autoSell", 3)
+makeToggle("Seeds", "autoBuySeeds", 4)
+makeToggle("Gear", "autoBuyGear", 5)
+makeToggle("Drops", "autoCollectRainbowSeeds", 6)
+makeToggle("Pets", "autoBuyPets", 7)
+makeToggle("FPS", "performanceMode", 8)
 
 local selectedSeedLabel = make("TextLabel", {
 	Name = "SelectedSeedLabel",
@@ -2679,7 +2948,7 @@ make("UIPadding", {
 
 local function refreshVisualPetAmount()
 	local amount = math.floor(tonumber(visualPetAmountBox.Text) or CONFIG.visualPetAmount)
-	amount = math.clamp(amount, 1, CONFIG.maxEquippedVisualPets)
+	amount = math.clamp(amount, 1, CONFIG.maxVisualPetTools)
 	CONFIG.visualPetAmount = amount
 	visualPetAmountBox.Text = tostring(amount)
 	setStatus(("Visual pet amount set to %d"):format(amount))
@@ -2714,8 +2983,8 @@ if gearImages then
 	end)
 end
 
-makeActionButton("Spawn Visual Pets", 21, spawnVisualPets)
-makeActionButton("Clear Visual Pets", 22, clearVisualPets)
+makeActionButton("Spawn", 21, spawnVisualPets)
+makeActionButton("Clear", 22, clearVisualPets)
 
 local dragStart
 local startPos
