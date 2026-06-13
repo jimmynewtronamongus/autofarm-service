@@ -24,6 +24,7 @@ local CONFIG = {
 	visualPetInterval = 4.0,
 	cacheRefreshInterval = 7.0,
 	maxVisualPets = 24,
+	maxVisualPetTools = 24,
 	selectedSeed = "Carrot",
 	plantRadius = 18,
 }
@@ -908,6 +909,86 @@ local function prepVisualPet(instance)
 	end
 end
 
+local function makeLocalPetTool(petName, template)
+	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
+	if not backpack then
+		return false
+	end
+
+	if backpack:FindFirstChild("[Visual] " .. petName) then
+		return true
+	end
+
+	local tool = Instance.new("Tool")
+	tool.Name = "[Visual] " .. petName
+	tool.ToolTip = "Local visual pet"
+	tool.RequiresHandle = true
+	tool.CanBeDropped = false
+	tool:SetAttribute("VisualPetTool", true)
+	tool:SetAttribute("PetName", petName)
+
+	local handle = Instance.new("Part")
+	handle.Name = "Handle"
+	handle.Size = Vector3.new(1, 1, 1)
+	handle.Transparency = 1
+	handle.CanCollide = false
+	handle.CanTouch = false
+	handle.CanQuery = false
+	handle.Massless = true
+	handle.Parent = tool
+
+	local clone = template:Clone()
+	clone.Name = "PetPreview"
+	prepVisualPet(clone)
+	clone.Parent = tool
+
+	pcall(function()
+		if clone:IsA("Model") then
+			clone:PivotTo(handle.CFrame)
+		elseif clone:IsA("BasePart") then
+			clone.CFrame = handle.CFrame
+		end
+	end)
+
+	for _, descendant in ipairs(clone:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = false
+			descendant.Massless = true
+			local weld = Instance.new("WeldConstraint")
+			weld.Part0 = handle
+			weld.Part1 = descendant
+			weld.Parent = handle
+		end
+	end
+
+	if clone:IsA("BasePart") then
+		clone.Anchored = false
+		clone.Massless = true
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = handle
+		weld.Part1 = clone
+		weld.Parent = handle
+	end
+
+	tool.Parent = backpack
+	return true
+end
+
+local function clearVisualPetTools()
+	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
+	local character = localPlayer.Character
+
+	for _, container in ipairs({ backpack, character }) do
+		if container then
+			for _, child in ipairs(container:GetChildren()) do
+				if child:IsA("Tool") and child:GetAttribute("VisualPetTool") then
+					child:Destroy()
+				end
+			end
+		end
+	end
+end
+
 local function trimVisualPets()
 	local folder = getVisualPetFolder()
 	local children = folder:GetChildren()
@@ -928,6 +1009,7 @@ local function clearVisualPets()
 	for _, child in ipairs(folder:GetChildren()) do
 		child:Destroy()
 	end
+	clearVisualPetTools()
 	setStatus("Visual pets cleared")
 end
 
@@ -952,6 +1034,7 @@ local function spawnVisualPets()
 	end
 
 	local spawned = 0
+	local toolCount = 0
 	local folder = getVisualPetFolder()
 
 	for index, petName in ipairs(selected) do
@@ -969,8 +1052,18 @@ local function spawnVisualPets()
 
 			local angle = ((index - 1) / math.max(#selected, 1)) * math.pi * 2
 			local radius = 6 + (spawned % 3) * 2
-			local offset = Vector3.new(math.cos(angle) * radius, 1 + (spawned % 2), math.sin(angle) * radius)
-			local target = CFrame.new(root.Position + offset, root.Position)
+			local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+			local position = root.Position + offset
+			local rayParams = RaycastParams.new()
+			rayParams.FilterType = Enum.RaycastFilterType.Exclude
+			rayParams.FilterDescendantsInstances = { localPlayer.Character, folder }
+			local rayResult = workspace:Raycast(position + Vector3.new(0, 20, 0), Vector3.new(0, -80, 0), rayParams)
+			if rayResult then
+				position = rayResult.Position + Vector3.new(0, 1.5, 0)
+			else
+				position += Vector3.new(0, -2, 0)
+			end
+			local target = CFrame.new(position, Vector3.new(root.Position.X, position.Y, root.Position.Z))
 
 			pcall(function()
 				if clone:IsA("Model") then
@@ -980,13 +1073,17 @@ local function spawnVisualPets()
 				end
 			end)
 
+			if toolCount < CONFIG.maxVisualPetTools and makeLocalPetTool(petName, template) then
+				toolCount += 1
+			end
+
 			spawned += 1
 			task.wait(0.03)
 		end
 	end
 
 	trimVisualPets()
-	setStatus(("Visual pets: spawned %d local clone(s)"):format(spawned))
+	setStatus(("Visual pets: spawned %d clone(s), %d backpack item(s)"):format(spawned, toolCount))
 end
 
 local function make(className, properties, parent)
