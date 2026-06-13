@@ -19,6 +19,8 @@ local CONFIG = {
 	plantInterval = 1.0,
 	sellInterval = 8.0,
 	buyInterval = 2.0,
+	rainbowCollectInterval = 0.35,
+	petBuyInterval = 3.0,
 	selectedSeed = "Carrot",
 	plantRadius = 18,
 }
@@ -46,16 +48,30 @@ local seedNames = {
 	"Burning Bud",
 }
 
+local petNames = {
+	"Common Egg",
+	"Rare Egg",
+	"Legendary Egg",
+	"Mythical Egg",
+	"Bug Egg",
+}
+
 local state = {
 	fruitCollector = false,
 	seedPlacer = false,
 	autoSell = false,
 	autoBuySeeds = false,
+	autoCollectRainbowSeeds = false,
+	autoBuyPets = false,
 	lastStatus = "Ready",
 }
 
 local selectedSeeds = {
 	Carrot = true,
+}
+
+local selectedPets = {
+	["Common Egg"] = true,
 }
 
 local function setStatus(message)
@@ -201,6 +217,7 @@ end
 local function textMatches(instance, terms)
 	local haystack = string.lower(table.concat({
 		instance.Name or "",
+		getObjectPath(instance),
 		instance:IsA("ProximityPrompt") and instance.ActionText or "",
 		instance:IsA("ProximityPrompt") and instance.ObjectText or "",
 	}, " "))
@@ -316,6 +333,18 @@ local function getSelectedSeedList()
 	return selected
 end
 
+local function getSelectedPetList()
+	local selected = {}
+
+	for _, petName in ipairs(petNames) do
+		if selectedPets[petName] then
+			table.insert(selected, petName)
+		end
+	end
+
+	return selected
+end
+
 local function getFruitTools()
 	local tools = {}
 	local character = getCharacter()
@@ -341,6 +370,63 @@ local function getFruitTools()
 	end
 
 	return tools
+end
+
+local function touchPart(part)
+	local root = getRoot()
+	if not root or not part or not part:IsA("BasePart") then
+		return false
+	end
+
+	if typeof(firetouchinterest) == "function" then
+		pcall(firetouchinterest, root, part, 0)
+		task.wait()
+		pcall(firetouchinterest, root, part, 1)
+		return true
+	end
+
+	local oldCFrame = root.CFrame
+	local ok = pcall(function()
+		root.CFrame = part.CFrame + Vector3.new(0, 3, 0)
+		task.wait(0.05)
+		root.CFrame = oldCFrame
+	end)
+
+	return ok
+end
+
+local function autoCollectRainbowSeeds()
+	local checked = 0
+	local pickupEvent = gameEvents and gameEvents:FindFirstChild("PickupEvent")
+
+	for _, descendant in ipairs(workspace:GetDescendants()) do
+		local matchesRainbowSeed = textMatches(descendant, {
+			"rainbow",
+			"seedrain",
+			"seed rain",
+			"gold seed",
+			"seedpack",
+			"seed pack",
+		})
+
+		if descendant:IsA("ProximityPrompt") and matchesRainbowSeed then
+			if triggerPrompt(descendant) then
+				checked += 1
+			end
+		elseif descendant:IsA("BasePart") and matchesRainbowSeed then
+			if touchPart(descendant) then
+				checked += 1
+			end
+
+			if pickupEvent and pickupEvent:IsA("BindableEvent") then
+				pcall(function()
+					pickupEvent:Fire(descendant)
+				end)
+			end
+		end
+	end
+
+	setStatus(("Rainbow seeds: %d target(s) checked"):format(checked))
 end
 
 local function plantSeed()
@@ -514,6 +600,90 @@ local function buySeed()
 	end
 end
 
+local function buyOnePet(petName)
+	local petShop = playerGui:FindFirstChild("PetShop_UI")
+	local petFrame
+	if petShop then
+		for _, descendant in ipairs(petShop:GetDescendants()) do
+			if descendant.Name == petName then
+				petFrame = descendant
+				break
+			end
+		end
+	end
+
+	local clicked = false
+	if petFrame then
+		local mainFrame = petFrame:FindFirstChild("Main_Frame", true)
+		if mainFrame and mainFrame:IsA("GuiButton") then
+			activateButton(mainFrame)
+			task.wait(0.08)
+		end
+
+		for _, buttonName in ipairs({ "Sheckles_Buy", "Buy", "CashBuy" }) do
+			local button = petFrame:FindFirstChild(buttonName, true)
+			if button and button:IsA("GuiButton") and button.Visible and activateButton(button) then
+				clicked = true
+				break
+			end
+		end
+	end
+
+	if clicked then
+		return true, ("Auto pets: clicked %s"):format(petName)
+	end
+
+	local petCallSets = {
+		{ petName },
+		{ "Buy", petName },
+		{ "BuyEgg", petName },
+		{ "Purchase", petName },
+		{ "PurchaseEgg", petName },
+		{ petName, 1 },
+	}
+
+	local petRemotes = {}
+	local petEggService = gameEvents and gameEvents:FindFirstChild("PetEggService")
+	if petEggService then
+		table.insert(petRemotes, petEggService)
+	end
+
+	for _, remote in ipairs(scanRemotes({ "pet", "egg" })) do
+		table.insert(petRemotes, remote)
+	end
+
+	for _, remote in ipairs(scanRemotes({ "egg", "shop" })) do
+		table.insert(petRemotes, remote)
+	end
+
+	local usedRemote, path = tryRemoteCalls(petRemotes, petCallSets)
+	if usedRemote then
+		return true, ("Auto pets: fired %s for %s"):format(path, petName)
+	end
+
+	return false, ("Auto pets: no working remote/button for %s"):format(petName)
+end
+
+local function buyPets()
+	local bought = 0
+	local lastMessage = "Auto pets: no pets selected"
+
+	for _, petName in ipairs(getSelectedPetList()) do
+		local ok, message = buyOnePet(petName)
+		lastMessage = message
+		if ok then
+			bought += 1
+			task.wait(0.12)
+		end
+	end
+
+	if bought > 0 then
+		setStatus(("Auto pets: tried %d selected pet(s)"):format(bought))
+	else
+		setStatus(lastMessage)
+	end
+end
+
 local function make(className, properties, parent)
 	local instance = Instance.new(className)
 	for key, value in pairs(properties or {}) do
@@ -546,7 +716,7 @@ local panel = make("Frame", {
 	BackgroundColor3 = Color3.fromRGB(22, 28, 30),
 	BorderSizePixel = 0,
 	Position = UDim2.fromOffset(24, 280),
-	Size = UDim2.fromOffset(286, 456),
+	Size = UDim2.fromOffset(286, 520),
 }, gui)
 make("UICorner", { CornerRadius = UDim.new(0, 8) }, panel)
 make("UIStroke", { Color = Color3.fromRGB(81, 113, 91), Thickness = 1 }, panel)
@@ -564,16 +734,23 @@ local header = make("TextButton", {
 }, panel)
 make("UICorner", { CornerRadius = UDim.new(0, 8) }, header)
 
-local content = make("Frame", {
+local content = make("ScrollingFrame", {
 	Name = "Content",
 	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	CanvasSize = UDim2.fromOffset(0, 0),
 	Position = UDim2.fromOffset(14, 60),
+	ScrollBarThickness = 4,
 	Size = UDim2.new(1, -28, 1, -74),
 }, panel)
-make("UIListLayout", {
+local contentLayout = make("UIListLayout", {
 	Padding = UDim.new(0, 10),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, content)
+
+contentLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+	content.CanvasSize = UDim2.fromOffset(0, contentLayout.AbsoluteContentSize.Y + 8)
+end)
 
 local statusLabel = make("TextLabel", {
 	Name = "Status",
@@ -625,6 +802,8 @@ makeToggle("Fruit Collector", "fruitCollector", 1)
 makeToggle("Seed Placer", "seedPlacer", 2)
 makeToggle("Auto Sell", "autoSell", 3)
 makeToggle("Auto Buy Seeds", "autoBuySeeds", 4)
+makeToggle("Rainbow Seeds", "autoCollectRainbowSeeds", 5)
+makeToggle("Auto Buy Pets", "autoBuyPets", 6)
 
 local selectedSeedLabel = make("TextLabel", {
 	Name = "SelectedSeedLabel",
@@ -635,7 +814,7 @@ local selectedSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 5,
+	LayoutOrder = 7,
 }, content)
 
 local seedRow = make("ScrollingFrame", {
@@ -646,7 +825,7 @@ local seedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 92),
-	LayoutOrder = 6,
+	LayoutOrder = 8,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -705,6 +884,84 @@ if seedLayout then
 end
 refreshSeedCanvas()
 
+local selectedPetLabel = make("TextLabel", {
+	Name = "SelectedPetLabel",
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold,
+	Text = "Pets to buy",
+	TextColor3 = Color3.fromRGB(221, 236, 216),
+	TextSize = 13,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Size = UDim2.new(1, 0, 0, 18),
+	LayoutOrder = 9,
+}, content)
+
+local petRow = make("ScrollingFrame", {
+	Name = "PetSelector",
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	CanvasSize = UDim2.fromOffset(0, 0),
+	ScrollBarThickness = 4,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
+	Size = UDim2.new(1, 0, 0, 72),
+	LayoutOrder = 10,
+}, content)
+make("UIGridLayout", {
+	CellPadding = UDim2.fromOffset(6, 6),
+	CellSize = UDim2.fromOffset(118, 28),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, petRow)
+
+local petLayout = petRow:FindFirstChildOfClass("UIGridLayout")
+local petButtons = {}
+
+local function refreshPetButton(petName)
+	local button = petButtons[petName]
+	if not button then
+		return
+	end
+
+	local enabled = selectedPets[petName] == true
+	button.Text = (enabled and "[x] " or "[ ] ") .. petName
+	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
+end
+
+local function refreshPetCanvas()
+	local rows = math.ceil(#petNames / 2)
+	petRow.CanvasSize = UDim2.fromOffset(0, rows * 34)
+end
+
+for index, petName in ipairs(petNames) do
+	local button = make("TextButton", {
+		Name = petName,
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = petName,
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 12,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.fromOffset(118, 28),
+		LayoutOrder = index,
+	}, petRow)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
+
+	petButtons[petName] = button
+	refreshPetButton(petName)
+
+	button.Activated:Connect(function()
+		selectedPets[petName] = not selectedPets[petName]
+		refreshPetButton(petName)
+		setStatus((selectedPets[petName] and "Selected " or "Unselected ") .. petName)
+	end)
+end
+
+if petLayout then
+	petLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshPetCanvas)
+end
+refreshPetCanvas()
+
 local dragStart
 local startPos
 local dragging = false
@@ -735,6 +992,8 @@ local timers = {
 	seedPlacer = 0,
 	autoSell = 0,
 	autoBuySeeds = 0,
+	autoCollectRainbowSeeds = 0,
+	autoBuyPets = 0,
 }
 
 RunService.Heartbeat:Connect(function(deltaTime)
@@ -742,6 +1001,8 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	timers.seedPlacer += deltaTime
 	timers.autoSell += deltaTime
 	timers.autoBuySeeds += deltaTime
+	timers.autoCollectRainbowSeeds += deltaTime
+	timers.autoBuyPets += deltaTime
 
 	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
 		timers.fruitCollector = 0
@@ -761,6 +1022,16 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	if state.autoBuySeeds and timers.autoBuySeeds >= CONFIG.buyInterval then
 		timers.autoBuySeeds = 0
 		task.spawn(buySeed)
+	end
+
+	if state.autoCollectRainbowSeeds and timers.autoCollectRainbowSeeds >= CONFIG.rainbowCollectInterval then
+		timers.autoCollectRainbowSeeds = 0
+		task.spawn(autoCollectRainbowSeeds)
+	end
+
+	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval then
+		timers.autoBuyPets = 0
+		task.spawn(buyPets)
 	end
 end)
 
