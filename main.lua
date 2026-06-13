@@ -89,15 +89,24 @@ local plantUpdate = gameEvents and getPath(gameEvents, "Plant.Update")
 local remoteCandidates = {
 	buySeed = {
 		"GameEvents.BuySeedStock",
+		"GameEvents.BuySeedStock_RE",
+		"GameEvents.BuySeedStockEvent",
 		"GameEvents.BuySeed",
+		"GameEvents.Buy_Seed",
+		"GameEvents.PurchaseSeed",
+		"GameEvents.Purchase_Seed",
+		"GameEvents.SeedShop",
 		"GameEvents.SeedShop.BuySeed",
 		"GameEvents.SeedShopService.BuySeed",
+		"GameEvents.SeedShopService.BuySeedStock",
 	},
 	sell = {
 		"GameEvents.Sell_Inventory",
 		"GameEvents.SellInventory",
 		"GameEvents.Sell_Item",
 		"GameEvents.SellItem",
+		"GameEvents.SellFruit",
+		"GameEvents.Sell_Fruit",
 		"GameEvents.ShopEvents.SellInventory",
 	},
 }
@@ -132,6 +141,56 @@ local function fireFirstRemote(paths, ...)
 			return true, path
 		end
 	end
+	return false
+end
+
+local function getObjectPath(instance)
+	local parts = {}
+	local current = instance
+	while current and current ~= game do
+		table.insert(parts, 1, current.Name)
+		current = current.Parent
+	end
+	return table.concat(parts, ".")
+end
+
+local function scanRemotes(terms)
+	local matches = {}
+
+	for _, descendant in ipairs(ReplicatedStorage:GetDescendants()) do
+		if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") then
+			local haystack = string.lower(getObjectPath(descendant))
+			local matched = true
+
+			for _, term in ipairs(terms) do
+				if not string.find(haystack, string.lower(term), 1, true) then
+					matched = false
+					break
+				end
+			end
+
+			if matched then
+				table.insert(matches, descendant)
+			end
+		end
+	end
+
+	return matches
+end
+
+local function tryRemoteCalls(remotes, callSets)
+	for _, remote in ipairs(remotes) do
+		for _, args in ipairs(callSets) do
+			local ok = pcall(function()
+				fireRemote(remote, table.unpack(args))
+			end)
+
+			if ok then
+				return true, getObjectPath(remote)
+			end
+		end
+	end
+
 	return false
 end
 
@@ -237,6 +296,33 @@ local function getEquippedSeedTool()
 	return nil
 end
 
+local function getFruitTools()
+	local tools = {}
+	local character = getCharacter()
+	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
+
+	for _, container in ipairs({ character, backpack }) do
+		if container then
+			for _, item in ipairs(container:GetChildren()) do
+				if item:IsA("Tool") then
+					local name = string.lower(item.Name)
+					local isSeed = string.find(name, "seed", 1, true)
+					local isTool = string.find(name, "shovel", 1, true)
+						or string.find(name, "sprinkler", 1, true)
+						or string.find(name, "trowel", 1, true)
+						or string.find(name, "can", 1, true)
+
+					if not isSeed and not isTool then
+						table.insert(tools, item)
+					end
+				end
+			end
+		end
+	end
+
+	return tools
+end
+
 local function plantSeed()
 	local root = getRoot()
 	if not root then
@@ -275,7 +361,35 @@ local function plantSeed()
 end
 
 local function autoSell()
-	local usedRemote, path = fireFirstRemote(remoteCandidates.sell)
+	local fruitTools = getFruitTools()
+	local sellCallSets = {
+		{},
+		{ "SellInventory" },
+		{ "Sell_Inventory" },
+		{ "All" },
+		{ true },
+	}
+
+	for _, tool in ipairs(fruitTools) do
+		table.insert(sellCallSets, { tool })
+		table.insert(sellCallSets, { tool.Name })
+		table.insert(sellCallSets, { "Sell_Item", tool })
+		table.insert(sellCallSets, { "Sell_Item", tool.Name })
+	end
+
+	local sellRemotes = {}
+	for _, path in ipairs(remoteCandidates.sell) do
+		local remote = resolveRemote(path)
+		if remote then
+			table.insert(sellRemotes, remote)
+		end
+	end
+
+	for _, remote in ipairs(scanRemotes({ "sell" })) do
+		table.insert(sellRemotes, remote)
+	end
+
+	local usedRemote, path = tryRemoteCalls(sellRemotes, sellCallSets)
 	if usedRemote then
 		setStatus(("Auto sell: fired %s"):format(path))
 		return
@@ -294,23 +408,71 @@ local function autoSell()
 end
 
 local function buySeed()
-	local usedRemote, path = fireFirstRemote(remoteCandidates.buySeed, CONFIG.selectedSeed)
+	local seedName = CONFIG.selectedSeed
+	local buyCallSets = {
+		{ seedName },
+		{ seedName .. " Seed" },
+		{ "BuySeedStock", seedName },
+		{ "BuySeed", seedName },
+		{ "Seed", seedName },
+		{ seedName, 1 },
+		{ seedName .. " Seed", 1 },
+	}
+
+	local buyRemotes = {}
+	for _, path in ipairs(remoteCandidates.buySeed) do
+		local remote = resolveRemote(path)
+		if remote then
+			table.insert(buyRemotes, remote)
+		end
+	end
+
+	for _, remote in ipairs(scanRemotes({ "buy", "seed" })) do
+		table.insert(buyRemotes, remote)
+	end
+
+	for _, remote in ipairs(scanRemotes({ "seed", "stock" })) do
+		table.insert(buyRemotes, remote)
+	end
+
+	local usedRemote, path = tryRemoteCalls(buyRemotes, buyCallSets)
 	if usedRemote then
 		setStatus(("Auto buy: fired %s for %s"):format(path, CONFIG.selectedSeed))
 		return
 	end
 
 	local seedShop = playerGui:FindFirstChild("Seed_Shop")
-	local button = seedShop
-		and seedShop:FindFirstChild("Frame")
-		and seedShop.Frame:FindFirstChild("ScrollingFrame")
-		and seedShop.Frame.ScrollingFrame:FindFirstChild(CONFIG.selectedSeed)
-		and seedShop.Frame.ScrollingFrame[CONFIG.selectedSeed]:FindFirstChild("Main_Frame")
+	local seedFrame
+	if seedShop then
+		for _, descendant in ipairs(seedShop:GetDescendants()) do
+			if descendant.Name == seedName then
+				seedFrame = descendant
+				break
+			end
+		end
+	end
 
-	if button and button:IsA("GuiButton") and activateButton(button) then
+	local clicked = false
+	if seedFrame then
+		local mainFrame = seedFrame:FindFirstChild("Main_Frame", true)
+		if mainFrame and mainFrame:IsA("GuiButton") then
+			activateButton(mainFrame)
+			task.wait(0.08)
+		end
+
+		for _, buttonName in ipairs({ "Sheckles_Buy", "Buy", "CashBuy" }) do
+			local button = seedFrame:FindFirstChild(buttonName, true)
+			if button and button:IsA("GuiButton") and button.Visible and activateButton(button) then
+				clicked = true
+				break
+			end
+		end
+	end
+
+	if clicked then
 		setStatus(("Auto buy: clicked %s"):format(CONFIG.selectedSeed))
 	else
-		setStatus(("Auto buy: no buy remote/button for %s"):format(CONFIG.selectedSeed))
+		setStatus(("Auto buy: no working remote/button for %s"):format(CONFIG.selectedSeed))
 	end
 end
 
