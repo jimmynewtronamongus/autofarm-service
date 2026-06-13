@@ -54,6 +54,10 @@ local state = {
 	lastStatus = "Ready",
 }
 
+local selectedSeeds = {
+	Carrot = true,
+}
+
 local function setStatus(message)
 	state.lastStatus = tostring(message)
 	if script:FindFirstChild("StatusValue") then
@@ -296,6 +300,22 @@ local function getEquippedSeedTool()
 	return nil
 end
 
+local function getSelectedSeedList()
+	local selected = {}
+
+	for _, seedName in ipairs(seedNames) do
+		if selectedSeeds[seedName] then
+			table.insert(selected, seedName)
+		end
+	end
+
+	if #selected == 0 then
+		table.insert(selected, CONFIG.selectedSeed)
+	end
+
+	return selected
+end
+
 local function getFruitTools()
 	local tools = {}
 	local character = getCharacter()
@@ -407,8 +427,7 @@ local function autoSell()
 	setStatus(("Auto sell: %d prompt(s) checked"):format(fired))
 end
 
-local function buySeed()
-	local seedName = CONFIG.selectedSeed
+local function buyOneSeed(seedName)
 	local buyCallSets = {
 		{ seedName },
 		{ seedName .. " Seed" },
@@ -437,8 +456,7 @@ local function buySeed()
 
 	local usedRemote, path = tryRemoteCalls(buyRemotes, buyCallSets)
 	if usedRemote then
-		setStatus(("Auto buy: fired %s for %s"):format(path, CONFIG.selectedSeed))
-		return
+		return true, ("Auto buy: fired %s for %s"):format(path, seedName)
 	end
 
 	local seedShop = playerGui:FindFirstChild("Seed_Shop")
@@ -470,9 +488,29 @@ local function buySeed()
 	end
 
 	if clicked then
-		setStatus(("Auto buy: clicked %s"):format(CONFIG.selectedSeed))
+		return true, ("Auto buy: clicked %s"):format(seedName)
 	else
-		setStatus(("Auto buy: no working remote/button for %s"):format(CONFIG.selectedSeed))
+		return false, ("Auto buy: no working remote/button for %s"):format(seedName)
+	end
+end
+
+local function buySeed()
+	local bought = 0
+	local lastMessage = "Auto buy: no seeds selected"
+
+	for _, seedName in ipairs(getSelectedSeedList()) do
+		local ok, message = buyOneSeed(seedName)
+		lastMessage = message
+		if ok then
+			bought += 1
+			task.wait(0.12)
+		end
+	end
+
+	if bought > 0 then
+		setStatus(("Auto buy: tried %d selected seed(s)"):format(bought))
+	else
+		setStatus(lastMessage)
 	end
 end
 
@@ -508,7 +546,7 @@ local panel = make("Frame", {
 	BackgroundColor3 = Color3.fromRGB(22, 28, 30),
 	BorderSizePixel = 0,
 	Position = UDim2.fromOffset(24, 280),
-	Size = UDim2.fromOffset(286, 362),
+	Size = UDim2.fromOffset(286, 456),
 }, gui)
 make("UICorner", { CornerRadius = UDim.new(0, 8) }, panel)
 make("UIStroke", { Color = Color3.fromRGB(81, 113, 91), Thickness = 1 }, panel)
@@ -588,37 +626,84 @@ makeToggle("Seed Placer", "seedPlacer", 2)
 makeToggle("Auto Sell", "autoSell", 3)
 makeToggle("Auto Buy Seeds", "autoBuySeeds", 4)
 
-local seedRow = make("Frame", {
-	Name = "SeedRow",
+local selectedSeedLabel = make("TextLabel", {
+	Name = "SelectedSeedLabel",
 	BackgroundTransparency = 1,
-	Size = UDim2.new(1, 0, 0, 38),
+	Font = Enum.Font.GothamSemibold,
+	Text = "Seeds to buy",
+	TextColor3 = Color3.fromRGB(221, 236, 216),
+	TextSize = 13,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Size = UDim2.new(1, 0, 0, 18),
 	LayoutOrder = 5,
 }, content)
 
-local seedButton = make("TextButton", {
-	Name = "SeedButton",
-	AutoButtonColor = true,
-	BackgroundColor3 = Color3.fromRGB(52, 60, 54),
+local seedRow = make("ScrollingFrame", {
+	Name = "SeedSelector",
+	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
-	Font = Enum.Font.GothamSemibold,
-	Text = "Seed: " .. CONFIG.selectedSeed,
-	TextColor3 = Color3.fromRGB(242, 247, 239),
-	TextSize = 14,
-	Size = UDim2.new(1, 0, 1, 0),
+	CanvasSize = UDim2.fromOffset(0, 0),
+	ScrollBarThickness = 4,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
+	Size = UDim2.new(1, 0, 0, 92),
+	LayoutOrder = 6,
+}, content)
+make("UIGridLayout", {
+	CellPadding = UDim2.fromOffset(6, 6),
+	CellSize = UDim2.fromOffset(118, 28),
+	SortOrder = Enum.SortOrder.LayoutOrder,
 }, seedRow)
-make("UICorner", { CornerRadius = UDim.new(0, 6) }, seedButton)
 
-local seedIndex = 1
-seedButton.Activated:Connect(function()
-	seedIndex += 1
-	if seedIndex > #seedNames then
-		seedIndex = 1
+local seedLayout = seedRow:FindFirstChildOfClass("UIGridLayout")
+local seedButtons = {}
+
+local function refreshSeedButton(seedName)
+	local button = seedButtons[seedName]
+	if not button then
+		return
 	end
 
-	CONFIG.selectedSeed = seedNames[seedIndex]
-	seedButton.Text = "Seed: " .. CONFIG.selectedSeed
-	setStatus("Selected seed: " .. CONFIG.selectedSeed)
-end)
+	local enabled = selectedSeeds[seedName] == true
+	button.Text = (enabled and "[x] " or "[ ] ") .. seedName
+	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
+end
+
+local function refreshSeedCanvas()
+	local rows = math.ceil(#seedNames / 2)
+	seedRow.CanvasSize = UDim2.fromOffset(0, rows * 34)
+end
+
+for index, seedName in ipairs(seedNames) do
+	local button = make("TextButton", {
+		Name = seedName,
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = seedName,
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 12,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.fromOffset(118, 28),
+		LayoutOrder = index,
+	}, seedRow)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
+
+	seedButtons[seedName] = button
+	refreshSeedButton(seedName)
+
+	button.Activated:Connect(function()
+		selectedSeeds[seedName] = not selectedSeeds[seedName]
+		CONFIG.selectedSeed = seedName
+		refreshSeedButton(seedName)
+		setStatus((selectedSeeds[seedName] and "Selected " or "Unselected ") .. seedName)
+	end)
+end
+
+if seedLayout then
+	seedLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshSeedCanvas)
+end
+refreshSeedCanvas()
 
 local dragStart
 local startPos
