@@ -25,6 +25,7 @@ local CONFIG = {
 	cacheRefreshInterval = 7.0,
 	maxVisualPets = 24,
 	maxVisualPetTools = 24,
+	visualPetAmount = 3,
 	selectedSeed = "Carrot",
 	plantRadius = 18,
 }
@@ -112,6 +113,10 @@ local selectedPets = {
 	Frog = true,
 	Bunny = true,
 	Deer = true,
+}
+
+local selectedVisualPets = {
+	Dragonfly = true,
 }
 
 local statusValue
@@ -538,6 +543,18 @@ local function getSelectedPetList()
 	return selected
 end
 
+local function getSelectedVisualPetList()
+	local selected = {}
+
+	for _, petName in ipairs(petNames) do
+		if selectedVisualPets[petName] then
+			table.insert(selected, petName)
+		end
+	end
+
+	return selected
+end
+
 local function touchPart(part)
 	local root = getRoot()
 	if not root or not part or not part:IsA("BasePart") then
@@ -915,13 +932,15 @@ local function makeLocalPetTool(petName, template)
 		return false
 	end
 
-	if backpack:FindFirstChild("[Visual] " .. petName) then
-		return true
+	for _, child in ipairs(backpack:GetChildren()) do
+		if child:IsA("Tool") and child:GetAttribute("VisualPetTool") and child:GetAttribute("PetName") == petName then
+			return true
+		end
 	end
 
 	local tool = Instance.new("Tool")
-	tool.Name = "[Visual] " .. petName
-	tool.ToolTip = "Local visual pet"
+	tool.Name = petName
+	tool.ToolTip = petName
 	tool.RequiresHandle = true
 	tool.CanBeDropped = false
 	tool:SetAttribute("VisualPetTool", true)
@@ -1004,6 +1023,61 @@ local function trimVisualPets()
 	end
 end
 
+local function getPetPivot(instance)
+	if instance:IsA("Model") then
+		return instance:GetPivot()
+	end
+
+	if instance:IsA("BasePart") then
+		return instance.CFrame
+	end
+
+	return nil
+end
+
+local function moveVisualPet(instance, target)
+	pcall(function()
+		if instance:IsA("Model") then
+			instance:PivotTo(target)
+		elseif instance:IsA("BasePart") then
+			instance.CFrame = target
+		end
+	end)
+end
+
+local function updateVisualPetBehavior()
+	local root = getRoot()
+	if not root or not visualPetFolder or not visualPetFolder.Parent then
+		return
+	end
+
+	local pets = visualPetFolder:GetChildren()
+	if #pets == 0 then
+		return
+	end
+
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.FilterDescendantsInstances = { localPlayer.Character, visualPetFolder }
+	local now = os.clock()
+
+	for index, pet in ipairs(pets) do
+		local row = math.floor((index - 1) / 4)
+		local column = ((index - 1) % 4) - 1.5
+		local desired = root.Position - (root.CFrame.LookVector * (5 + row * 2.5)) + (root.CFrame.RightVector * (column * 2.8))
+		local rayResult = workspace:Raycast(desired + Vector3.new(0, 24, 0), Vector3.new(0, -90, 0), rayParams)
+		if rayResult then
+			desired = rayResult.Position + Vector3.new(0, 1.4 + math.sin(now * 2.4 + index) * 0.18, 0)
+		else
+			desired += Vector3.new(0, 1.2, 0)
+		end
+
+		local target = CFrame.new(desired, Vector3.new(root.Position.X, desired.Y, root.Position.Z))
+		local current = getPetPivot(pet)
+		moveVisualPet(pet, current and current:Lerp(target, 0.16) or target)
+	end
+end
+
 local function clearVisualPets()
 	local folder = getVisualPetFolder()
 	for _, child in ipairs(folder:GetChildren()) do
@@ -1026,7 +1100,7 @@ local function spawnVisualPets()
 		return
 	end
 
-	local selected = getSelectedPetList()
+	local selected = getSelectedVisualPetList()
 	if #selected == 0 then
 		for _, petName in ipairs(petNames) do
 			table.insert(selected, petName)
@@ -1036,21 +1110,25 @@ local function spawnVisualPets()
 	local spawned = 0
 	local toolCount = 0
 	local folder = getVisualPetFolder()
+	local amount = math.floor(tonumber(CONFIG.visualPetAmount) or 1)
+	amount = math.clamp(amount, 1, CONFIG.maxVisualPets)
 
-	for index, petName in ipairs(selected) do
+	for index = 1, amount do
 		if #folder:GetChildren() >= CONFIG.maxVisualPets then
 			break
 		end
 
+		local petName = selected[((index - 1) % #selected) + 1]
 		local template = petsFolder:FindFirstChild(petName)
 		if template then
 			local clone = template:Clone()
-			clone.Name = "Visual_" .. petName
+			clone.Name = petName
+			clone:SetAttribute("PetName", petName)
 			clone:SetAttribute("SpawnedAt", os.clock())
 			prepVisualPet(clone)
 			clone.Parent = folder
 
-			local angle = ((index - 1) / math.max(#selected, 1)) * math.pi * 2
+			local angle = ((index - 1) / amount) * math.pi * 2
 			local radius = 6 + (spawned % 3) * 2
 			local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
 			local position = root.Position + offset
@@ -1065,13 +1143,7 @@ local function spawnVisualPets()
 			end
 			local target = CFrame.new(position, Vector3.new(root.Position.X, position.Y, root.Position.Z))
 
-			pcall(function()
-				if clone:IsA("Model") then
-					clone:PivotTo(target)
-				elseif clone:IsA("BasePart") then
-					clone.CFrame = target
-				end
-			end)
+			moveVisualPet(clone, target)
 
 			if toolCount < CONFIG.maxVisualPetTools and makeLocalPetTool(petName, template) then
 				toolCount += 1
@@ -1484,17 +1556,138 @@ if petLayout then
 end
 refreshPetCanvas()
 
+local selectedVisualPetLabel = make("TextLabel", {
+	Name = "SelectedVisualPetLabel",
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold,
+	Text = "Pets to visually spawn",
+	TextColor3 = Color3.fromRGB(221, 236, 216),
+	TextSize = 13,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Size = UDim2.new(1, 0, 0, 18),
+	LayoutOrder = 16,
+}, content)
+
+local visualPetRow = make("ScrollingFrame", {
+	Name = "VisualPetSelector",
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	CanvasSize = UDim2.fromOffset(0, 0),
+	ScrollBarThickness = 4,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
+	Size = UDim2.new(1, 0, 0, 92),
+	LayoutOrder = 17,
+}, content)
+make("UIGridLayout", {
+	CellPadding = UDim2.fromOffset(6, 6),
+	CellSize = UDim2.fromOffset(118, 28),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, visualPetRow)
+
+local visualPetLayout = visualPetRow:FindFirstChildOfClass("UIGridLayout")
+local visualPetButtons = {}
+local visualPetButtonCount = 0
+
+local function refreshVisualPetButton(petName)
+	local button = visualPetButtons[petName]
+	if not button then
+		return
+	end
+
+	local enabled = selectedVisualPets[petName] == true
+	button.Text = (enabled and "[x] " or "[ ] ") .. petName
+	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
+end
+
+local function refreshVisualPetCanvas()
+	local rows = math.ceil(#petNames / 2)
+	visualPetRow.CanvasSize = UDim2.fromOffset(0, rows * 34)
+end
+
+local function makeVisualPetButton(petName)
+	if visualPetButtons[petName] then
+		return
+	end
+
+	visualPetButtonCount += 1
+
+	local button = make("TextButton", {
+		Name = "Visual" .. petName,
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = petName,
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 12,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.fromOffset(118, 28),
+		LayoutOrder = visualPetButtonCount,
+	}, visualPetRow)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
+
+	visualPetButtons[petName] = button
+	refreshVisualPetButton(petName)
+
+	button.Activated:Connect(function()
+		selectedVisualPets[petName] = not selectedVisualPets[petName]
+		refreshVisualPetButton(petName)
+		setStatus((selectedVisualPets[petName] and "Selected spawn " or "Unselected spawn ") .. petName)
+	end)
+
+	refreshVisualPetCanvas()
+end
+
+for _, petName in ipairs(petNames) do
+	makeVisualPetButton(petName)
+end
+
+if visualPetLayout then
+	visualPetLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshVisualPetCanvas)
+end
+refreshVisualPetCanvas()
+
+local visualPetAmountBox = make("TextBox", {
+	Name = "VisualPetAmountBox",
+	BackgroundColor3 = Color3.fromRGB(34, 41, 42),
+	BorderSizePixel = 0,
+	ClearTextOnFocus = false,
+	Font = Enum.Font.GothamSemibold,
+	PlaceholderText = "Visual pet amount",
+	Text = tostring(CONFIG.visualPetAmount),
+	TextColor3 = Color3.fromRGB(242, 247, 239),
+	TextSize = 13,
+	Size = UDim2.new(1, 0, 0, 34),
+	LayoutOrder = 18,
+}, content)
+make("UICorner", { CornerRadius = UDim.new(0, 6) }, visualPetAmountBox)
+make("UIPadding", {
+	PaddingLeft = UDim.new(0, 10),
+	PaddingRight = UDim.new(0, 10),
+}, visualPetAmountBox)
+
+local function refreshVisualPetAmount()
+	local amount = math.floor(tonumber(visualPetAmountBox.Text) or CONFIG.visualPetAmount)
+	amount = math.clamp(amount, 1, CONFIG.maxVisualPets)
+	CONFIG.visualPetAmount = amount
+	visualPetAmountBox.Text = tostring(amount)
+	setStatus(("Visual pet amount set to %d"):format(amount))
+end
+
+visualPetAmountBox.FocusLost:Connect(refreshVisualPetAmount)
+
 local assets = ReplicatedStorage:FindFirstChild("Assets")
 local petsFolder = assets and assets:FindFirstChild("Pets")
 if petsFolder then
 	petsFolder.ChildAdded:Connect(function(pet)
 		addUniqueName(petNames, pet.Name)
 		makePetButton(pet.Name)
+		makeVisualPetButton(pet.Name)
 	end)
 end
 
-makeActionButton("Spawn Visual Pets", 16, spawnVisualPets)
-makeActionButton("Clear Visual Pets", 17, clearVisualPets)
+makeActionButton("Spawn Visual Pets", 19, spawnVisualPets)
+makeActionButton("Clear Visual Pets", 20, clearVisualPets)
 
 local dragStart
 local startPos
@@ -1598,6 +1791,8 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		timers.visualPetTroll = 0
 		runGuarded("visualPetTroll", spawnVisualPets)
 	end
+
+	updateVisualPetBehavior()
 end)
 
 setStatus("Garden Tools loaded")
