@@ -2,6 +2,7 @@
 -- Drop this LocalScript in StarterPlayerScripts, or run it from a local test client.
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local virtualInputManager
@@ -96,7 +97,18 @@ local selectedGears = {
 	["Common Watering Can"] = true,
 }
 
-local selectedPetText = "Frog, Bunny, Deer"
+local petNames = {
+	"Frog",
+	"Bunny",
+	"Deer",
+}
+
+local selectedPets = {
+	Frog = true,
+	Bunny = true,
+	Deer = true,
+}
+
 local statusValue
 
 local function setStatus(message)
@@ -136,6 +148,63 @@ local function getObjectPath(instance)
 		current = current.Parent
 	end
 	return table.concat(parts, ".")
+end
+
+local packetModule
+
+local function getPacketModule()
+	if packetModule ~= nil then
+		return packetModule
+	end
+
+	packetModule = false
+	local sharedModules = ReplicatedStorage:FindFirstChild("SharedModules")
+	local packetScript = sharedModules and sharedModules:FindFirstChild("Packet")
+	if packetScript and packetScript:IsA("ModuleScript") then
+		pcall(function()
+			packetModule = require(packetScript)
+		end)
+	end
+
+	return packetModule
+end
+
+local function sendPacket(packetName, ...)
+	local packet = getPacketModule()
+	if type(packet) == "table" then
+		local entry = packet[packetName]
+		if type(entry) == "table" then
+			for _, methodName in ipairs({ "Fire", "FireServer", "Send", "SendToServer" }) do
+				if type(entry[methodName]) == "function" then
+					local ok = pcall(entry[methodName], entry, ...)
+					if ok then
+						return true
+					end
+				end
+			end
+		elseif type(entry) == "function" then
+			local ok = pcall(entry, ...)
+			if ok then
+				return true
+			end
+		end
+
+		for _, methodName in ipairs({ "Fire", "FireServer", "Send", "SendToServer" }) do
+			if type(packet[methodName]) == "function" then
+				local ok = pcall(packet[methodName], packet, packetName, ...)
+				if ok then
+					return true
+				end
+			end
+		end
+	elseif type(packet) == "function" then
+		local ok = pcall(packet, packetName, ...)
+		if ok then
+			return true
+		end
+	end
+
+	return false
 end
 
 local cache = {
@@ -246,9 +315,31 @@ local function triggerPrompt(prompt)
 end
 
 local function activateButton(button)
+	local fired = false
+
+	if typeof(getconnections) == "function" then
+		for _, signal in ipairs({ button.Activated, button.MouseButton1Click, button.MouseButton1Down }) do
+			for _, connection in ipairs(getconnections(signal)) do
+				pcall(function()
+					if connection.Function then
+						connection.Function()
+					elseif connection.Fire then
+						connection:Fire()
+					end
+				end)
+				fired = true
+			end
+		end
+	end
+
 	if typeof(firesignal) == "function" then
 		pcall(firesignal, button.MouseButton1Click)
 		pcall(firesignal, button.Activated)
+		pcall(firesignal, button.MouseButton1Down)
+		fired = true
+	end
+
+	if fired then
 		return true
 	end
 
@@ -403,10 +494,9 @@ end
 local function getSelectedPetList()
 	local selected = {}
 
-	for petName in string.gmatch(selectedPetText, "[^,%s][^,]*") do
-		local cleaned = string.gsub(petName, "^%s*(.-)%s*$", "%1")
-		if cleaned ~= "" then
-			table.insert(selected, cleaned)
+	for _, petName in ipairs(petNames) do
+		if selectedPets[petName] then
+			table.insert(selected, petName)
 		end
 	end
 
@@ -487,7 +577,7 @@ local function autoCollectRainbowSeeds()
 		end
 	end
 
-	setStatus(("Rainbow seeds: %d target(s) checked"):format(checked))
+	setStatus(("Gold/rainbow seeds: %d target(s) checked"):format(checked))
 end
 
 local function enablePerformanceMode()
@@ -589,18 +679,29 @@ local function buyOneSeed(seedName)
 	if seedFrame then
 		local mainFrame = seedFrame:FindFirstChild("Main_Frame", true)
 		local rowButton = mainFrame and mainFrame:FindFirstChild("TextButton")
-		if rowButton and rowButton:IsA("GuiButton") and rowButton.Visible and activateButton(rowButton) then
+		if rowButton and rowButton:IsA("GuiButton") and activateButton(rowButton) then
 			clicked = true
 			task.wait(0.08)
 		end
 
-		for _, buttonName in ipairs({ "TextButton", "Sheckles_Buy", "Buy", "CashBuy" }) do
+		for _, buttonName in ipairs({ "Sheckles_Buy", "CashBuy", "Buy", "TextButton" }) do
 			local button = seedFrame:FindFirstChild(buttonName, true)
-			if button and button:IsA("GuiButton") and button.Visible and activateButton(button) then
+			if button and button:IsA("GuiButton") and activateButton(button) then
 				clicked = true
-				break
+				task.wait(0.04)
 			end
 		end
+
+		for _, descendant in ipairs(seedFrame:GetDescendants()) do
+			if descendant:IsA("GuiButton") and descendant ~= rowButton and activateButton(descendant) then
+				clicked = true
+				task.wait(0.04)
+			end
+		end
+	end
+
+	if sendPacket("PurchaseSeed", seedName) or sendPacket("PurchaseSeed", seedName, 1) then
+		return true, ("Auto buy: sent PurchaseSeed for %s"):format(seedName)
 	end
 
 	if clicked then
@@ -637,18 +738,29 @@ local function buyOneGear(gearName)
 	if gearFrame then
 		local mainFrame = gearFrame:FindFirstChild("Main_Frame", true)
 		local rowButton = mainFrame and mainFrame:FindFirstChild("TextButton")
-		if rowButton and rowButton:IsA("GuiButton") and rowButton.Visible and activateButton(rowButton) then
+		if rowButton and rowButton:IsA("GuiButton") and activateButton(rowButton) then
 			clicked = true
 			task.wait(0.08)
 		end
 
-		for _, buttonName in ipairs({ "TextButton", "Sheckles_Buy", "Buy", "CashBuy" }) do
+		for _, buttonName in ipairs({ "Sheckles_Buy", "CashBuy", "Buy", "TextButton" }) do
 			local button = gearFrame:FindFirstChild(buttonName, true)
-			if button and button:IsA("GuiButton") and button.Visible and activateButton(button) then
+			if button and button:IsA("GuiButton") and activateButton(button) then
 				clicked = true
-				break
+				task.wait(0.04)
 			end
 		end
+
+		for _, descendant in ipairs(gearFrame:GetDescendants()) do
+			if descendant:IsA("GuiButton") and descendant ~= rowButton and activateButton(descendant) then
+				clicked = true
+				task.wait(0.04)
+			end
+		end
+	end
+
+	if sendPacket("PurchaseGear", gearName) or sendPacket("PurchaseGear", gearName, 1) then
+		return true, ("Auto gear: sent PurchaseGear for %s"):format(gearName)
 	end
 
 	if clicked then
@@ -841,7 +953,7 @@ makeToggle("Seed Placer", "seedPlacer", 2)
 makeToggle("Auto Sell", "autoSell", 3)
 makeToggle("Auto Buy Seeds", "autoBuySeeds", 4)
 makeToggle("Auto Buy Gear", "autoBuyGear", 5)
-makeToggle("Rainbow Seeds", "autoCollectRainbowSeeds", 6)
+makeToggle("AutoCollect Gold/Rainbow Seeds", "autoCollectRainbowSeeds", 6)
 makeToggle("Auto Buy Pets", "autoBuyPets", 7)
 makeToggle("Performance Mode", "performanceMode", 8)
 
@@ -1006,7 +1118,7 @@ local selectedPetLabel = make("TextLabel", {
 	Name = "SelectedPetLabel",
 	BackgroundTransparency = 1,
 	Font = Enum.Font.GothamSemibold,
-	Text = "Pet names to buy",
+	Text = "Pets to buy",
 	TextColor3 = Color3.fromRGB(221, 236, 216),
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
@@ -1014,35 +1126,57 @@ local selectedPetLabel = make("TextLabel", {
 	LayoutOrder = 13,
 }, content)
 
-local petBox = make("TextBox", {
-	Name = "PetNameBox",
-	BackgroundColor3 = Color3.fromRGB(52, 60, 54),
+local petRow = make("Frame", {
+	Name = "PetSelector",
+	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
-	ClearTextOnFocus = false,
-	Font = Enum.Font.GothamSemibold,
-	PlaceholderText = "Type names, comma separated",
-	Text = selectedPetText,
-	TextColor3 = Color3.fromRGB(242, 247, 239),
-	TextSize = 13,
-	TextWrapped = true,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	Size = UDim2.new(1, 0, 0, 46),
+	Size = UDim2.new(1, 0, 0, 64),
 	LayoutOrder = 14,
 }, content)
-make("UICorner", { CornerRadius = UDim.new(0, 6) }, petBox)
-make("UIPadding", {
-	PaddingLeft = UDim.new(0, 10),
-	PaddingRight = UDim.new(0, 10),
-}, petBox)
+make("UIGridLayout", {
+	CellPadding = UDim2.fromOffset(6, 6),
+	CellSize = UDim2.fromOffset(118, 28),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, petRow)
 
-petBox.FocusLost:Connect(function()
-	selectedPetText = petBox.Text
-	setStatus("Pet filter: " .. (selectedPetText ~= "" and selectedPetText or "none"))
-end)
+local petButtons = {}
 
-petBox:GetPropertyChangedSignal("Text"):Connect(function()
-	selectedPetText = petBox.Text
-end)
+local function refreshPetButton(petName)
+	local button = petButtons[petName]
+	if not button then
+		return
+	end
+
+	local enabled = selectedPets[petName] == true
+	button.Text = (enabled and "[x] " or "[ ] ") .. petName
+	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
+end
+
+for index, petName in ipairs(petNames) do
+	local button = make("TextButton", {
+		Name = petName,
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = petName,
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 12,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.fromOffset(118, 28),
+		LayoutOrder = index,
+	}, petRow)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
+
+	petButtons[petName] = button
+	refreshPetButton(petName)
+
+	button.Activated:Connect(function()
+		selectedPets[petName] = not selectedPets[petName]
+		refreshPetButton(petName)
+		setStatus((selectedPets[petName] and "Selected " or "Unselected ") .. petName)
+	end)
+end
 
 local dragStart
 local startPos
