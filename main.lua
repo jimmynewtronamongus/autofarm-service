@@ -209,30 +209,106 @@ local function getPacketModule()
 	return packetModule
 end
 
-local function sendPacket(packetName, ...)
-	local packet = getPacketModule()
-	if type(packet) == "table" then
-		local entry = packet[packetName]
-		if type(entry) == "table" then
-			for _, methodName in ipairs({ "Fire", "FireServer", "Send", "SendToServer" }) do
-				if type(entry[methodName]) == "function" then
-					local ok = pcall(entry[methodName], entry, ...)
-					if ok then
-						return true
-					end
-				end
-			end
-		elseif type(entry) == "function" then
-			local ok = pcall(entry, ...)
+local packetRemote
+
+local function getPacketRemote()
+	if packetRemote and packetRemote.Parent then
+		return packetRemote
+	end
+
+	local sharedModules = ReplicatedStorage:FindFirstChild("SharedModules")
+	local packetScript = sharedModules and sharedModules:FindFirstChild("Packet")
+	packetRemote = packetScript and packetScript:FindFirstChild("RemoteEvent")
+
+	if not packetRemote then
+		packetRemote = ReplicatedStorage:FindFirstChild("RemoteEvent", true)
+	end
+
+	if packetRemote and packetRemote:IsA("RemoteEvent") then
+		return packetRemote
+	end
+
+	packetRemote = nil
+	return nil
+end
+
+local function firePacketRemote(packetName, ...)
+	local remote = getPacketRemote()
+	if not remote then
+		return false
+	end
+
+	local id = remote:GetAttribute(packetName)
+	for _, firstArg in ipairs({ packetName, id }) do
+		if firstArg ~= nil then
+			local ok = pcall(function(...)
+				remote:FireServer(firstArg, ...)
+			end, ...)
 			if ok then
 				return true
 			end
 		end
+	end
+
+	return false
+end
+
+local function tryPacketEntry(entry, ...)
+	if type(entry) == "table" then
+		for _, methodName in ipairs({ "Fire", "FireServer", "Send", "SendToServer" }) do
+			if type(entry[methodName]) == "function" then
+				if pcall(entry[methodName], entry, ...) or pcall(entry[methodName], ...) then
+					return true
+				end
+			end
+		end
+	elseif type(entry) == "function" then
+		if pcall(entry, ...) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function findPacketEntry(root, packetName, seen)
+	if type(root) ~= "table" then
+		return nil
+	end
+
+	seen = seen or {}
+	if seen[root] then
+		return nil
+	end
+	seen[root] = true
+
+	if root[packetName] ~= nil then
+		return root[packetName]
+	end
+
+	for _, value in pairs(root) do
+		if type(value) == "table" then
+			local found = findPacketEntry(value, packetName, seen)
+			if found ~= nil then
+				return found
+			end
+		end
+	end
+
+	return nil
+end
+
+local function sendPacket(packetName, ...)
+	local packet = getPacketModule()
+	if type(packet) == "table" then
+		local entry = findPacketEntry(packet, packetName)
+		if tryPacketEntry(entry, ...) then
+			return true
+		end
 
 		for _, methodName in ipairs({ "Fire", "FireServer", "Send", "SendToServer" }) do
 			if type(packet[methodName]) == "function" then
-				local ok = pcall(packet[methodName], packet, packetName, ...)
-				if ok then
+				if pcall(packet[methodName], packet, packetName, ...) or pcall(packet[methodName], packetName, ...) then
 					return true
 				end
 			end
@@ -244,7 +320,7 @@ local function sendPacket(packetName, ...)
 		end
 	end
 
-	return false
+	return firePacketRemote(packetName, ...)
 end
 
 local cache = {
@@ -599,6 +675,26 @@ local function triggerBuyPrompt(prompt)
 	return triggerPrompt(prompt)
 end
 
+local function purchaseSeedRemote(seedName)
+	local variants = {
+		seedName,
+		string.gsub(seedName, "%s+", "_"),
+		string.gsub(seedName, "%s+", ""),
+	}
+
+	for _, variant in ipairs(variants) do
+		if sendPacket("PurchaseSeed", variant) then
+			return true
+		end
+
+		if sendPacket("PurchaseSeed", variant, 1) then
+			return true
+		end
+	end
+
+	return false
+end
+
 local function autoCollectRainbowSeeds()
 	local checked = 0
 	local roots = { getMap(), getGardens() }
@@ -752,7 +848,7 @@ local function buyOneSeed(seedName)
 		end
 	end
 
-	if sendPacket("PurchaseSeed", seedName) or sendPacket("PurchaseSeed", seedName, 1) then
+	if purchaseSeedRemote(seedName) then
 		return true, ("Auto buy: sent PurchaseSeed for %s"):format(seedName)
 	end
 
@@ -904,10 +1000,27 @@ local function getVisualPetFolder()
 	return visualPetFolder
 end
 
-local function prepVisualPet(instance)
+local function getModelRootPart(instance)
+	if instance:IsA("BasePart") then
+		return instance
+	end
+
+	if not instance:IsA("Model") then
+		return nil
+	end
+
+	return instance.PrimaryPart
+		or instance:FindFirstChild("RootPart", true)
+		or instance:FindFirstChild("HumanoidRootPart", true)
+		or instance:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function prepVisualPet(instance, anchorRootOnly)
+	local rootPart = anchorRootOnly and getModelRootPart(instance) or nil
+
 	for _, descendant in ipairs(instance:GetDescendants()) do
 		if descendant:IsA("BasePart") then
-			descendant.Anchored = true
+			descendant.Anchored = anchorRootOnly and descendant == rootPart or not anchorRootOnly
 			descendant.CanCollide = false
 			descendant.CanTouch = false
 			descendant.CanQuery = false
@@ -923,6 +1036,80 @@ local function prepVisualPet(instance)
 		instance.CanTouch = false
 		instance.CanQuery = false
 		instance.CastShadow = false
+	end
+end
+
+local function getPetIcon(template)
+	for _, attrName in ipairs({ "Icon", "Image", "TextureId", "Thumbnail", "ThumbnailImage" }) do
+		local value = template:GetAttribute(attrName)
+		if type(value) == "string" and value ~= "" then
+			return value
+		end
+	end
+
+	for _, descendant in ipairs(template:GetDescendants()) do
+		if descendant:IsA("Decal") or descendant:IsA("Texture") then
+			if descendant.Texture and descendant.Texture ~= "" then
+				return descendant.Texture
+			end
+		elseif descendant:IsA("ImageLabel") or descendant:IsA("ImageButton") then
+			if descendant.Image and descendant.Image ~= "" then
+				return descendant.Image
+			end
+		elseif descendant:IsA("MeshPart") then
+			if descendant.TextureID and descendant.TextureID ~= "" then
+				return descendant.TextureID
+			end
+		elseif descendant:IsA("SpecialMesh") then
+			if descendant.TextureId and descendant.TextureId ~= "" then
+				return descendant.TextureId
+			end
+		end
+	end
+
+	return ""
+end
+
+local function playPetAnimations(instance)
+	local animator
+	for _, descendant in ipairs(instance:GetDescendants()) do
+		if descendant:IsA("Animator") then
+			animator = descendant
+			break
+		end
+	end
+
+	if not animator then
+		local controller = instance:FindFirstChildWhichIsA("AnimationController", true)
+		if controller then
+			animator = Instance.new("Animator")
+			animator.Parent = controller
+		end
+	end
+
+	if not animator then
+		return
+	end
+
+	local played = 0
+	for _, descendant in ipairs(instance:GetDescendants()) do
+		if descendant:IsA("Animation") and descendant.AnimationId ~= "" then
+			local lowerName = string.lower(descendant.Name)
+			if string.find(lowerName, "idle", 1, true) or string.find(lowerName, "walk", 1, true) or played == 0 then
+				local ok, track = pcall(function()
+					return animator:LoadAnimation(descendant)
+				end)
+				if ok and track then
+					track.Looped = true
+					track:Play(0.15, 1, string.find(lowerName, "walk", 1, true) and 1.15 or 1)
+					played += 1
+				end
+			end
+
+			if played >= 2 then
+				break
+			end
+		end
 	end
 end
 
@@ -945,6 +1132,14 @@ local function makeLocalPetTool(petName, template)
 	tool.CanBeDropped = false
 	tool:SetAttribute("VisualPetTool", true)
 	tool:SetAttribute("PetName", petName)
+	tool:SetAttribute("Pet", petName)
+	tool:SetAttribute("PetId", ("local-%s-%d"):format(string.gsub(petName, "%s+", "-"), math.floor(os.clock() * 1000)))
+	tool:SetAttribute("Count", 0)
+
+	local icon = getPetIcon(template)
+	if icon ~= "" then
+		tool.TextureId = icon
+	end
 
 	local handle = Instance.new("Part")
 	handle.Name = "Handle"
@@ -1125,8 +1320,9 @@ local function spawnVisualPets()
 			clone.Name = petName
 			clone:SetAttribute("PetName", petName)
 			clone:SetAttribute("SpawnedAt", os.clock())
-			prepVisualPet(clone)
+			prepVisualPet(clone, true)
 			clone.Parent = folder
+			playPetAnimations(clone)
 
 			local angle = ((index - 1) / amount) * math.pi * 2
 			local radius = 6 + (spawned % 3) * 2
@@ -1338,6 +1534,7 @@ make("UIGridLayout", {
 
 local seedLayout = seedRow:FindFirstChildOfClass("UIGridLayout")
 local seedButtons = {}
+local seedButtonCount = 0
 
 local function refreshSeedButton(seedName)
 	local button = seedButtons[seedName]
@@ -1355,7 +1552,13 @@ local function refreshSeedCanvas()
 	seedRow.CanvasSize = UDim2.fromOffset(0, rows * 34)
 end
 
-for index, seedName in ipairs(seedNames) do
+local function makeSeedButton(seedName)
+	if seedButtons[seedName] then
+		return
+	end
+
+	seedButtonCount += 1
+
 	local button = make("TextButton", {
 		Name = seedName,
 		AutoButtonColor = false,
@@ -1367,7 +1570,7 @@ for index, seedName in ipairs(seedNames) do
 		TextSize = 12,
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		Size = UDim2.fromOffset(118, 28),
-		LayoutOrder = index,
+		LayoutOrder = seedButtonCount,
 	}, seedRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
 
@@ -1380,12 +1583,44 @@ for index, seedName in ipairs(seedNames) do
 		refreshSeedButton(seedName)
 		setStatus((selectedSeeds[seedName] and "Selected " or "Unselected ") .. seedName)
 	end)
+
+	refreshSeedCanvas()
+end
+
+local function scanSeedShopNames()
+	local seedShop = playerGui:FindFirstChild("SeedShop")
+	local frame = seedShop and seedShop:FindFirstChild("Frame")
+	local normalShop = frame and frame:FindFirstChild("NormalShop")
+	if not normalShop then
+		return
+	end
+
+	for _, child in ipairs(normalShop:GetChildren()) do
+		if child.Name ~= "ItemTemplate" and not string.find(string.lower(child.Name), "shelf", 1, true) then
+			if child:FindFirstChild("Main_Frame", true) or child:FindFirstChildWhichIsA("GuiButton", true) then
+				addUniqueName(seedNames, child.Name)
+				makeSeedButton(child.Name)
+			end
+		end
+	end
+end
+
+for _, seedName in ipairs(seedNames) do
+	makeSeedButton(seedName)
 end
 
 if seedLayout then
 	seedLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshSeedCanvas)
 end
 refreshSeedCanvas()
+scanSeedShopNames()
+
+playerGui.ChildAdded:Connect(function(child)
+	if child.Name == "SeedShop" then
+		task.wait(0.25)
+		scanSeedShopNames()
+	end
+end)
 
 local selectedGearLabel = make("TextLabel", {
 	Name = "SelectedGearLabel",
