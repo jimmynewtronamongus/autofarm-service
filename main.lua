@@ -1037,31 +1037,123 @@ local function prepVisualPet(instance, anchorRootOnly)
 	end
 end
 
-local function getPetIcon(template)
-	for _, attrName in ipairs({ "Icon", "Image", "TextureId", "Thumbnail", "ThumbnailImage" }) do
-		local value = template:GetAttribute(attrName)
-		if type(value) == "string" and value ~= "" then
-			return value
+local petDataModule
+
+local function getPetDataModule()
+	if petDataModule ~= nil then
+		return petDataModule
+	end
+
+	petDataModule = false
+	local sharedData = ReplicatedStorage:FindFirstChild("SharedData")
+	local petDataScript = sharedData and sharedData:FindFirstChild("PetData")
+	if petDataScript and petDataScript:IsA("ModuleScript") then
+		pcall(function()
+			petDataModule = require(petDataScript)
+		end)
+	end
+
+	return petDataModule
+end
+
+local function normalizeIconAsset(value)
+	if type(value) == "number" then
+		return "rbxassetid://" .. tostring(value)
+	end
+
+	if type(value) ~= "string" or value == "" then
+		return ""
+	end
+
+	if string.find(value, "rbxasset", 1, true) or string.find(value, "http", 1, true) then
+		return value
+	end
+
+	if tonumber(value) then
+		return "rbxassetid://" .. value
+	end
+
+	return ""
+end
+
+local function compactName(value)
+	return string.lower(string.gsub(tostring(value or ""), "[%s_%-]", ""))
+end
+
+local function findIconField(data)
+	if type(data) ~= "table" then
+		return ""
+	end
+
+	for _, key in ipairs({ "Icon", "IconId", "Image", "ImageId", "InventoryIcon", "InventoryImage", "Thumbnail", "ThumbnailImage", "TextureId", "TextureID" }) do
+		local icon = normalizeIconAsset(data[key])
+		if icon ~= "" then
+			return icon
 		end
 	end
 
-	for _, descendant in ipairs(template:GetDescendants()) do
-		if descendant:IsA("Decal") or descendant:IsA("Texture") then
-			if descendant.Texture and descendant.Texture ~= "" then
-				return descendant.Texture
+	return ""
+end
+
+local function findPetIconInData(data, petName, seen)
+	if type(data) ~= "table" then
+		return ""
+	end
+
+	seen = seen or {}
+	if seen[data] then
+		return ""
+	end
+	seen[data] = true
+
+	local wanted = compactName(petName)
+	for key, value in pairs(data) do
+		if compactName(key) == wanted then
+			local icon = normalizeIconAsset(value)
+			if icon ~= "" then
+				return icon
 			end
-		elseif descendant:IsA("ImageLabel") or descendant:IsA("ImageButton") then
-			if descendant.Image and descendant.Image ~= "" then
-				return descendant.Image
+
+			icon = findIconField(value)
+			if icon ~= "" then
+				return icon
 			end
-		elseif descendant:IsA("MeshPart") then
-			if descendant.TextureID and descendant.TextureID ~= "" then
-				return descendant.TextureID
+		end
+
+		if type(value) == "table" then
+			local nameMatches = compactName(value.Name) == wanted
+				or compactName(value.DisplayName) == wanted
+				or compactName(value.Pet) == wanted
+				or compactName(value.PetName) == wanted
+			if nameMatches then
+				local icon = findIconField(value)
+				if icon ~= "" then
+					return icon
+				end
 			end
-		elseif descendant:IsA("SpecialMesh") then
-			if descendant.TextureId and descendant.TextureId ~= "" then
-				return descendant.TextureId
+
+			local nestedIcon = findPetIconInData(value, petName, seen)
+			if nestedIcon ~= "" then
+				return nestedIcon
 			end
+		end
+	end
+
+	return ""
+end
+
+local function getPetIcon(petName, template)
+	local petData = getPetDataModule()
+	local dataIcon = findPetIconInData(petData, petName)
+	if dataIcon ~= "" then
+		return dataIcon
+	end
+
+	for _, attrName in ipairs({ "Icon", "IconId", "Image", "ImageId", "InventoryIcon", "InventoryImage", "Thumbnail", "ThumbnailImage" }) do
+		local value = template:GetAttribute(attrName)
+		local icon = normalizeIconAsset(value)
+		if icon ~= "" then
+			return icon
 		end
 	end
 
@@ -1129,9 +1221,11 @@ local function makeLocalPetTool(petName, template, slot)
 	tool:SetAttribute("Count", 0)
 	tool:SetAttribute("Slot", slot or 0)
 
-	local icon = getPetIcon(template)
+	local icon = getPetIcon(petName, template)
 	if icon ~= "" then
 		tool.TextureId = icon
+		tool:SetAttribute("Icon", icon)
+		tool:SetAttribute("InventoryIcon", icon)
 	end
 
 	local handle = Instance.new("Part")
