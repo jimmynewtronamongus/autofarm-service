@@ -1128,6 +1128,12 @@ local function plantSeed()
 end
 
 local function autoSell()
+	local sellableTools = getSellableFruitTools()
+	if #sellableTools == 0 then
+		setStatus("Sell: nothing to sell")
+		return
+	end
+
 	local actions = 0
 	local stand = getPath(workspace, "Map.Stands.Sell.Part")
 	if stand and stand:IsA("BasePart") and touchPart(stand) then
@@ -1148,7 +1154,7 @@ local function autoSell()
 		end
 	end
 
-	for _, tool in ipairs(getSellableFruitTools()) do
+	for _, tool in ipairs(sellableTools) do
 		if sendPacket("SellItem", tool) then
 			actions += 1
 			task.wait(0.03)
@@ -1177,7 +1183,7 @@ local function autoSell()
 		end
 	end
 
-	setStatus(("Sell: %d action(s) tried"):format(actions))
+	setStatus(("Sell: %d action(s) for %d item(s)"):format(actions, #sellableTools))
 end
 
 local function buyOneSeed(seedName)
