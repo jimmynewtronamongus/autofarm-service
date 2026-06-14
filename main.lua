@@ -2933,7 +2933,8 @@ local function makeToggle(label, key, order)
 		Font = Enum.Font.GothamSemibold,
 		Text = ("%s: %s"):format(label, enabled and "ON" or "OFF"),
 		TextColor3 = Color3.fromRGB(235, 244, 233),
-		TextSize = 14,
+		TextSize = 13,
+		TextWrapped = true,
 		Size = UDim2.new(1, 0, 0, 38),
 		LayoutOrder = order,
 	}, content)
@@ -2998,17 +2999,17 @@ local function registerVisualControl(control)
 	return control
 end
 
-makeToggle("Collect", "fruitCollector", 1)
-makeToggle("Teleport", "collectTeleport", 2)
-makeToggle("Plant", "seedPlacer", 3)
-makeToggle("Sell", "autoSell", 4)
-makeToggle("Seeds", "autoBuySeeds", 5)
-makeToggle("Seed shop", "seedShopEnabled", 6)
-makeToggle("Gear", "autoBuyGear", 7)
-makeToggle("Gear shop", "gearShopEnabled", 8)
-makeToggle("Drops", "autoCollectRainbowSeeds", 9)
-makeToggle("Pets", "autoBuyPets", 10)
-makeToggle("FPS", "performanceMode", 11)
+makeToggle("Fruit Collector", "fruitCollector", 1)
+makeToggle("Teleport To Fruit", "collectTeleport", 2)
+makeToggle("Seed Placer", "seedPlacer", 3)
+makeToggle("Auto Sell Inventory", "autoSell", 4)
+makeToggle("Auto Buy Seeds", "autoBuySeeds", 5)
+makeToggle("Use Seed Shop", "seedShopEnabled", 6)
+makeToggle("Auto Buy Gear", "autoBuyGear", 7)
+makeToggle("Use Gear Shop", "gearShopEnabled", 8)
+makeToggle("Collect Gold/Rainbow Drops", "autoCollectRainbowSeeds", 9)
+makeToggle("Auto Buy Pets", "autoBuyPets", 10)
+makeToggle("Performance Mode", "performanceMode", 11)
 
 local statsTitle = make("TextLabel", {
 	Name = "StatsTitle",
