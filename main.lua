@@ -18,7 +18,7 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 local CONFIG = {
-	collectInterval = 0.12,
+	collectInterval = 0.22,
 	plantInterval = 0.45,
 	sellInterval = 12.0,
 	buyInterval = 1.0,
@@ -28,12 +28,12 @@ local CONFIG = {
 	dropCacheRefreshInterval = 2.5,
 	inventoryRefreshInterval = 1.5,
 	guiInventoryRefreshInterval = 5.0,
-	maxFruitCollectPerTick = 160,
-	maxFruitScanPerRoot = 5000,
-	fruitCacheRefreshInterval = 0.35,
-	maxFruitTargetsCached = 600,
-	maxFruitPromptFallbackPerTick = 45,
-	maxSeedPlantPerTick = 40,
+	maxFruitCollectPerTick = 90,
+	maxFruitScanPerRoot = 2500,
+	fruitCacheRefreshInterval = 1.15,
+	maxFruitTargetsCached = 320,
+	maxFruitPromptFallbackPerTick = 18,
+	maxSeedPlantPerTick = 22,
 	maxSeedPlacementsPerTool = 8,
 	seedCountCacheRefreshInterval = 20.0,
 	maxSeedBuyPerTick = 6,
@@ -1751,12 +1751,6 @@ local function getFruitPriority(instance)
 	end
 	if string.find(haystack, "huge", 1, true) or string.find(haystack, "giant", 1, true) then
 		priority += 3000
-	end
-
-	for index, seedName in ipairs(seedNames) do
-		if string.find(haystack, string.lower(seedName), 1, true) then
-			priority += index * 10
-		end
 	end
 
 	return priority
@@ -5001,6 +4995,18 @@ function runGuarded(key, callback)
 end
 
 RunService.Heartbeat:Connect(function(deltaTime)
+	local jobsStarted = 0
+	local maxJobsThisFrame = 2
+	local function tryRun(key, callback)
+		if jobsStarted >= maxJobsThisFrame or running[key] then
+			return false
+		end
+
+		jobsStarted += 1
+		runGuarded(key, callback)
+		return true
+	end
+
 	timers.fruitCollector = state.fruitCollector and (timers.fruitCollector + deltaTime) or 0
 	timers.seedPlacer = state.seedPlacer and (timers.seedPlacer + deltaTime) or 0
 	timers.autoShovel = state.autoShovel and (timers.autoShovel + deltaTime) or 0
@@ -5018,48 +5024,56 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	end
 
 	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval then
-		timers.autoBuyPets = 0
-		runGuarded("autoBuyPets", buyPets)
+		if tryRun("autoBuyPets", buyPets) then
+			timers.autoBuyPets = 0
+		end
 	end
 
 	if state.autoCollectRainbowSeeds and timers.autoCollectRainbowSeeds >= CONFIG.rainbowCollectInterval then
-		timers.autoCollectRainbowSeeds = 0
-		runGuarded("autoCollectRainbowSeeds", autoCollectRainbowSeeds)
+		if tryRun("autoCollectRainbowSeeds", autoCollectRainbowSeeds) then
+			timers.autoCollectRainbowSeeds = 0
+		end
 	end
 
 	local shovelDue = state.autoShovel and timers.autoShovel >= CONFIG.shovelInterval
 	if shovelDue then
-		timers.autoShovel = 0
-		runGuarded("autoShovel", autoShovel)
+		if tryRun("autoShovel", autoShovel) then
+			timers.autoShovel = 0
+		end
 	end
 
 	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
 		if shovelDue or running.autoShovel then
 			timers.fruitCollector = CONFIG.collectInterval
 		else
-			timers.fruitCollector = 0
-			runGuarded("fruitCollector", collectFruit)
+			if tryRun("fruitCollector", collectFruit) then
+				timers.fruitCollector = 0
+			end
 		end
 	end
 
 	if state.seedPlacer and timers.seedPlacer >= CONFIG.plantInterval and not running.autoShovel then
-		timers.seedPlacer = 0
-		runGuarded("seedPlacer", plantSeed)
+		if tryRun("seedPlacer", plantSeed) then
+			timers.seedPlacer = 0
+		end
 	end
 
 	if state.autoSell and timers.autoSell >= CONFIG.sellInterval and not running.autoShovel then
-		timers.autoSell = 0
-		runGuarded("autoSell", autoSell)
+		if tryRun("autoSell", autoSell) then
+			timers.autoSell = 0
+		end
 	end
 
 	if state.autoBuySeeds and timers.autoBuySeeds >= CONFIG.buyInterval and not running.autoShovel then
-		timers.autoBuySeeds = 0
-		runGuarded("autoBuySeeds", buySeed)
+		if tryRun("autoBuySeeds", buySeed) then
+			timers.autoBuySeeds = 0
+		end
 	end
 
 	if state.autoBuyGear and timers.autoBuyGear >= CONFIG.buyInterval and not running.autoShovel then
-		timers.autoBuyGear = 0
-		runGuarded("autoBuyGear", buyGear)
+		if tryRun("autoBuyGear", buyGear) then
+			timers.autoBuyGear = 0
+		end
 	end
 
 end)
