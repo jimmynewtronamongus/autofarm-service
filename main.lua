@@ -455,17 +455,10 @@ end
 
 local function refreshSeedNamesFromStockValues()
 	refreshNamesFromStock("SeedShop", seedNames)
-	if #seedNames > 0 and CONFIG.selectedSeed == "" and not configLoaded then
-		CONFIG.selectedSeed = seedNames[1]
-		selectedSeeds[CONFIG.selectedSeed] = true
-	end
 end
 
 local function refreshGearNamesFromStockValues()
 	refreshNamesFromStock("GearShop", gearNames)
-	if #gearNames > 0 and next(selectedGears) == nil and not configLoaded then
-		selectedGears[gearNames[1]] = true
-	end
 end
 
 local function refreshPetNamesFromAssets()
@@ -480,12 +473,6 @@ local function refreshPetNamesFromAssets()
 	end
 
 	table.sort(petNames)
-	if #petNames > 0 and next(selectedPets) == nil and not configLoaded then
-		selectedPets[petNames[1]] = true
-	end
-	if #petNames > 0 and next(selectedVisualPets) == nil and not configLoaded then
-		selectedVisualPets[petNames[1]] = true
-	end
 end
 
 refreshSeedNamesFromStockValues()
@@ -758,9 +745,6 @@ local function refreshBuyPetNamesFromWildSpawns()
 	end
 
 	table.sort(buyPetNames)
-	if #buyPetNames > 0 and next(selectedPets) == nil and not configLoaded then
-		selectedPets[buyPetNames[1]] = true
-	end
 end
 
 local function valueMatchesLocalPlayer(value)
@@ -4067,9 +4051,6 @@ if petsFolderForBuy then
 		local baseName = stripVariantWords(pet.Name)
 		addUniqueName(petNames, baseName)
 		table.sort(petNames)
-		if next(selectedPets) == nil and not configLoaded then
-			selectedPets[baseName] = true
-		end
 		makePetButton(baseName)
 	end)
 end
@@ -4089,9 +4070,6 @@ if wildPetSpawnsForBuy then
 			addUniqueName(petNames, baseName)
 			table.sort(buyPetNames)
 			table.sort(petNames)
-			if next(selectedPets) == nil and not configLoaded then
-				selectedPets[baseName] = true
-			end
 			makePetButton(baseName)
 		end
 	end)
@@ -4403,10 +4381,6 @@ end
 
 buildUI()
 
-if not configLoaded and canUseFileConfig() then
-	saveConfig()
-end
-
 local timers = {
 	fruitCollector = 0,
 	seedPlacer = 0,
@@ -4494,7 +4468,7 @@ end)
 if configLoaded then
 	setStatus("Garden Tools loaded - config restored")
 elseif canUseFileConfig() then
-	setStatus("Garden Tools loaded - config saved")
+	setStatus("Garden Tools loaded - config ready")
 else
 	setStatus("Garden Tools loaded - config files unsupported")
 end
