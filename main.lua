@@ -436,6 +436,37 @@ local function getWildPetSpawns()
 	return map and map:FindFirstChild("WildPetSpawns")
 end
 
+local function valueMatchesLocalPlayer(value)
+	local text = tostring(value or "")
+	return text == tostring(localPlayer.UserId) or string.lower(text) == string.lower(localPlayer.Name)
+end
+
+local function plotBelongsToLocalPlayer(plot)
+	if not plot then
+		return false
+	end
+
+	if valueMatchesLocalPlayer(plot.Name) then
+		return true
+	end
+
+	for _, key in ipairs({ "Owner", "OwnerId", "UserId", "Player", "PlayerName" }) do
+		local ok, attribute = pcall(function()
+			return plot:GetAttribute(key)
+		end)
+		if ok and valueMatchesLocalPlayer(attribute) then
+			return true
+		end
+
+		local child = plot:FindFirstChild(key)
+		if child and child:IsA("ValueBase") and valueMatchesLocalPlayer(child.Value) then
+			return true
+		end
+	end
+
+	return false
+end
+
 local function getOwnGardenRoots()
 	local gardens = getGardens()
 	local userId = tostring(localPlayer.UserId)
@@ -447,7 +478,9 @@ local function getOwnGardenRoots()
 
 	for _, plot in ipairs(gardens:GetChildren()) do
 		local plants = plot:FindFirstChild("Plants")
-		if plants then
+		if plants and plotBelongsToLocalPlayer(plot) then
+			table.insert(roots, plants)
+		elseif plants then
 			for _, plant in ipairs(plants:GetChildren()) do
 				if string.sub(plant.Name, 1, #userId + 1) == userId .. "_" then
 					table.insert(roots, plants)
@@ -455,10 +488,6 @@ local function getOwnGardenRoots()
 				end
 			end
 		end
-	end
-
-	if #roots == 0 then
-		table.insert(roots, gardens)
 	end
 
 	return roots
@@ -656,8 +685,14 @@ end
 local function collectFruit()
 	local fired = 0
 	local prompts = {}
+	local roots = getOwnGardenRoots()
 
-	for index, root in ipairs(getOwnGardenRoots()) do
+	if #roots == 0 then
+		setStatus("Fruit collector: no owned garden found")
+		return
+	end
+
+	for index, root in ipairs(roots) do
 		for _, descendant in ipairs(getCachedDescendants("garden" .. index, root)) do
 			if isHarvestPrompt(descendant) then
 				table.insert(prompts, descendant)
