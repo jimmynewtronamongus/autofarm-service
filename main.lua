@@ -3208,27 +3208,50 @@ end
 
 local function getPlantNameForShovel(instance)
 	local current = instance
+	local best = instance
 	while current and current ~= workspace do
 		local parent = current.Parent
 		local parentName = parent and string.lower(parent.Name) or ""
 		if current:IsA("Model")
 			and (parentName == "plants" or parentName == "crops" or parentName == "plant")
 		then
-			return current.Name
+			best = current
+			break
 		end
 		current = parent
 	end
-	return instance and instance.Name or ""
+	return best and best.Name or ""
+end
+
+local function getPlantModelForShovel(instance)
+	local current = instance
+	while current and current ~= workspace do
+		local parent = current.Parent
+		local parentName = parent and string.lower(parent.Name) or ""
+		if current:IsA("Model")
+			and (parentName == "plants" or parentName == "crops" or parentName == "plant")
+		then
+			return current
+		end
+		current = parent
+	end
+	return instance
 end
 
 local function plantMatchesShovelSelection(plant, selected)
 	local plantName = string.lower(getPlantNameForShovel(plant))
+	local compactPlantName = string.gsub(plantName, "[%s_%-]", "")
 	if plantName == "" then
 		return false
 	end
 
 	for _, seedName in ipairs(selected) do
-		if string.find(plantName, string.lower(seedName), 1, true) then
+		local lowered = string.lower(seedName)
+		local compactSeed = string.gsub(lowered, "[%s_%-]", "")
+		if string.find(plantName, lowered, 1, true)
+			or string.find(compactPlantName, compactSeed, 1, true)
+			or treeTextMatches(plant, { seedName }, 3)
+		then
 			return true
 		end
 	end
@@ -3273,6 +3296,11 @@ local function shovelPlantTarget(plant)
 		return false
 	end
 
+	plant = getPlantModelForShovel(plant)
+	if not plant or not plant.Parent then
+		return false
+	end
+
 	local part = getTargetPart(plant)
 	local root = getRoot()
 	if part and root and (root.Position - part.Position).Magnitude > 18 then
@@ -3282,19 +3310,21 @@ local function shovelPlantTarget(plant)
 	local shovelTool = getShovelTool()
 	local prompt = getShovelPrompt(plant)
 	local fired = false
+	local beforeParent = plant.Parent
+	local plantName = plant.Name
+	local plantPosition = part and part.Position
 
 	for _, packetName in ipairs({
-		"ShovelPlant",
-		"Shovel",
-		"RemovePlant",
-		"DeletePlant",
-		"DestroyPlant",
-		"RemoveSeed",
-		"DeleteSeed",
-		"RemoveCrop",
+		"UseShovel",
+		"SwingShovel",
 	}) do
 		fired = sendPacket(packetName, plant) or fired
-		fired = sendPacket(packetName, plant.Name) or fired
+		fired = sendPacket(packetName, plantName) or fired
+		if plantPosition then
+			fired = sendPacket(packetName, plantPosition) or fired
+			fired = sendPacket(packetName, plant, plantPosition) or fired
+			fired = sendPacket(packetName, plantName, plantPosition) or fired
+		end
 	end
 
 	if prompt then
@@ -3312,7 +3342,8 @@ local function shovelPlantTarget(plant)
 		touchPart(part)
 	end
 
-	return fired
+	task.wait(0.08)
+	return fired and (not plant.Parent or plant.Parent ~= beforeParent or not plant:IsDescendantOf(workspace))
 end
 
 local function autoShovel()
@@ -3357,7 +3388,7 @@ local function autoShovel()
 	end
 
 	if #targets == 0 then
-		setStatus("Auto shovel: no matching planted seeds found")
+		setStatus(("Auto shovel: no matching planted seeds found (%d selected)"):format(#selected))
 		return
 	end
 
