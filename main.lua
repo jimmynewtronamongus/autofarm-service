@@ -21,7 +21,7 @@ local CONFIG = {
 	collectInterval = 0.35,
 	plantInterval = 0.45,
 	sellInterval = 12.0,
-	buyInterval = 5.0,
+	buyInterval = 1.0,
 	rainbowCollectInterval = 2.5,
 	petBuyInterval = 0.75,
 	cacheRefreshInterval = 12.0,
@@ -34,6 +34,8 @@ local CONFIG = {
 	maxFruitTargetsCached = 180,
 	maxSeedPlantPerTick = 40,
 	maxSeedPlacementsPerTool = 8,
+	maxSeedBuyPerTick = 6,
+	seedBuyRemoteRepeats = 4,
 	maxDropCollectPerTick = 8,
 	maxDropScanPerRoot = 2500,
 	maxInventoryItems = 200,
@@ -2556,18 +2558,23 @@ local function purchaseSeedRemote(seedName)
 		string.gsub(seedName, "%s+", "_"),
 		string.gsub(seedName, "%s+", ""),
 	}
+	local bought = 0
 
-	for _, variant in ipairs(variants) do
-		if sendPacket("PurchaseSeed", variant) then
-			return true
+	for repeatIndex = 1, CONFIG.seedBuyRemoteRepeats do
+		for _, variant in ipairs(variants) do
+			if sendPacket("PurchaseSeed", variant) then
+				bought += 1
+			end
+
+			if sendPacket("PurchaseSeed", variant, 1) then
+				bought += 1
+			end
 		end
 
-		if sendPacket("PurchaseSeed", variant, 1) then
-			return true
-		end
+		task.wait()
 	end
 
-	return false
+	return bought > 0, bought
 end
 
 local function looksLikeGoldRainbowDrop(instance)
@@ -2937,8 +2944,9 @@ local function autoSell()
 end
 
 local function buyOneSeed(seedName)
-	if purchaseSeedRemote(seedName) then
-		return true, "Seed: " .. seedName
+	local remoteOk, remoteCount = purchaseSeedRemote(seedName)
+	if remoteOk then
+		return true, "Seed: " .. seedName, remoteCount or 1
 	end
 
 	local seedFrame = getSeedFrame(seedName)
@@ -2949,29 +2957,33 @@ local function buyOneSeed(seedName)
 		local rowButton = mainFrame and mainFrame:FindFirstChild("TextButton")
 		if rowButton and rowButton:IsA("GuiButton") and activateButton(rowButton) then
 			clicked = true
-			task.wait(0.08)
+			task.wait()
 		end
 
 		for _, buttonName in ipairs({ "Sheckles_Buy", "CashBuy", "Buy", "TextButton" }) do
 			local button = seedFrame:FindFirstChild(buttonName, true)
 			if button and button:IsA("GuiButton") and activateButton(button) then
 				clicked = true
-				task.wait(0.04)
+				task.wait()
+				break
 			end
 		end
 
-		for _, descendant in ipairs(seedFrame:GetDescendants()) do
-			if descendant:IsA("GuiButton") and descendant ~= rowButton and activateButton(descendant) then
-				clicked = true
-				task.wait(0.04)
+		if not clicked then
+			for _, descendant in ipairs(seedFrame:GetDescendants()) do
+				if descendant:IsA("GuiButton") and descendant ~= rowButton and activateButton(descendant) then
+					clicked = true
+					task.wait()
+					break
+				end
 			end
 		end
 	end
 
 	if clicked then
-		return true, "Seed: fallback " .. seedName
+		return true, "Seed: fallback " .. seedName, 1
 	else
-		return false, "Seed: failed " .. seedName
+		return false, "Seed: failed " .. seedName, 0
 	end
 end
 
@@ -2986,6 +2998,7 @@ local function buySeed()
 	end
 
 	local bought = 0
+	local attempts = 0
 	local lastMessage = "Auto buy: no seeds selected"
 
 	for _, seedName in ipairs(getSelectedSeedList()) do
@@ -2993,19 +3006,24 @@ local function buySeed()
 			return
 		end
 
-		local ok, message = buyOneSeed(seedName)
+		if attempts >= CONFIG.maxSeedBuyPerTick then
+			break
+		end
+
+		local ok, message, count = buyOneSeed(seedName)
 		lastMessage = message
 		if ok then
-			bought += 1
-			task.wait(0.12)
+			bought += math.max(count or 1, 1)
 		end
+		attempts += 1
+		task.wait()
 	end
 
 	if bought > 0 then
 		stats.seedsBought += bought
 		refreshInventoryStats()
 		updateStatsUI()
-		setStatus(("Auto buy: tried %d selected seed(s)"):format(bought))
+		setStatus(("Auto buy: sent %d buy action(s) across %d seed(s)"):format(bought, attempts))
 	else
 		setStatus(lastMessage)
 	end
