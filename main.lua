@@ -1227,9 +1227,9 @@ end
 
 function triggerPrompt(prompt, skipTouch)
 	local part = getPromptPart and getPromptPart(prompt)
-	if part and touchPart and not skipTouch then
-		touchPart(part)
-		task.wait(0.03)
+	if part and not skipTouch then
+		teleportToPart(part, 3)
+		task.wait(0.05)
 	end
 
 	if typeof(fireproximityprompt) == "function" then
@@ -1879,11 +1879,11 @@ end
 local function triggerBuyPrompt(prompt)
 	local part = getPromptPart(prompt)
 	if part then
-		touchPart(part)
+		teleportToPart(part, 3)
 		task.wait(0.05)
 	end
 
-	return triggerPrompt(prompt)
+	return triggerPrompt(prompt, true)
 end
 
 local function purchaseSeedRemote(seedName)
@@ -1996,7 +1996,9 @@ local function autoCollectRainbowSeeds()
 		end
 
 		local part = target:IsA("ProximityPrompt") and getPromptPart(target) or target
-		if part and teleportToPart(part, 3) then
+		local model = target:IsA("ProximityPrompt") and target:FindFirstAncestorWhichIsA("Model") or nil
+		local moved = part and (model and teleportToModelOrPart(model, part, 3) or teleportToPart(part, 3))
+		if moved then
 			if target:IsA("ProximityPrompt") then
 				if triggerPrompt(target, true) then
 					checked += 1
