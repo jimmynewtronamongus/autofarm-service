@@ -1406,6 +1406,21 @@ local function collectFruitPacket(target)
 	return false
 end
 
+local function collectionTookEffect(target, beforeInventoryCount)
+	task.wait(0.12)
+
+	if target and not target.Parent then
+		return true
+	end
+
+	if target and target.Parent and not target:IsDescendantOf(workspace) then
+		return true
+	end
+
+	local afterInventoryCount = countInventoryTools()
+	return beforeInventoryCount ~= nil and afterInventoryCount > beforeInventoryCount
+end
+
 local function isFruitContainer(instance)
 	local current = instance
 	local checked = 0
@@ -1479,16 +1494,21 @@ local function collectPrompt(prompt)
 	end
 
 	local target = getCollectFruitTarget(prompt)
-	local packeted = target ~= nil and collectFruitPacket(target)
+	local beforeInventoryCount = countInventoryTools()
+	if target ~= nil then
+		collectFruitPacket(target)
+	end
 
 	if part and state.collectTeleport then
 		teleportToPart(part, 2)
 	end
 
-	local prompted = triggerPrompt(prompt, true)
-	packeted = target ~= nil and collectFruitPacket(target)
+	triggerPrompt(prompt, true)
+	if target ~= nil then
+		collectFruitPacket(target)
+	end
 
-	return prompted or packeted
+	return collectionTookEffect(target or prompt, beforeInventoryCount)
 end
 
 local function getHarvestPromptInTarget(target)
@@ -1516,10 +1536,11 @@ local function collectFruitTarget(target)
 		return false
 	end
 
-	local sent = collectFruitPacket(target)
-		or sendPacket("HarvestFruit", target)
-		or sendPacket("Collect", target)
-		or sendPacket("Harvest", target)
+	local beforeInventoryCount = countInventoryTools()
+	collectFruitPacket(target)
+	sendPacket("HarvestFruit", target)
+	sendPacket("Collect", target)
+	sendPacket("Harvest", target)
 
 	local part = getTargetPart(target)
 	if part and state.collectTeleport then
@@ -1538,18 +1559,20 @@ local function collectFruitTarget(target)
 	end
 
 	local prompt = getHarvestPromptInTarget(target)
-	local prompted = prompt and collectPrompt(prompt) or false
-
-	sent = collectFruitPacket(target)
-		or sendPacket("HarvestFruit", target)
-		or sendPacket("Collect", target)
-		or sendPacket("Harvest", target)
-
-	if not sent and part then
-		sent = touchPart(part)
+	if prompt then
+		collectPrompt(prompt)
 	end
 
-	return prompted or sent
+	collectFruitPacket(target)
+	sendPacket("HarvestFruit", target)
+	sendPacket("Collect", target)
+	sendPacket("Harvest", target)
+
+	if part then
+		touchPart(part)
+	end
+
+	return collectionTookEffect(target, beforeInventoryCount)
 end
 
 local function getFruitPriority(instance)
