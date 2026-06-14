@@ -3884,21 +3884,21 @@ local function buyPets()
 	end
 end
 
-local function getPetsFolder()
+function getPetsFolder()
 	local assets = ReplicatedStorage:FindFirstChild("Assets")
 	return assets and assets:FindFirstChild("Pets")
 end
 
-local function compactName(value)
+function compactName(value)
 	return string.lower(string.gsub(tostring(value or ""), "[%s_%-]", ""))
 end
 
-local function getPetModulesFolder()
+function getPetModulesFolder()
 	local sharedModules = ReplicatedStorage:FindFirstChild("SharedModules")
 	return sharedModules and sharedModules:FindFirstChild("PetModules")
 end
 
-local function hasKnownPetBase(baseName)
+function hasKnownPetBase(baseName)
 	local wanted = compactName(baseName)
 	if wanted == "" then
 		return false
@@ -3931,7 +3931,7 @@ local function hasKnownPetBase(baseName)
 	return false
 end
 
-local function refreshPetNamesFromGearImages()
+function refreshPetNamesFromGearImages()
 	local gearImages = getGearImagesFolder()
 	if not gearImages then
 		return
