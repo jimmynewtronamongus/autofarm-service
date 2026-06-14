@@ -2946,6 +2946,7 @@ visualControlsToggle.Activated:Connect(function()
 	setStatus("Visual controls " .. (visualControlsVisible and "shown" or "hidden"))
 end)
 
+(function()
 local selectedSeedLabel = make("TextLabel", {
 	Name = "SelectedSeedLabel",
 	BackgroundTransparency = 1,
@@ -3153,7 +3154,9 @@ playerGui.ChildAdded:Connect(function(child)
 		scanSeedShopNames()
 	end
 end)
+end)()
 
+(function()
 local selectedGearLabel = make("TextLabel", {
 	Name = "SelectedGearLabel",
 	BackgroundTransparency = 1,
@@ -3231,7 +3234,9 @@ if gearLayout then
 	gearLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshGearCanvas)
 end
 refreshGearCanvas()
+end)()
 
+(function()
 local selectedPetLabel = make("TextLabel", {
 	Name = "SelectedPetLabel",
 	BackgroundTransparency = 1,
@@ -3565,6 +3570,7 @@ if gearImages then
 		end
 	end)
 end
+end)()
 
 registerVisualControl(makeActionButton("Spawn", 28, spawnVisualPets))
 registerVisualControl(makeActionButton("Clear", 29, clearVisualPets))
