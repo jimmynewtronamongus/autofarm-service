@@ -1129,13 +1129,129 @@ local function isInventorySeedTool(item)
 	return false
 end
 
+local function toolHasValue(item, keys)
+	if not item then
+		return false
+	end
+
+	for _, key in ipairs(keys) do
+		local ok, attribute = pcall(function()
+			return item:GetAttribute(key)
+		end)
+		if ok and attribute ~= nil and attribute ~= false and tostring(attribute) ~= "" then
+			return true
+		end
+
+		local child = item:FindFirstChild(key)
+		if child and child:IsA("ValueBase") and child.Value ~= nil and tostring(child.Value) ~= "" then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function toolNameMatchesList(item, list)
+	local name = string.lower(item and item.Name or "")
+	if name == "" then
+		return false
+	end
+
+	for _, knownName in ipairs(list) do
+		local known = string.lower(tostring(knownName or ""))
+		if known ~= "" and (name == known or string.find(name, known, 1, true)) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function isKnownGearTool(item)
+	if not item or not item:IsA("Tool") then
+		return false
+	end
+
+	if toolNameMatchesList(item, gearNames) then
+		return true
+	end
+
+	local name = string.lower(item.Name)
+	for _, word in ipairs({
+		"watering can",
+		"sprinkler",
+		"trowel",
+		"wheelbarrow",
+		"teleporter",
+		"gnome",
+		"lantern",
+		"flashbang",
+		"shovel",
+		"rake",
+		"tool",
+		"gear",
+	}) do
+		if string.find(name, word, 1, true) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function isKnownPetTool(item)
+	if not item or not item:IsA("Tool") then
+		return false
+	end
+
+	if item:GetAttribute("VisualPetTool") or item:GetAttribute("Pet") or item:GetAttribute("PetName") then
+		return true
+	end
+
+	local parent = item.Parent
+	while parent do
+		if parent.Name == "GardenToolsVisualPets" then
+			return true
+		end
+		parent = parent.Parent
+	end
+
+	if toolNameMatchesList(item, petNames) then
+		return true
+	end
+
+	local name = string.lower(item.Name)
+	return string.find(name, "pet", 1, true) ~= nil
+		or string.find(name, "egg", 1, true) ~= nil
+end
+
 local function isLikelyFruitTool(item)
-	if not item or not item:IsA("Tool") or isInventorySeedTool(item) then
+	if not item
+		or not item:IsA("Tool")
+		or isInventorySeedTool(item)
+		or isKnownGearTool(item)
+		or isKnownPetTool(item)
+	then
 		return false
 	end
 
 	local name = string.lower(item.Name)
-	if string.find(name, "kg", 1, true)
+	local hasHarvestValue = toolHasValue(item, {
+		"Weight",
+		"WeightKg",
+		"WeightKG",
+		"KG",
+		"Mass",
+		"Mutation",
+		"Mutations",
+		"Fruit",
+		"FruitName",
+		"Harvested",
+		"SellValue",
+	})
+
+	if hasHarvestValue
+		or string.find(name, "kg", 1, true)
 		or string.find(name, "lb", 1, true)
 		or string.find(name, "fruit", 1, true)
 		or string.find(name, "harvest", 1, true)
@@ -1143,8 +1259,8 @@ local function isLikelyFruitTool(item)
 		return true
 	end
 
-	for _, seedName in ipairs(seedNames) do
-		if string.find(name, string.lower(seedName), 1, true) then
+	for _, childName in ipairs({ "Weight", "Mutation", "Mutations", "Fruit", "FruitName", "Harvested" }) do
+		if item:FindFirstChild(childName, true) then
 			return true
 		end
 	end
