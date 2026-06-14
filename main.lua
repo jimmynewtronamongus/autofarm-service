@@ -226,6 +226,7 @@ local configLoaded = loadConfig()
 
 local webhookSentAt = {}
 local getStockItemsFolder
+local getShopStockAmount
 
 local function getRequestFunction()
 	return (syn and syn.request)
@@ -311,8 +312,7 @@ local function getStockFolderName(shopName)
 end
 
 local function itemIsInStock(shopName, itemName)
-	local items = getStockItemsFolder and getStockItemsFolder(getStockFolderName(shopName))
-	return items and items:FindFirstChild(itemName) ~= nil
+	return (getShopStockAmount and getShopStockAmount(getStockFolderName(shopName), itemName) or 0) > 0
 end
 
 local function notifyStock(shopName, itemName)
@@ -321,10 +321,49 @@ local function notifyStock(shopName, itemName)
 	then
 		sendWebhook(
 			shopName .. " stock",
-			itemName .. " is now in stock.",
+			("%s is now in stock (%d available)."):format(itemName, getShopStockAmount(getStockFolderName(shopName), itemName)),
 			"stock:" .. shopName .. ":" .. itemName
 		)
 	end
+end
+
+local watchedStockItems = {}
+
+local function watchStockItem(shopName, item)
+	if not item then
+		return
+	end
+
+	local key = shopName .. ":" .. item:GetFullName()
+	if watchedStockItems[key] then
+		return
+	end
+	watchedStockItems[key] = true
+
+	local function changed()
+		task.defer(function()
+			notifyStock(shopName == "SeedShop" and "Seed shop" or shopName == "GearShop" and "Gear shop" or shopName, item.Name)
+		end)
+	end
+
+	if item:IsA("ValueBase") then
+		item.Changed:Connect(changed)
+	end
+
+	for _, descendant in ipairs(item:GetDescendants()) do
+		if descendant:IsA("ValueBase") then
+			descendant.Changed:Connect(changed)
+		end
+	end
+
+	item.DescendantAdded:Connect(function(descendant)
+		if descendant:IsA("ValueBase") then
+			descendant.Changed:Connect(changed)
+			changed()
+		end
+	end)
+	item.ChildAdded:Connect(changed)
+	item.ChildRemoved:Connect(changed)
 end
 
 local function notifyPetSpawn(petName)
@@ -505,6 +544,45 @@ local function getNumericFromInstance(instance, keys)
 	end
 
 	return nil
+end
+
+getShopStockAmount = function(shopName, itemName)
+	local items = getStockItemsFolder and getStockItemsFolder(shopName)
+	local stockItem = items and items:FindFirstChild(itemName)
+	if not stockItem then
+		return 0
+	end
+
+	local value = getNumericFromInstance(stockItem, {
+		"Stock",
+		"StockAmount",
+		"CurrentStock",
+		"Amount",
+		"Quantity",
+		"Count",
+		"Available",
+		"Value",
+	})
+	if value then
+		return math.max(0, math.floor(value))
+	end
+
+	if stockItem:IsA("BoolValue") then
+		return stockItem.Value and 1 or 0
+	end
+
+	for _, descendant in ipairs(stockItem:GetDescendants()) do
+		if descendant:IsA("NumberValue") or descendant:IsA("IntValue") then
+			local number = tonumber(descendant.Value)
+			if number and number > 0 then
+				return math.floor(number)
+			end
+		elseif descendant:IsA("BoolValue") and descendant.Value == true then
+			return 1
+		end
+	end
+
+	return 0
 end
 
 local function getSeedMetadataValue(seedName)
@@ -4216,7 +4294,6 @@ local function scanSeedShopNames()
 					if child:FindFirstChild("Main_Frame", true) or child:FindFirstChildWhichIsA("GuiButton", true) then
 						addUniqueName(seedNames, child.Name)
 						makeSeedButton(child.Name)
-						notifyStock("Seed shop", child.Name)
 					end
 				end
 			end
@@ -4240,6 +4317,7 @@ if seedStockItems then
 		addUniqueName(seedNames, item.Name)
 		seedPriority[item.Name] = seedPriority[item.Name] or getSeedMetadataValue(item.Name)
 		makeSeedButton(item.Name)
+		watchStockItem("SeedShop", item)
 		notifyStock("Seed shop", item.Name)
 	end
 
@@ -4248,6 +4326,7 @@ if seedStockItems then
 		seedPriority[item.Name] = getSeedMetadataValue(item.Name)
 		table.sort(seedNames)
 		makeSeedButton(item.Name)
+		watchStockItem("SeedShop", item)
 		notifyStock("Seed shop", item.Name)
 	end)
 end
@@ -4471,7 +4550,6 @@ local function scanGearShopNames()
 			if child.Name ~= "ItemTemplate" and not string.find(string.lower(child.Name), "shelf", 1, true) then
 				if child:FindFirstChild("Main_Frame", true) or child:FindFirstChildWhichIsA("GuiButton", true) then
 					addUniqueName(gearNames, child.Name)
-					notifyStock("Gear shop", child.Name)
 				end
 			end
 		end
@@ -4494,6 +4572,7 @@ if gearStockItems then
 	for _, item in ipairs(gearStockItems:GetChildren()) do
 		addUniqueName(gearNames, item.Name)
 		makeGearButton(item.Name)
+		watchStockItem("GearShop", item)
 		notifyStock("Gear shop", item.Name)
 	end
 
@@ -4501,6 +4580,7 @@ if gearStockItems then
 		addUniqueName(gearNames, item.Name)
 		table.sort(gearNames)
 		makeGearButton(item.Name)
+		watchStockItem("GearShop", item)
 		notifyStock("Gear shop", item.Name)
 	end)
 end
