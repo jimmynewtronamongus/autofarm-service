@@ -23,6 +23,8 @@ local CONFIG = {
 	rainbowCollectInterval = 2.5,
 	petBuyInterval = 6.0,
 	cacheRefreshInterval = 7.0,
+	maxInventoryItems = 200,
+	lowRaritySeedLimit = 10,
 	maxVisualPets = 24,
 	maxVisualPetTools = 24,
 	maxEquippedVisualPets = 3,
@@ -60,12 +62,64 @@ local seedNames = {
 	"Moon Bloom",
 }
 
+local seedRarity = {
+	Carrot = 1,
+	Strawberry = 1,
+	Blueberry = 1,
+	Tulip = 1,
+	Tomato = 2,
+	Apple = 2,
+	Bamboo = 2,
+	Corn = 2,
+	Cactus = 2,
+	Banana = 3,
+	Acorn = 3,
+	Grape = 3,
+	Cherry = 3,
+	["Dragon's Breath"] = 4,
+	["Dragon Fruit"] = 4,
+	Mushroom = 4,
+	Sunflower = 4,
+	Coconut = 4,
+	["Green Bean"] = 4,
+	Mango = 4,
+	Pineapple = 4,
+	Pomegranate = 4,
+	["Poison Apple"] = 5,
+	["Venus Fly Trap"] = 5,
+	["Moon Bloom"] = 5,
+}
+
+local rarityWords = {
+	common = 1,
+	uncommon = 2,
+	rare = 3,
+	legendary = 4,
+	mythic = 5,
+	divine = 6,
+	prismatic = 7,
+}
+
+local mutationValues = {
+	wet = 1,
+	chilled = 2,
+	frozen = 3,
+	shocked = 4,
+	golden = 6,
+	gold = 6,
+	rainbow = 10,
+	celestial = 12,
+}
+
 local state = {
 	fruitCollector = false,
+	collectTeleport = true,
 	seedPlacer = false,
 	autoSell = false,
 	autoBuySeeds = false,
+	seedShopEnabled = true,
 	autoBuyGear = false,
+	gearShopEnabled = true,
 	autoCollectRainbowSeeds = false,
 	autoBuyPets = false,
 	performanceMode = false,
@@ -75,6 +129,8 @@ local state = {
 local selectedSeeds = {
 	Carrot = true,
 }
+
+local blacklistedSeeds = {}
 
 local gearNames = {
 	"Common Watering Can",
@@ -141,6 +197,24 @@ local visualPetVariants = {
 }
 
 local statusValue
+local statsLabels = {}
+
+local stats = {
+	fruitTargetsChecked = 0,
+	fruitCollected = 0,
+	collectSkippedFull = 0,
+	collectSkippedRange = 0,
+	seedsPlanted = 0,
+	seedAttempts = 0,
+	seedsSkippedLimit = 0,
+	seedsSkippedBlacklist = 0,
+	seedsBought = 0,
+	gearBought = 0,
+	petsBought = 0,
+	inventoryItems = 0,
+	inventoryCapacity = CONFIG.maxInventoryItems,
+	inventoryFull = false,
+}
 
 local function setStatus(message)
 	state.lastStatus = tostring(message)
@@ -552,6 +626,175 @@ local function treeTextMatches(instance, terms, maxAncestors)
 	return false
 end
 
+local function getToolContainers()
+	return {
+		getCharacter(),
+		localPlayer:FindFirstChildOfClass("Backpack"),
+	}
+end
+
+local function countInventoryTools()
+	local count = 0
+	for _, container in ipairs(getToolContainers()) do
+		if container then
+			for _, item in ipairs(container:GetChildren()) do
+				if item:IsA("Tool") then
+					count += 1
+				end
+			end
+		end
+	end
+	return count
+end
+
+local function guiShowsInventoryFull()
+	for _, descendant in ipairs(playerGui:GetDescendants()) do
+		if descendant:IsA("TextLabel") or descendant:IsA("TextButton") or descendant:IsA("TextBox") then
+			local ok, visible = pcall(function()
+				return descendant.Visible
+			end)
+			if ok and visible and textMatches(descendant, { "inventory full", "backpack full", "bag full", "storage full" }) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function refreshInventoryStats()
+	local count = countInventoryTools()
+	local capacity = CONFIG.maxInventoryItems
+	local full = count >= capacity or guiShowsInventoryFull()
+
+	stats.inventoryItems = count
+	stats.inventoryCapacity = capacity
+	stats.inventoryFull = full
+
+	return full, count, capacity
+end
+
+local function updateStatsUI()
+	for key, label in pairs(statsLabels) do
+		if label and label.Parent then
+			if key == "inventory" then
+				label.Text = ("Inventory: %d/%d%s"):format(stats.inventoryItems, stats.inventoryCapacity, stats.inventoryFull and " FULL" or "")
+			elseif key == "fruit" then
+				label.Text = ("Fruit: %d collected, %d checked"):format(stats.fruitCollected, stats.fruitTargetsChecked)
+			elseif key == "seed" then
+				label.Text = ("Seeds: %d planted, %d remote try(s)"):format(stats.seedsPlanted, stats.seedAttempts)
+			elseif key == "shop" then
+				label.Text = ("Shop: %d seed buy(s), %d gear buy(s), %d pet buy(s)"):format(stats.seedsBought, stats.gearBought, stats.petsBought)
+			elseif key == "skips" then
+				label.Text = ("Skips: %d full, %d range, %d limit, %d avoid"):format(stats.collectSkippedFull, stats.collectSkippedRange, stats.seedsSkippedLimit, stats.seedsSkippedBlacklist)
+			end
+		end
+	end
+end
+
+local function getSeedRarity(seedName)
+	return seedRarity[seedName] or 1
+end
+
+local function getSortedSeedList(list)
+	table.sort(list, function(left, right)
+		local leftRarity = getSeedRarity(left)
+		local rightRarity = getSeedRarity(right)
+		if leftRarity ~= rightRarity then
+			return leftRarity > rightRarity
+		end
+		return left < right
+	end)
+	return list
+end
+
+local function getInstanceTextBlob(instance, maxAncestors)
+	local parts = {}
+	local current = instance
+	local checked = 0
+
+	while current and current ~= workspace and checked <= (maxAncestors or 4) do
+		table.insert(parts, safeText(current.Name))
+		if current:IsA("ProximityPrompt") then
+			table.insert(parts, safeText(current.ActionText))
+			table.insert(parts, safeText(current.ObjectText))
+		end
+		pcall(function()
+			for name, value in pairs(current:GetAttributes()) do
+				table.insert(parts, safeText(name))
+				table.insert(parts, safeText(value))
+			end
+		end)
+		for _, childName in ipairs({ "Variant", "Mutation", "Mutations", "Rarity", "Weight" }) do
+			local child = current:FindFirstChild(childName)
+			if child and child:IsA("ValueBase") then
+				table.insert(parts, childName)
+				table.insert(parts, safeText(child.Value))
+			end
+		end
+		current = current.Parent
+		checked += 1
+	end
+
+	return string.lower(table.concat(parts, " "))
+end
+
+local function getFruitWeight(instance)
+	local blob = getInstanceTextBlob(instance, 5)
+	local weight = tonumber(string.match(blob, "([%d%.]+)%s*kg"))
+		or tonumber(string.match(blob, "([%d%.]+)%s*g"))
+		or tonumber(string.match(blob, "([%d%.]+)%s*lb"))
+		or 0
+
+	if string.find(blob, "kg", 1, true) then
+		weight *= 1000
+	elseif string.find(blob, "lb", 1, true) then
+		weight *= 453.592
+	end
+
+	return weight
+end
+
+local function getFruitRarity(instance)
+	local blob = getInstanceTextBlob(instance, 5)
+	local best = 0
+
+	for word, value in pairs(rarityWords) do
+		if string.find(blob, word, 1, true) then
+			best = math.max(best, value)
+		end
+	end
+
+	for seedName, value in pairs(seedRarity) do
+		if string.find(blob, string.lower(seedName), 1, true) then
+			best = math.max(best, value)
+		end
+	end
+
+	return best
+end
+
+local function getFruitMutationValue(instance)
+	local blob = getInstanceTextBlob(instance, 5)
+	local value = 0
+
+	for word, mutationValue in pairs(mutationValues) do
+		if string.find(blob, word, 1, true) then
+			value += mutationValue
+		end
+	end
+
+	return value
+end
+
+local function getPromptDistance(prompt)
+	local root = getRoot()
+	local part = getPromptPart and getPromptPart(prompt)
+	if not root or not part then
+		return math.huge
+	end
+	return (root.Position - part.Position).Magnitude
+end
+
 local function isHarvestPrompt(prompt)
 	if not prompt or not prompt:IsA("ProximityPrompt") then
 		return false
@@ -580,12 +823,17 @@ end
 
 local function collectPrompt(prompt)
 	local part = getPromptPart and getPromptPart(prompt)
-	if part and touchPart then
+	if part and not state.collectTeleport and getPromptDistance(prompt) > (prompt.MaxActivationDistance or 10) then
+		stats.collectSkippedRange += 1
+		return false
+	end
+
+	if part and touchPart and state.collectTeleport then
 		touchPart(part)
 		task.wait(0.03)
 	end
 
-	local prompted = triggerPrompt(prompt)
+	local prompted = triggerPrompt(prompt, true)
 	local target = getCollectFruitTarget(prompt)
 	local packeted = target ~= nil and sendPacket("CollectFruit", target)
 
@@ -593,8 +841,15 @@ local function collectPrompt(prompt)
 end
 
 local function getFruitPriority(instance)
+	local weight = getFruitWeight(instance)
+	local rarity = getFruitRarity(instance)
+	local mutation = getFruitMutationValue(instance)
 	local haystack = string.lower(getObjectPath(instance))
 	local priority = 0
+
+	priority += weight * 1000000
+	priority += rarity * 10000
+	priority += mutation * 100
 
 	if string.find(haystack, "rainbow", 1, true) then
 		priority += 10000
@@ -615,9 +870,9 @@ local function getFruitPriority(instance)
 	return priority
 end
 
-function triggerPrompt(prompt)
+function triggerPrompt(prompt, skipTouch)
 	local part = getPromptPart and getPromptPart(prompt)
-	if part and touchPart then
+	if part and touchPart and not skipTouch then
 		touchPart(part)
 		task.wait(0.03)
 	end
@@ -683,6 +938,14 @@ local function activateButton(button)
 end
 
 local function collectFruit()
+	local inventoryFull = refreshInventoryStats()
+	if inventoryFull then
+		stats.collectSkippedFull += 1
+		updateStatsUI()
+		setStatus(("Fruit collector: inventory full (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
+		return
+	end
+
 	local fired = 0
 	local prompts = {}
 	local roots = getOwnGardenRoots()
@@ -707,10 +970,14 @@ local function collectFruit()
 	for _, prompt in ipairs(prompts) do
 		if collectPrompt(prompt) then
 			fired += 1
+			stats.fruitCollected += 1
 			task.wait(0.03)
 		end
 	end
 
+	stats.fruitTargetsChecked += #prompts
+	refreshInventoryStats()
+	updateStatsUI()
 	setStatus(("Fruit collector: %d target(s) checked"):format(fired))
 end
 
@@ -740,16 +1007,49 @@ local function getSelectedSeedList()
 	local selected = {}
 
 	for _, seedName in ipairs(seedNames) do
-		if selectedSeeds[seedName] then
+		if selectedSeeds[seedName] and not blacklistedSeeds[seedName] then
 			table.insert(selected, seedName)
 		end
 	end
 
-	if #selected == 0 then
+	if #selected == 0 and not blacklistedSeeds[CONFIG.selectedSeed] then
 		table.insert(selected, CONFIG.selectedSeed)
 	end
 
-	return selected
+	return getSortedSeedList(selected)
+end
+
+local function countPlacedSeed(seedName)
+	local count = 0
+	local needle = string.lower(seedName)
+
+	for _, root in ipairs(getOwnGardenRoots()) do
+		for _, descendant in ipairs(getCachedDescendants("seedCount" .. seedName, root)) do
+			if descendant:IsA("Model") and string.find(string.lower(descendant.Name), needle, 1, true) then
+				count += 1
+			end
+		end
+	end
+
+	return count
+end
+
+local function canPlaceSeed(seedName)
+	if blacklistedSeeds[seedName] then
+		stats.seedsSkippedBlacklist += 1
+		return false, "avoid"
+	end
+
+	if selectedSeeds[seedName] then
+		return true
+	end
+
+	if getSeedRarity(seedName) <= 3 and countPlacedSeed(seedName) >= CONFIG.lowRaritySeedLimit then
+		stats.seedsSkippedLimit += 1
+		return false, "limit"
+	end
+
+	return true
 end
 
 local function getSeedPlantPosition(index)
@@ -1042,6 +1342,14 @@ local function purchaseSeedRemote(seedName)
 end
 
 local function autoCollectRainbowSeeds()
+	local inventoryFull = refreshInventoryStats()
+	if inventoryFull then
+		stats.collectSkippedFull += 1
+		updateStatsUI()
+		setStatus(("Gold/rainbow seeds: inventory full (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
+		return
+	end
+
 	local checked = 0
 	local roots = { getMap(), getGardens() }
 
@@ -1077,6 +1385,8 @@ local function autoCollectRainbowSeeds()
 		end
 	end
 
+	refreshInventoryStats()
+	updateStatsUI()
 	setStatus(("Gold/rainbow seeds: %d target(s) checked"):format(checked))
 end
 
@@ -1137,6 +1447,15 @@ local function plantSeed()
 	local missing = 0
 
 	for index, seedName in ipairs(getSelectedSeedList()) do
+		local canPlace, reason = canPlaceSeed(seedName)
+		if not canPlace then
+			missing += 1
+			if reason == "avoid" then
+				task.wait(0.02)
+			end
+			continue
+		end
+
 		local tool = getEquippedSeedTool(seedName)
 		if tool then
 			local position = getSeedPlantPosition(index)
@@ -1154,6 +1473,11 @@ local function plantSeed()
 			missing += 1
 		end
 	end
+
+	stats.seedsPlanted += planted
+	stats.seedAttempts += attempts
+	refreshInventoryStats()
+	updateStatsUI()
 
 	if planted > 0 then
 		setStatus(("Seed placer: %d seed(s), %d remote try(s)"):format(planted, attempts))
@@ -1261,6 +1585,11 @@ local function buyOneSeed(seedName)
 end
 
 local function buySeed()
+	if not state.seedShopEnabled then
+		setStatus("Auto buy: seed shop disabled")
+		return
+	end
+
 	local bought = 0
 	local lastMessage = "Auto buy: no seeds selected"
 
@@ -1274,6 +1603,9 @@ local function buySeed()
 	end
 
 	if bought > 0 then
+		stats.seedsBought += bought
+		refreshInventoryStats()
+		updateStatsUI()
 		setStatus(("Auto buy: tried %d selected seed(s)"):format(bought))
 	else
 		setStatus(lastMessage)
@@ -1320,6 +1652,11 @@ local function buyOneGear(gearName)
 end
 
 local function buyGear()
+	if not state.gearShopEnabled then
+		setStatus("Auto gear: gear shop disabled")
+		return
+	end
+
 	local bought = 0
 	local lastMessage = "Auto gear: no gear selected"
 
@@ -1333,6 +1670,9 @@ local function buyGear()
 	end
 
 	if bought > 0 then
+		stats.gearBought += bought
+		refreshInventoryStats()
+		updateStatsUI()
 		setStatus(("Auto gear: tried %d selected item(s)"):format(bought))
 	else
 		setStatus(lastMessage)
@@ -1373,6 +1713,9 @@ local function buyPets()
 	end
 
 	if bought > 0 then
+		stats.petsBought += bought
+		refreshInventoryStats()
+		updateStatsUI()
 		setStatus(("Auto pets: tried %d selected pet(s)"):format(bought))
 	else
 		setStatus(lastMessage)
@@ -2442,13 +2785,14 @@ showPetInfo = function(petName, variant, icon)
 end
 
 local function makeToggle(label, key, order)
+	local enabled = state[key] == true
 	local button = make("TextButton", {
 		Name = key,
 		AutoButtonColor = false,
-		BackgroundColor3 = Color3.fromRGB(34, 41, 42),
+		BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(34, 41, 42),
 		BorderSizePixel = 0,
 		Font = Enum.Font.GothamSemibold,
-		Text = label .. ": OFF",
+		Text = ("%s: %s"):format(label, enabled and "ON" or "OFF"),
 		TextColor3 = Color3.fromRGB(235, 244, 233),
 		TextSize = 14,
 		Size = UDim2.new(1, 0, 0, 38),
@@ -2516,13 +2860,71 @@ local function registerVisualControl(control)
 end
 
 makeToggle("Collect", "fruitCollector", 1)
-makeToggle("Plant", "seedPlacer", 2)
-makeToggle("Sell", "autoSell", 3)
-makeToggle("Seeds", "autoBuySeeds", 4)
-makeToggle("Gear", "autoBuyGear", 5)
-makeToggle("Drops", "autoCollectRainbowSeeds", 6)
-makeToggle("Pets", "autoBuyPets", 7)
-makeToggle("FPS", "performanceMode", 8)
+makeToggle("Teleport", "collectTeleport", 2)
+makeToggle("Plant", "seedPlacer", 3)
+makeToggle("Sell", "autoSell", 4)
+makeToggle("Seeds", "autoBuySeeds", 5)
+makeToggle("Seed shop", "seedShopEnabled", 6)
+makeToggle("Gear", "autoBuyGear", 7)
+makeToggle("Gear shop", "gearShopEnabled", 8)
+makeToggle("Drops", "autoCollectRainbowSeeds", 9)
+makeToggle("Pets", "autoBuyPets", 10)
+makeToggle("FPS", "performanceMode", 11)
+
+local statsTitle = make("TextLabel", {
+	Name = "StatsTitle",
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold,
+	Text = "Stats",
+	TextColor3 = Color3.fromRGB(221, 236, 216),
+	TextSize = 13,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Size = UDim2.new(1, 0, 0, 18),
+	LayoutOrder = 12,
+}, content)
+
+local statsFrame = make("Frame", {
+	Name = "Stats",
+	BackgroundColor3 = Color3.fromRGB(14, 18, 19),
+	BorderSizePixel = 0,
+	Size = UDim2.new(1, 0, 0, 112),
+	LayoutOrder = 13,
+}, content)
+make("UICorner", { CornerRadius = UDim.new(0, 6) }, statsFrame)
+make("UIPadding", {
+	PaddingTop = UDim.new(0, 8),
+	PaddingBottom = UDim.new(0, 8),
+	PaddingLeft = UDim.new(0, 10),
+	PaddingRight = UDim.new(0, 10),
+}, statsFrame)
+make("UIListLayout", {
+	Padding = UDim.new(0, 4),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, statsFrame)
+
+local function makeStatsLabel(key, order)
+	local label = make("TextLabel", {
+		Name = key,
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham,
+		Text = "",
+		TextColor3 = Color3.fromRGB(201, 219, 202),
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Size = UDim2.new(1, 0, 0, 16),
+		LayoutOrder = order,
+	}, statsFrame)
+	statsLabels[key] = label
+	return label
+end
+
+makeStatsLabel("inventory", 1)
+makeStatsLabel("fruit", 2)
+makeStatsLabel("seed", 3)
+makeStatsLabel("shop", 4)
+makeStatsLabel("skips", 5)
+refreshInventoryStats()
+updateStatsUI()
 
 visualControlsToggle = make("TextButton", {
 	Name = "VisualControlsToggle",
@@ -2534,7 +2936,7 @@ visualControlsToggle = make("TextButton", {
 	TextColor3 = Color3.fromRGB(235, 244, 233),
 	TextSize = 14,
 	Size = UDim2.new(1, 0, 0, 38),
-	LayoutOrder = 9,
+	LayoutOrder = 14,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, visualControlsToggle)
 visualControlsToggle.Activated:Connect(function()
@@ -2552,7 +2954,7 @@ local selectedSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 10,
+	LayoutOrder = 15,
 }, content)
 
 local seedRow = make("ScrollingFrame", {
@@ -2563,7 +2965,7 @@ local seedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 92),
-	LayoutOrder = 11,
+	LayoutOrder = 16,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -2574,6 +2976,39 @@ make("UIGridLayout", {
 local seedLayout = seedRow:FindFirstChildOfClass("UIGridLayout")
 local seedButtons = {}
 local seedButtonCount = 0
+local makeAvoidSeedButton
+
+local avoidSeedLabel = make("TextLabel", {
+	Name = "AvoidSeedLabel",
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold,
+	Text = "Seeds to avoid",
+	TextColor3 = Color3.fromRGB(221, 236, 216),
+	TextSize = 13,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Size = UDim2.new(1, 0, 0, 18),
+	LayoutOrder = 17,
+}, content)
+
+local avoidSeedRow = make("ScrollingFrame", {
+	Name = "AvoidSeedSelector",
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	CanvasSize = UDim2.fromOffset(0, 0),
+	ScrollBarThickness = 4,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
+	Size = UDim2.new(1, 0, 0, 92),
+	LayoutOrder = 18,
+}, content)
+make("UIGridLayout", {
+	CellPadding = UDim2.fromOffset(6, 6),
+	CellSize = UDim2.fromOffset(118, 28),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, avoidSeedRow)
+
+local avoidSeedLayout = avoidSeedRow:FindFirstChildOfClass("UIGridLayout")
+local avoidSeedButtons = {}
+local avoidSeedButtonCount = 0
 
 local function refreshSeedButton(seedName)
 	local button = seedButtons[seedName]
@@ -2624,6 +3059,59 @@ local function makeSeedButton(seedName)
 	end)
 
 	refreshSeedCanvas()
+	if makeAvoidSeedButton then
+		makeAvoidSeedButton(seedName)
+	end
+end
+
+local function refreshAvoidSeedButton(seedName)
+	local button = avoidSeedButtons[seedName]
+	if not button then
+		return
+	end
+
+	local enabled = blacklistedSeeds[seedName] == true
+	button.Text = (enabled and "[x] " or "[ ] ") .. seedName
+	button.BackgroundColor3 = enabled and Color3.fromRGB(122, 65, 50) or Color3.fromRGB(52, 60, 54)
+end
+
+local function refreshAvoidSeedCanvas()
+	local rows = math.ceil(#seedNames / 2)
+	avoidSeedRow.CanvasSize = UDim2.fromOffset(0, rows * 34)
+end
+
+makeAvoidSeedButton = function(seedName)
+	if avoidSeedButtons[seedName] then
+		return
+	end
+
+	avoidSeedButtonCount += 1
+
+	local button = make("TextButton", {
+		Name = seedName,
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = seedName,
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 12,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.fromOffset(118, 28),
+		LayoutOrder = avoidSeedButtonCount,
+	}, avoidSeedRow)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
+
+	avoidSeedButtons[seedName] = button
+	refreshAvoidSeedButton(seedName)
+
+	button.Activated:Connect(function()
+		blacklistedSeeds[seedName] = not blacklistedSeeds[seedName]
+		refreshAvoidSeedButton(seedName)
+		setStatus((blacklistedSeeds[seedName] and "Avoiding " or "Allowing ") .. seedName)
+	end)
+
+	refreshAvoidSeedCanvas()
 end
 
 local function scanSeedShopNames()
@@ -2651,7 +3139,11 @@ end
 if seedLayout then
 	seedLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshSeedCanvas)
 end
+if avoidSeedLayout then
+	avoidSeedLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshAvoidSeedCanvas)
+end
 refreshSeedCanvas()
+refreshAvoidSeedCanvas()
 scanSeedShopNames()
 
 playerGui.ChildAdded:Connect(function(child)
@@ -2670,7 +3162,7 @@ local selectedGearLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 12,
+	LayoutOrder = 19,
 }, content)
 
 local gearRow = make("ScrollingFrame", {
@@ -2681,7 +3173,7 @@ local gearRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 92),
-	LayoutOrder = 13,
+	LayoutOrder = 20,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -2748,7 +3240,7 @@ local selectedPetLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 14,
+	LayoutOrder = 21,
 }, content)
 
 local petRow = make("ScrollingFrame", {
@@ -2759,7 +3251,7 @@ local petRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 92),
-	LayoutOrder = 15,
+	LayoutOrder = 22,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -2839,7 +3331,7 @@ local selectedVisualPetLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 16,
+	LayoutOrder = 23,
 }, content)
 registerVisualControl(selectedVisualPetLabel)
 
@@ -2851,7 +3343,7 @@ local visualPetRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 92),
-	LayoutOrder = 17,
+	LayoutOrder = 24,
 }, content)
 registerVisualControl(visualPetRow)
 make("UIGridLayout", {
@@ -2936,7 +3428,7 @@ local selectedVisualVariantLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 18,
+	LayoutOrder = 25,
 }, content)
 registerVisualControl(selectedVisualVariantLabel)
 
@@ -2948,7 +3440,7 @@ local variantRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 70),
-	LayoutOrder = 19,
+	LayoutOrder = 26,
 }, content)
 registerVisualControl(variantRow)
 local variantLayout = make("UIGridLayout", {
@@ -3027,7 +3519,7 @@ local visualPetAmountBox = make("TextBox", {
 	TextColor3 = Color3.fromRGB(242, 247, 239),
 	TextSize = 13,
 	Size = UDim2.new(1, 0, 0, 34),
-	LayoutOrder = 20,
+	LayoutOrder = 27,
 }, content)
 registerVisualControl(visualPetAmountBox)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, visualPetAmountBox)
@@ -3073,8 +3565,8 @@ if gearImages then
 	end)
 end
 
-registerVisualControl(makeActionButton("Spawn", 21, spawnVisualPets))
-registerVisualControl(makeActionButton("Clear", 22, clearVisualPets))
+registerVisualControl(makeActionButton("Spawn", 28, spawnVisualPets))
+registerVisualControl(makeActionButton("Clear", 29, clearVisualPets))
 refreshVisualControlsVisibility()
 
 local dragStart
@@ -3110,6 +3602,7 @@ local timers = {
 	autoBuyGear = 0,
 	autoCollectRainbowSeeds = 0,
 	autoBuyPets = 0,
+	stats = 0,
 }
 
 local running = {}
@@ -3137,6 +3630,13 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	timers.autoBuyGear += deltaTime
 	timers.autoCollectRainbowSeeds += deltaTime
 	timers.autoBuyPets += deltaTime
+	timers.stats += deltaTime
+
+	if timers.stats >= 1 then
+		timers.stats = 0
+		refreshInventoryStats()
+		updateStatsUI()
+	end
 
 	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
 		timers.fruitCollector = 0
