@@ -38,8 +38,9 @@ local CONFIG = {
 	seedCountCacheRefreshInterval = 20.0,
 	maxSeedBuyPerTick = 6,
 	seedBuyRemoteRepeats = 4,
-	shovelInterval = 0.2,
-	maxShovelPerTick = 20,
+	shovelInterval = 0.35,
+	shovelHoldDuration = 2.8,
+	maxShovelPerTick = 3,
 	maxDropCollectPerTick = 8,
 	maxDropScanPerRoot = 2500,
 	maxInventoryItems = 200,
@@ -3485,7 +3486,7 @@ function getShovelPrompt(target)
 	return nil
 end
 
-function aimAndClickPart(part)
+function aimAndHoldPart(part, holdDuration, tool)
 	if not part or not part:IsA("BasePart") then
 		return false
 	end
@@ -3511,7 +3512,16 @@ function aimAndClickPart(part)
 		pcall(function()
 			virtualInputManager:SendMouseMoveEvent(viewportPoint.X, viewportPoint.Y, game)
 			virtualInputManager:SendMouseButtonEvent(viewportPoint.X, viewportPoint.Y, 0, true, game, 0)
-			task.wait(0.04)
+			local startedAt = os.clock()
+			while os.clock() - startedAt < (holdDuration or CONFIG.shovelHoldDuration) do
+				if tool and tool.Parent then
+					pcall(function()
+						tool:Activate()
+					end)
+				end
+				virtualInputManager:SendMouseMoveEvent(viewportPoint.X, viewportPoint.Y, game)
+				task.wait(0.18)
+			end
 			virtualInputManager:SendMouseButtonEvent(viewportPoint.X, viewportPoint.Y, 0, false, game, 0)
 		end)
 		return true
@@ -3553,7 +3563,7 @@ function shovelPlantTarget(plant)
 	end
 
 	if part then
-		fired = aimAndClickPart(part) or fired
+		fired = aimAndHoldPart(part, CONFIG.shovelHoldDuration, shovelTool) or fired
 	end
 
 	for _, packetName in ipairs({
@@ -3589,11 +3599,11 @@ function shovelPlantTarget(plant)
 	end
 
 	if part then
-		fired = aimAndClickPart(part) or fired
+		fired = aimAndHoldPart(part, math.max(CONFIG.shovelHoldDuration * 0.35, 0.8), shovelTool) or fired
 		touchPart(part)
 	end
 
-	task.wait(0.18)
+	task.wait(0.12)
 	return fired or not plant.Parent or plant.Parent ~= beforeParent or not plant:IsDescendantOf(workspace)
 end
 
