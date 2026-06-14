@@ -899,6 +899,26 @@ local function addUniqueInstance(list, instance)
 	return true
 end
 
+local function collectNamedDescendantRoots(root, names, results, limit)
+	if not root then
+		return
+	end
+
+	local wanted = {}
+	for _, name in ipairs(names) do
+		wanted[string.lower(name)] = true
+	end
+
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if wanted[string.lower(descendant.Name)] then
+			addUniqueInstance(results, descendant)
+			if #results >= (limit or 8) then
+				return
+			end
+		end
+	end
+end
+
 local function getOwnGardenRoots()
 	local now = os.clock()
 	if now - ownGardenCache.checkedAt < 5 and #ownGardenCache.roots > 0 then
@@ -919,11 +939,18 @@ local function getOwnGardenRoots()
 		end
 
 		local added = false
-		for _, name in ipairs({ "Plants", "Fruits", "Fruit", "Crops", "Harvest", "Harvests", "Drops" }) do
+		local rootNames = { "Plants", "Fruits", "Fruit", "Crops", "Harvest", "Harvests", "Drops" }
+		for _, name in ipairs(rootNames) do
 			local child = plot:FindFirstChild(name)
 			if child then
 				added = addUniqueInstance(roots, child) or added
 			end
+		end
+
+		if not added then
+			local before = #roots
+			collectNamedDescendantRoots(plot, rootNames, roots, 10)
+			added = #roots > before
 		end
 
 		if not added then
@@ -1400,9 +1427,6 @@ local function collectPrompt(prompt)
 
 	local target = getCollectFruitTarget(prompt)
 	local packeted = target ~= nil and sendPacket("CollectFruit", target)
-	if packeted then
-		return true
-	end
 
 	if part and state.collectTeleport then
 		local model = prompt and prompt:FindFirstAncestorWhichIsA("Model")
@@ -1419,6 +1443,26 @@ local function collectPrompt(prompt)
 	return prompted or packeted
 end
 
+local function getHarvestPromptInTarget(target)
+	if not target then
+		return nil
+	end
+
+	if target:IsA("ProximityPrompt") and isUsableHarvestPrompt(target) then
+		return target
+	end
+
+	if target:IsA("Model") or target:IsA("BasePart") or target:IsA("Folder") then
+		for _, descendant in ipairs(target:GetDescendants()) do
+			if isUsableHarvestPrompt(descendant) then
+				return descendant
+			end
+		end
+	end
+
+	return nil
+end
+
 local function collectFruitTarget(target)
 	if not target then
 		return false
@@ -1428,9 +1472,6 @@ local function collectFruitTarget(target)
 		or sendPacket("HarvestFruit", target)
 		or sendPacket("Collect", target)
 		or sendPacket("Harvest", target)
-	if sent then
-		return true
-	end
 
 	local part = getTargetPart(target)
 	if part and state.collectTeleport then
@@ -1448,6 +1489,9 @@ local function collectFruitTarget(target)
 		end
 	end
 
+	local prompt = getHarvestPromptInTarget(target)
+	local prompted = prompt and collectPrompt(prompt) or false
+
 	sent = sendPacket("CollectFruit", target)
 		or sendPacket("HarvestFruit", target)
 		or sendPacket("Collect", target)
@@ -1457,7 +1501,7 @@ local function collectFruitTarget(target)
 		sent = touchPart(part)
 	end
 
-	return sent
+	return prompted or sent
 end
 
 local function getFruitPriority(instance)
@@ -1626,6 +1670,13 @@ local function collectFruit()
 		end
 	end
 
+	if #targets == 0 then
+		stats.fruitTargetsChecked += 0
+		updateStatsUI()
+		setStatus(("Fruit collector: no harvest targets found (%d root(s))"):format(#roots))
+		return
+	end
+
 	table.sort(targets, function(left, right)
 		return left.priority > right.priority
 	end)
@@ -1649,7 +1700,11 @@ local function collectFruit()
 	stats.fruitTargetsChecked += #targets
 	refreshInventoryStats()
 	updateStatsUI()
-	setStatus(("Fruit collector: collected %d/%d target(s)"):format(fired, #targets))
+	if fired == 0 then
+		setStatus(("Fruit collector: found %d target(s), failed to trigger"):format(#targets))
+	else
+		setStatus(("Fruit collector: collected %d/%d target(s)"):format(fired, #targets))
+	end
 end
 
 local function getEquippedSeedTool(seedName)
