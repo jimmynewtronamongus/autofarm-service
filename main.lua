@@ -36,54 +36,7 @@ local CONFIG = {
 
 local seedNames = {}
 
-local seedRarity = {
-	Carrot = 1,
-	Strawberry = 1,
-	Blueberry = 1,
-	Tulip = 1,
-	Tomato = 2,
-	Apple = 2,
-	Bamboo = 2,
-	Corn = 2,
-	Cactus = 2,
-	Banana = 3,
-	Acorn = 3,
-	Grape = 3,
-	Cherry = 3,
-	["Dragon's Breath"] = 4,
-	["Dragon Fruit"] = 4,
-	Mushroom = 4,
-	Sunflower = 4,
-	Coconut = 4,
-	["Green Bean"] = 4,
-	Mango = 4,
-	Pineapple = 4,
-	Pomegranate = 4,
-	["Poison Apple"] = 5,
-	["Venus Fly Trap"] = 5,
-	["Moon Bloom"] = 5,
-}
-
-local rarityWords = {
-	common = 1,
-	uncommon = 2,
-	rare = 3,
-	legendary = 4,
-	mythic = 5,
-	divine = 6,
-	prismatic = 7,
-}
-
-local mutationValues = {
-	wet = 1,
-	chilled = 2,
-	frozen = 3,
-	shocked = 4,
-	golden = 6,
-	gold = 6,
-	rainbow = 10,
-	celestial = 12,
-}
+local seedPriority = {}
 
 local state = {
 	fruitCollector = false,
@@ -127,11 +80,6 @@ local visualVariantWords = {
 
 local visualPetVariants = {
 	"Normal",
-	"Big",
-	"Huge",
-	"Gold",
-	"Golden",
-	"Rainbow",
 }
 
 local statusValue
@@ -214,6 +162,75 @@ local function getStockItemsFolder(shopName)
 	return shop and shop:FindFirstChild("Items")
 end
 
+local function getNumericFromInstance(instance, keys)
+	if not instance then
+		return nil
+	end
+
+	for _, key in ipairs(keys) do
+		local ok, attribute = pcall(function()
+			return instance:GetAttribute(key)
+		end)
+		local number = ok and tonumber(attribute) or nil
+		if number then
+			return number
+		end
+
+		local child = instance:FindFirstChild(key)
+		if child and child:IsA("ValueBase") then
+			number = tonumber(child.Value)
+			if number then
+				return number
+			end
+		end
+	end
+
+	return nil
+end
+
+local function getSeedMetadataValue(seedName)
+	local keys = { "Rarity", "RarityValue", "Tier", "TierValue", "Priority", "PriorityValue", "Price", "Cost", "Worth" }
+	local items = getStockItemsFolder("SeedShop")
+	local stockItem = items and items:FindFirstChild(seedName)
+	local value = getNumericFromInstance(stockItem, keys)
+	if value then
+		return value
+	end
+
+	for _, path in ipairs({
+		{ "SharedModules", "SeedData" },
+		{ "SharedData", "SeedData" },
+		{ "PlantGenerationModules", "Fruits" },
+		{ "PlantGenerationModules", "Plants" },
+		{ "Assets", "Plants" },
+	}) do
+		local current = ReplicatedStorage
+		for _, part in ipairs(path) do
+			current = current and current:FindFirstChild(part)
+		end
+
+		local instance = current and current:FindFirstChild(seedName)
+		value = getNumericFromInstance(instance, keys)
+		if value then
+			return value
+		end
+
+		if instance and instance:IsA("ModuleScript") then
+			local ok, data = pcall(require, instance)
+			if ok and type(data) == "table" then
+				for _, key in ipairs(keys) do
+					value = tonumber(data[key])
+					if value then
+						return value
+					end
+				end
+			end
+		end
+	end
+
+	return 0
+end
+
 local function refreshNamesFromStock(shopName, targetList)
 	local items = getStockItemsFolder(shopName)
 	if not items then
@@ -223,6 +240,9 @@ local function refreshNamesFromStock(shopName, targetList)
 	for _, item in ipairs(items:GetChildren()) do
 		if not string.find(string.lower(item.Name), "template", 1, true) then
 			addUniqueName(targetList, item.Name)
+			if shopName == "SeedShop" and seedPriority[item.Name] == nil then
+				seedPriority[item.Name] = getSeedMetadataValue(item.Name)
+			end
 		end
 	end
 
@@ -674,7 +694,38 @@ local function updateStatsUI()
 end
 
 local function getSeedRarity(seedName)
-	return seedRarity[seedName] or 1
+	return seedPriority[seedName] or 0
+end
+
+local function readNumericMetadata(instance, keys, maxAncestors)
+	local best = 0
+	local current = instance
+	local checked = 0
+
+	while current and current ~= workspace and checked <= (maxAncestors or 5) do
+		for _, key in ipairs(keys) do
+			local ok, attribute = pcall(function()
+				return current:GetAttribute(key)
+			end)
+			local number = ok and tonumber(attribute) or nil
+			if number then
+				best = math.max(best, number)
+			end
+
+			local child = current:FindFirstChild(key)
+			if child and child:IsA("ValueBase") then
+				number = tonumber(child.Value)
+				if number then
+					best = math.max(best, number)
+				end
+			end
+		end
+
+		current = current.Parent
+		checked += 1
+	end
+
+	return best
 end
 
 local function getSortedSeedList(list)
@@ -737,35 +788,11 @@ local function getFruitWeight(instance)
 end
 
 local function getFruitRarity(instance)
-	local blob = getInstanceTextBlob(instance, 5)
-	local best = 0
-
-	for word, value in pairs(rarityWords) do
-		if string.find(blob, word, 1, true) then
-			best = math.max(best, value)
-		end
-	end
-
-	for seedName, value in pairs(seedRarity) do
-		if string.find(blob, string.lower(seedName), 1, true) then
-			best = math.max(best, value)
-		end
-	end
-
-	return best
+	return readNumericMetadata(instance, { "Rarity", "RarityValue", "Tier", "TierValue", "Priority", "Value" }, 5)
 end
 
 local function getFruitMutationValue(instance)
-	local blob = getInstanceTextBlob(instance, 5)
-	local value = 0
-
-	for word, mutationValue in pairs(mutationValues) do
-		if string.find(blob, word, 1, true) then
-			value += mutationValue
-		end
-	end
-
-	return value
+	return readNumericMetadata(instance, { "MutationValue", "MutationMultiplier", "MutationPrice", "MutationWorth", "VariantValue", "VariantMultiplier" }, 5)
 end
 
 local function getPromptDistance(prompt)
@@ -1029,7 +1056,8 @@ local function canPlaceSeed(seedName)
 		return true
 	end
 
-	if getSeedRarity(seedName) <= 3 and countPlacedSeed(seedName) >= CONFIG.lowRaritySeedLimit then
+	local seedRarityValue = getSeedRarity(seedName)
+	if seedRarityValue > 0 and seedRarityValue <= 3 and countPlacedSeed(seedName) >= CONFIG.lowRaritySeedLimit then
 		stats.seedsSkippedLimit += 1
 		return false, "limit"
 	end
@@ -3142,6 +3170,7 @@ local seedStockItems = getStockItemsFolder("SeedShop")
 if seedStockItems then
 	seedStockItems.ChildAdded:Connect(function(item)
 		addUniqueName(seedNames, item.Name)
+		seedPriority[item.Name] = getSeedMetadataValue(item.Name)
 		table.sort(seedNames)
 		makeSeedButton(item.Name)
 	end)
