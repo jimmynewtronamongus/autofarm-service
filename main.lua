@@ -3703,7 +3703,7 @@ local function spawnVisualPets()
 	setStatus(("Visual pets: equipped %d/%d, %d backpack item(s)"):format(#folder:GetChildren(), CONFIG.maxEquippedVisualPets, toolCount))
 end
 
-local function make(className, properties, parent)
+function make(className, properties, parent)
 	local instance = Instance.new(className)
 	for key, value in pairs(properties or {}) do
 		instance[key] = value
@@ -4992,7 +4992,7 @@ end
 
 buildUI()
 
-local timers = {
+timers = {
 	fruitCollector = 0,
 	seedPlacer = 0,
 	autoSell = 0,
@@ -5006,7 +5006,7 @@ local timers = {
 	lastGuiInventoryRefresh = 0,
 }
 
-local function runGuarded(key, callback)
+function runGuarded(key, callback)
 	if running[key] then
 		return
 	end
