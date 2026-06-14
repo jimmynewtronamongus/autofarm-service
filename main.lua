@@ -66,8 +66,6 @@ local state = {
 
 local selectedSeeds = {}
 
-local blacklistedSeeds = {}
-
 local gearNames = {}
 
 local selectedGears = {}
@@ -157,7 +155,6 @@ local function loadConfig()
 	})
 
 	selectedSeeds = copyMap(decoded.selectedSeeds)
-	blacklistedSeeds = copyMap(decoded.blacklistedSeeds)
 	selectedGears = copyMap(decoded.selectedGears)
 	selectedPets = copyMap(decoded.selectedPets)
 
@@ -199,7 +196,6 @@ saveConfig = function()
 			performanceMode = state.performanceMode,
 		},
 		selectedSeeds = selectedSeeds,
-		blacklistedSeeds = blacklistedSeeds,
 		selectedGears = selectedGears,
 		selectedPets = selectedPets,
 	}
@@ -318,7 +314,6 @@ local stats = {
 	seedsPlanted = 0,
 	seedAttempts = 0,
 	seedsSkippedLimit = 0,
-	seedsSkippedBlacklist = 0,
 	seedsBought = 0,
 	gearBought = 0,
 	petsBought = 0,
@@ -1194,7 +1189,7 @@ local function updateStatsUI()
 			elseif key == "collect" then
 				label.Text = ("Fruit: %d total | %d/min | %d targets scanned"):format(stats.fruitCollected, fruitRate, stats.fruitTargetsChecked)
 			elseif key == "planting" then
-				label.Text = ("Planting: %d placed | %d seed(s) selected | %d avoided"):format(stats.seedsPlanted, countSelected(selectedSeeds), countSelected(blacklistedSeeds))
+				label.Text = ("Planting: %d placed | %d seed(s) selected"):format(stats.seedsPlanted, countSelected(selectedSeeds))
 			elseif key == "shops" then
 				label.Text = ("Bought: %d seeds | %d gear | %d pets"):format(stats.seedsBought, stats.gearBought, stats.petsBought)
 			elseif key == "limits" then
@@ -2060,14 +2055,14 @@ local function getSelectedSeedList()
 	local seen = {}
 
 	for _, seedName in ipairs(seedNames) do
-		if selectedSeeds[seedName] and not blacklistedSeeds[seedName] then
+		if selectedSeeds[seedName] then
 			seen[seedName] = true
 			table.insert(selected, seedName)
 		end
 	end
 
 	for seedName, enabled in pairs(selectedSeeds) do
-		if enabled and not blacklistedSeeds[seedName] and not seen[seedName] then
+		if enabled and not seen[seedName] then
 			addUniqueName(seedNames, seedName)
 			seedPriority[seedName] = seedPriority[seedName] or getSeedMetadataValue(seedName)
 			table.insert(selected, seedName)
@@ -2093,11 +2088,6 @@ local function countPlacedSeed(seedName)
 end
 
 local function canPlaceSeed(seedName)
-	if blacklistedSeeds[seedName] then
-		stats.seedsSkippedBlacklist += 1
-		return false, "avoid"
-	end
-
 	if selectedSeeds[seedName] then
 		return true
 	end
@@ -2777,9 +2767,6 @@ local function plantSeed()
 		local canPlace, reason = canPlaceSeed(seedName)
 		if not canPlace then
 			missing += 1
-			if reason == "avoid" then
-				task.wait(0.02)
-			end
 			continue
 		end
 
@@ -3507,39 +3494,6 @@ make("UIGridLayout", {
 local seedLayout = seedRow:FindFirstChildOfClass("UIGridLayout")
 local seedButtons = {}
 local seedButtonCount = 0
-local makeAvoidSeedButton
-
-local avoidSeedLabel = make("TextLabel", {
-	Name = "AvoidSeedLabel",
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamSemibold,
-	Text = "Seeds to avoid",
-	TextColor3 = Color3.fromRGB(221, 236, 216),
-	TextSize = 13,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 20,
-}, content)
-
-local avoidSeedRow = make("ScrollingFrame", {
-	Name = "AvoidSeedSelector",
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	CanvasSize = UDim2.fromOffset(0, 0),
-	ScrollBarThickness = 4,
-	ScrollingDirection = Enum.ScrollingDirection.Y,
-	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 21,
-}, content)
-make("UIGridLayout", {
-	CellPadding = UDim2.fromOffset(6, 6),
-	CellSize = UDim2.fromOffset(136, 24),
-	SortOrder = Enum.SortOrder.LayoutOrder,
-}, avoidSeedRow)
-
-local avoidSeedLayout = avoidSeedRow:FindFirstChildOfClass("UIGridLayout")
-local avoidSeedButtons = {}
-local avoidSeedButtonCount = 0
 
 local function refreshSeedButton(seedName)
 	local button = seedButtons[seedName]
@@ -3591,60 +3545,6 @@ local function makeSeedButton(seedName)
 	end)
 
 	refreshSeedCanvas()
-	if makeAvoidSeedButton then
-		makeAvoidSeedButton(seedName)
-	end
-end
-
-local function refreshAvoidSeedButton(seedName)
-	local button = avoidSeedButtons[seedName]
-	if not button then
-		return
-	end
-
-	local enabled = blacklistedSeeds[seedName] == true
-	button.Text = (enabled and "[x] " or "[ ] ") .. seedName
-	button.BackgroundColor3 = enabled and Color3.fromRGB(122, 65, 50) or Color3.fromRGB(52, 60, 54)
-end
-
-local function refreshAvoidSeedCanvas()
-	local rows = math.ceil(#seedNames / 2)
-	avoidSeedRow.CanvasSize = UDim2.fromOffset(0, rows * 28)
-end
-
-makeAvoidSeedButton = function(seedName)
-	if avoidSeedButtons[seedName] then
-		return
-	end
-
-	avoidSeedButtonCount += 1
-
-	local button = make("TextButton", {
-		Name = seedName,
-		AutoButtonColor = false,
-		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
-		BorderSizePixel = 0,
-		Font = Enum.Font.GothamSemibold,
-		Text = seedName,
-		TextColor3 = Color3.fromRGB(242, 247, 239),
-		TextSize = 12,
-		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(136, 24),
-		LayoutOrder = avoidSeedButtonCount,
-	}, avoidSeedRow)
-	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
-
-	avoidSeedButtons[seedName] = button
-	refreshAvoidSeedButton(seedName)
-
-	button.Activated:Connect(function()
-		blacklistedSeeds[seedName] = not blacklistedSeeds[seedName]
-		refreshAvoidSeedButton(seedName)
-		saveConfig()
-		setStatus((blacklistedSeeds[seedName] and "Avoiding " or "Allowing ") .. seedName)
-	end)
-
-	refreshAvoidSeedCanvas()
 end
 
 local function scanSeedShopNames()
@@ -3679,11 +3579,7 @@ end
 if seedLayout then
 	seedLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshSeedCanvas)
 end
-if avoidSeedLayout then
-	avoidSeedLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshAvoidSeedCanvas)
-end
 refreshSeedCanvas()
-refreshAvoidSeedCanvas()
 scanSeedShopNames()
 
 local seedStockItems = getStockItemsFolder("SeedShop")
@@ -3722,7 +3618,7 @@ local selectedGearLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 22,
+	LayoutOrder = 20,
 }, content)
 
 local gearRow = make("ScrollingFrame", {
@@ -3733,7 +3629,7 @@ local gearRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 23,
+	LayoutOrder = 21,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -3853,7 +3749,7 @@ local selectedPetLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 24,
+	LayoutOrder = 22,
 }, content)
 
 local petRow = make("ScrollingFrame", {
@@ -3864,7 +3760,7 @@ local petRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 25,
+	LayoutOrder = 23,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
