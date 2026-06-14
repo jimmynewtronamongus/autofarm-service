@@ -146,9 +146,17 @@ local function loadConfig()
 		"webhookUrl",
 	})
 	copyKnownValues(decoded.state, state, {
+		"fruitCollector",
 		"collectTeleport",
+		"seedPlacer",
+		"autoSell",
+		"autoBuySeeds",
 		"seedShopEnabled",
+		"autoBuyGear",
 		"gearShopEnabled",
+		"autoCollectRainbowSeeds",
+		"autoBuyPets",
+		"performanceMode",
 	})
 
 	selectedSeeds = copyMap(decoded.selectedSeeds)
