@@ -64,6 +64,8 @@ local selectedGears = {}
 
 local petNames = {}
 
+local buyPetNames = {}
+
 local selectedPets = {}
 
 local selectedVisualPets = {}
@@ -285,9 +287,6 @@ local function refreshPetNamesFromAssets()
 	end
 
 	table.sort(petNames)
-	if #petNames > 0 and next(selectedPets) == nil then
-		selectedPets[petNames[1]] = true
-	end
 	if #petNames > 0 and next(selectedVisualPets) == nil then
 		selectedVisualPets[petNames[1]] = true
 	end
@@ -519,6 +518,31 @@ end
 local function getWildPetSpawns()
 	local map = getMap()
 	return map and map:FindFirstChild("WildPetSpawns")
+end
+
+local function refreshBuyPetNamesFromWildSpawns()
+	local wildPetSpawns = getWildPetSpawns()
+	if not wildPetSpawns then
+		return
+	end
+
+	for _, descendant in ipairs(wildPetSpawns:GetDescendants()) do
+		local model
+		if descendant:IsA("ProximityPrompt") then
+			model = descendant:FindFirstAncestorWhichIsA("Model")
+		elseif descendant:IsA("Model") and descendant:FindFirstChildWhichIsA("ProximityPrompt", true) then
+			model = descendant
+		end
+
+		if model then
+			addUniqueName(buyPetNames, stripVariantWords(model.Name))
+		end
+	end
+
+	table.sort(buyPetNames)
+	if #buyPetNames > 0 and next(selectedPets) == nil then
+		selectedPets[buyPetNames[1]] = true
+	end
 end
 
 local function valueMatchesLocalPlayer(value)
@@ -1225,7 +1249,7 @@ local function isKnownPetTool(item)
 		parent = parent.Parent
 	end
 
-	if toolNameMatchesList(item, petNames) then
+	if toolNameMatchesList(item, petNames) or toolNameMatchesList(item, buyPetNames) then
 		return true
 	end
 
@@ -1394,7 +1418,7 @@ end
 local function getSelectedPetList()
 	local selected = {}
 
-	for _, petName in ipairs(petNames) do
+	for _, petName in ipairs(buyPetNames) do
 		if selectedPets[petName] then
 			table.insert(selected, petName)
 		end
@@ -3493,7 +3517,7 @@ local function refreshPetButton(petName)
 end
 
 local function refreshPetCanvas()
-	local rows = math.ceil(#petNames / 2)
+	local rows = math.ceil(#buyPetNames / 2)
 	petRow.CanvasSize = UDim2.fromOffset(0, rows * 34)
 end
 
@@ -3532,29 +3556,14 @@ local function makePetButton(petName)
 end
 
 local function scanPetBuyNames()
-	refreshPetNamesFromAssets()
+	refreshBuyPetNamesFromWildSpawns()
 
-	local wildPetSpawns = getWildPetSpawns()
-	if wildPetSpawns then
-		for _, descendant in ipairs(wildPetSpawns:GetDescendants()) do
-			if descendant:IsA("Model") then
-				addUniqueName(petNames, stripVariantWords(descendant.Name))
-			elseif descendant:IsA("ProximityPrompt") then
-				local model = descendant:FindFirstAncestorWhichIsA("Model")
-				if model then
-					addUniqueName(petNames, stripVariantWords(model.Name))
-				end
-			end
-		end
-	end
-
-	table.sort(petNames)
-	for _, petName in ipairs(petNames) do
+	for _, petName in ipairs(buyPetNames) do
 		makePetButton(petName)
 	end
 end
 
-for _, petName in ipairs(petNames) do
+for _, petName in ipairs(buyPetNames) do
 	makePetButton(petName)
 end
 
@@ -3564,24 +3573,46 @@ end
 refreshPetCanvas()
 scanPetBuyNames()
 
-local assetsForPetBuy = ReplicatedStorage:FindFirstChild("Assets")
-local petsFolderForBuy = assetsForPetBuy and assetsForPetBuy:FindFirstChild("Pets")
-if petsFolderForBuy then
-	petsFolderForBuy.ChildAdded:Connect(function(pet)
-		local baseName = stripVariantWords(pet.Name)
-		addUniqueName(petNames, baseName)
-		makePetButton(baseName)
-	end)
-end
-
 local wildPetSpawnsForBuy = getWildPetSpawns()
 if wildPetSpawnsForBuy then
 	wildPetSpawnsForBuy.DescendantAdded:Connect(function(descendant)
-		local model = descendant:IsA("Model") and descendant or descendant:FindFirstAncestorWhichIsA("Model")
+		local model
+		if descendant:IsA("ProximityPrompt") then
+			model = descendant:FindFirstAncestorWhichIsA("Model")
+		elseif descendant:IsA("Model") and descendant:FindFirstChildWhichIsA("ProximityPrompt", true) then
+			model = descendant
+		end
 		if model then
 			local baseName = stripVariantWords(model.Name)
-			addUniqueName(petNames, baseName)
+			addUniqueName(buyPetNames, baseName)
+			table.sort(buyPetNames)
+			if next(selectedPets) == nil then
+				selectedPets[baseName] = true
+			end
 			makePetButton(baseName)
+		end
+	end)
+end
+local mapForPetBuy = getMap()
+if mapForPetBuy then
+	mapForPetBuy.ChildAdded:Connect(function(child)
+		if child.Name == "WildPetSpawns" then
+			task.wait(0.25)
+			scanPetBuyNames()
+			child.DescendantAdded:Connect(function(descendant)
+				local model
+				if descendant:IsA("ProximityPrompt") then
+					model = descendant:FindFirstAncestorWhichIsA("Model")
+				elseif descendant:IsA("Model") and descendant:FindFirstChildWhichIsA("ProximityPrompt", true) then
+					model = descendant
+				end
+				if model then
+					local baseName = stripVariantWords(model.Name)
+					addUniqueName(buyPetNames, baseName)
+					table.sort(buyPetNames)
+					makePetButton(baseName)
+				end
+			end)
 		end
 	end)
 end
