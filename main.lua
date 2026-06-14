@@ -2526,6 +2526,7 @@ local function make(className, properties, parent)
 	return instance
 end
 
+do
 local existing = playerGui:FindFirstChild("GardenAutomationGui")
 if existing then
 	existing:Destroy()
@@ -3593,6 +3594,7 @@ UserInputService.InputChanged:Connect(function(input)
 		panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
 	end
 end)
+end
 
 local timers = {
 	fruitCollector = 0,
