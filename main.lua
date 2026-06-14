@@ -24,6 +24,10 @@ local CONFIG = {
 	rainbowCollectInterval = 2.5,
 	petBuyInterval = 6.0,
 	cacheRefreshInterval = 7.0,
+	inventoryRefreshInterval = 1.5,
+	guiInventoryRefreshInterval = 5.0,
+	maxFruitCollectPerTick = 12,
+	maxFruitScanPerRoot = 180,
 	maxDropCollectPerTick = 8,
 	maxInventoryItems = 200,
 	lowRaritySeedLimit = 10,
@@ -784,11 +788,36 @@ local function guiShowsInventoryFull()
 	return false
 end
 
-local function refreshInventoryStats()
+local inventoryCache = {
+	items = 0,
+	capacity = CONFIG.maxInventoryItems,
+	full = false,
+	guiFull = false,
+	checkedAt = 0,
+	guiCheckedAt = 0,
+}
+
+local function refreshInventoryStats(force)
+	local now = os.clock()
+	if not force and now - inventoryCache.checkedAt < CONFIG.inventoryRefreshInterval then
+		stats.inventoryItems = inventoryCache.items
+		stats.inventoryCapacity = inventoryCache.capacity
+		stats.inventoryFull = inventoryCache.full
+		return stats.inventoryFull, stats.inventoryItems, stats.inventoryCapacity
+	end
+
 	local count = countInventoryTools()
 	local capacity = CONFIG.maxInventoryItems
-	local full = count >= capacity or guiShowsInventoryFull()
+	if force or now - inventoryCache.guiCheckedAt >= CONFIG.guiInventoryRefreshInterval then
+		inventoryCache.guiCheckedAt = now
+		inventoryCache.guiFull = guiShowsInventoryFull()
+	end
+	local full = count >= capacity or inventoryCache.guiFull
 
+	inventoryCache.items = count
+	inventoryCache.capacity = capacity
+	inventoryCache.full = full
+	inventoryCache.checkedAt = now
 	stats.inventoryItems = count
 	stats.inventoryCapacity = capacity
 	stats.inventoryFull = full
@@ -1086,19 +1115,37 @@ local function collectFruit()
 	end
 
 	for index, root in ipairs(roots) do
+		local scanned = 0
 		for _, descendant in ipairs(getCachedDescendants("garden" .. index, root)) do
 			if isHarvestPrompt(descendant) then
-				table.insert(prompts, descendant)
+				table.insert(prompts, {
+					prompt = descendant,
+					priority = getFruitPriority(descendant),
+				})
+				if #prompts >= CONFIG.maxFruitCollectPerTick * 2 then
+					break
+				end
 			end
+			scanned += 1
+			if scanned >= CONFIG.maxFruitScanPerRoot then
+				break
+			end
+		end
+
+		if #prompts >= CONFIG.maxFruitCollectPerTick * 2 then
+			break
 		end
 	end
 
 	table.sort(prompts, function(left, right)
-		return getFruitPriority(left) > getFruitPriority(right)
+		return left.priority > right.priority
 	end)
 
-	for _, prompt in ipairs(prompts) do
-		if collectPrompt(prompt) then
+	for index, entry in ipairs(prompts) do
+		if index > CONFIG.maxFruitCollectPerTick then
+			break
+		end
+		if collectPrompt(entry.prompt) then
 			fired += 1
 			stats.fruitCollected += 1
 			task.wait(0.03)
@@ -1627,6 +1674,29 @@ local function purchaseSeedRemote(seedName)
 	return false
 end
 
+local function looksLikeGoldRainbowDrop(instance)
+	local parts = {}
+	local current = instance
+	local checked = 0
+	while current and current ~= workspace and checked < 4 do
+		table.insert(parts, safeText(current.Name))
+		current = current.Parent
+		checked += 1
+	end
+
+	local text = string.lower(table.concat(parts, " "))
+	local hasValuableWord = string.find(text, "rainbow", 1, true)
+		or string.find(text, "gold", 1, true)
+		or string.find(text, "golden", 1, true)
+	local hasDropWord = string.find(text, "seed", 1, true)
+		or string.find(text, "pack", 1, true)
+		or string.find(text, "drop", 1, true)
+		or string.find(text, "rain", 1, true)
+		or string.find(text, "collect", 1, true)
+
+	return hasValuableWord and hasDropWord
+end
+
 local function autoCollectRainbowSeeds()
 	local inventoryFull = refreshInventoryStats()
 	if inventoryFull then
@@ -1645,6 +1715,10 @@ local function autoCollectRainbowSeeds()
 		for _, descendant in ipairs(getCachedDescendants("rainbow" .. rootIndex, root)) do
 			if #targets >= CONFIG.maxDropCollectPerTick then
 				break
+			end
+
+			if not looksLikeGoldRainbowDrop(descendant) then
+				continue
 			end
 
 			local matchesRainbowSeed = treeTextMatches(descendant, {
@@ -1674,12 +1748,13 @@ local function autoCollectRainbowSeeds()
 		end
 	end
 
+	local root = getRoot()
+	local rootPosition = root and root.Position
 	table.sort(targets, function(left, right)
 		local leftPart = left:IsA("ProximityPrompt") and getPromptPart(left) or left
 		local rightPart = right:IsA("ProximityPrompt") and getPromptPart(right) or right
-		local root = getRoot()
-		local leftDistance = root and leftPart and (root.Position - leftPart.Position).Magnitude or math.huge
-		local rightDistance = root and rightPart and (root.Position - rightPart.Position).Magnitude or math.huge
+		local leftDistance = rootPosition and leftPart and (rootPosition - leftPart.Position).Magnitude or math.huge
+		local rightDistance = rootPosition and rightPart and (rootPosition - rightPart.Position).Magnitude or math.huge
 		return leftDistance < rightDistance
 	end)
 
@@ -4083,6 +4158,9 @@ local timers = {
 	autoCollectRainbowSeeds = 0,
 	autoBuyPets = 0,
 	stats = 0,
+	guiInventoryFull = false,
+	lastInventoryRefresh = 0,
+	lastGuiInventoryRefresh = 0,
 }
 
 local running = {}
@@ -4103,16 +4181,16 @@ local function runGuarded(key, callback)
 end
 
 RunService.Heartbeat:Connect(function(deltaTime)
-	timers.fruitCollector += deltaTime
-	timers.seedPlacer += deltaTime
-	timers.autoSell += deltaTime
-	timers.autoBuySeeds += deltaTime
-	timers.autoBuyGear += deltaTime
-	timers.autoCollectRainbowSeeds += deltaTime
-	timers.autoBuyPets += deltaTime
+	timers.fruitCollector = state.fruitCollector and (timers.fruitCollector + deltaTime) or 0
+	timers.seedPlacer = state.seedPlacer and (timers.seedPlacer + deltaTime) or 0
+	timers.autoSell = state.autoSell and (timers.autoSell + deltaTime) or 0
+	timers.autoBuySeeds = state.autoBuySeeds and (timers.autoBuySeeds + deltaTime) or 0
+	timers.autoBuyGear = state.autoBuyGear and (timers.autoBuyGear + deltaTime) or 0
+	timers.autoCollectRainbowSeeds = state.autoCollectRainbowSeeds and (timers.autoCollectRainbowSeeds + deltaTime) or 0
+	timers.autoBuyPets = state.autoBuyPets and (timers.autoBuyPets + deltaTime) or 0
 	timers.stats += deltaTime
 
-	if timers.stats >= 1 then
+	if timers.stats >= 2.5 then
 		timers.stats = 0
 		refreshInventoryStats()
 		updateStatsUI()
@@ -4153,10 +4231,6 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		runGuarded("autoBuyPets", buyPets)
 	end
 
-	local ok, err = pcall(updateVisualPetBehavior)
-	if not ok then
-		setStatus(("visualPetFollow error: %s"):format(tostring(err)))
-	end
 end)
 
 setStatus("Garden Tools loaded")
