@@ -1226,12 +1226,6 @@ local function isLikelyFruitTarget(instance)
 		return true
 	end
 
-	for _, seedName in ipairs(seedNames) do
-		if string.find(blob, string.lower(seedName), 1, true) then
-			return true
-		end
-	end
-
 	return false
 end
 
@@ -1278,6 +1272,14 @@ local function collectFruitTarget(target)
 		return false
 	end
 
+	local sent = sendPacket("CollectFruit", target)
+		or sendPacket("HarvestFruit", target)
+		or sendPacket("Collect", target)
+		or sendPacket("Harvest", target)
+	if sent then
+		return true
+	end
+
 	local part = getTargetPart(target)
 	if part and state.collectTeleport then
 		local model = target:IsA("Model") and target or target:FindFirstAncestorWhichIsA("Model")
@@ -1294,7 +1296,7 @@ local function collectFruitTarget(target)
 		end
 	end
 
-	local sent = sendPacket("CollectFruit", target)
+	sent = sendPacket("CollectFruit", target)
 		or sendPacket("HarvestFruit", target)
 		or sendPacket("Collect", target)
 		or sendPacket("Harvest", target)
@@ -2192,15 +2194,10 @@ local function plantSeed()
 		return
 	end
 
-	local gardenPosition, moveReason = moveToOwnGarden()
-	if not gardenPosition then
-		setStatus(moveReason == "garden" and "Seed placer: own garden not found" or "Seed placer: character root missing")
-		return
-	end
-
 	local planted = 0
 	local attempts = 0
 	local missing = 0
+	local readySeeds = {}
 
 	for index, seedName in ipairs(getSelectedSeedList()) do
 		local canPlace, reason = canPlaceSeed(seedName)
@@ -2214,13 +2211,36 @@ local function plantSeed()
 
 		local tool = getEquippedSeedTool(seedName)
 		if tool then
+			table.insert(readySeeds, {
+				name = seedName,
+				tool = tool,
+			})
+		else
+			missing += 1
+		end
+	end
+
+	if #readySeeds == 0 then
+		setStatus(("Seed placer: no selected seed tool found (%d missing)"):format(missing))
+		return
+	end
+
+	local gardenPosition, moveReason = moveToOwnGarden()
+	if not gardenPosition then
+		setStatus(moveReason == "garden" and "Seed placer: own garden not found" or "Seed placer: character root missing")
+		return
+	end
+
+	for index, entry in ipairs(readySeeds) do
+		local tool = entry.tool
+		if tool and tool.Parent then
 			local position = getSeedPlantPosition(index, gardenPosition)
 			pcall(function()
 				tool:Activate()
 			end)
 
 			if position then
-				attempts += tryPlantSeedRemote(seedName, position)
+				attempts += tryPlantSeedRemote(entry.name, position)
 			end
 
 			pcall(function()
@@ -2229,8 +2249,6 @@ local function plantSeed()
 
 			planted += 1
 			task.wait(0.025)
-		else
-			missing += 1
 		end
 	end
 
