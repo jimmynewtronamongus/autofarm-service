@@ -3,6 +3,7 @@
 
 local Players = game:GetService("Players")
 local CollectionService = game:GetService("CollectionService")
+local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local StarterGui = game:GetService("StarterGui")
@@ -74,6 +75,155 @@ local buyPetNames = {}
 local selectedPets = {}
 
 local selectedVisualPets = {}
+
+local saveConfig = function() end
+
+local CONFIG_FOLDER = "GardenTools"
+local CONFIG_FILE = CONFIG_FOLDER .. "/config.json"
+
+local function canUseFileConfig()
+	return typeof(readfile) == "function"
+		and typeof(writefile) == "function"
+		and typeof(isfile) == "function"
+end
+
+local function copyMap(source)
+	local target = {}
+	if type(source) ~= "table" then
+		return target
+	end
+
+	for key, value in pairs(source) do
+		if type(key) == "string" and value == true then
+			target[key] = true
+		end
+	end
+
+	return target
+end
+
+local function copyKnownValues(source, destination, keys)
+	if type(source) ~= "table" then
+		return
+	end
+
+	for _, key in ipairs(keys) do
+		if source[key] ~= nil then
+			destination[key] = source[key]
+		end
+	end
+end
+
+local function loadConfig()
+	if not canUseFileConfig() then
+		return false
+	end
+
+	local existsOk, exists = pcall(isfile, CONFIG_FILE)
+	if not existsOk or not exists then
+		return false
+	end
+
+	local ok, decoded = pcall(function()
+		return HttpService:JSONDecode(readfile(CONFIG_FILE))
+	end)
+	if not ok or type(decoded) ~= "table" then
+		return false
+	end
+
+	copyKnownValues(decoded.config, CONFIG, {
+		"collectInterval",
+		"plantInterval",
+		"sellInterval",
+		"buyInterval",
+		"rainbowCollectInterval",
+		"petBuyInterval",
+		"lowRaritySeedLimit",
+		"visualPetAmount",
+		"visualPetVariant",
+		"selectedSeed",
+		"plantRadius",
+	})
+	copyKnownValues(decoded.state, state, {
+		"fruitCollector",
+		"collectTeleport",
+		"seedPlacer",
+		"autoSell",
+		"autoBuySeeds",
+		"seedShopEnabled",
+		"autoBuyGear",
+		"gearShopEnabled",
+		"autoCollectRainbowSeeds",
+		"autoBuyPets",
+		"performanceMode",
+	})
+
+	selectedSeeds = copyMap(decoded.selectedSeeds)
+	blacklistedSeeds = copyMap(decoded.blacklistedSeeds)
+	selectedGears = copyMap(decoded.selectedGears)
+	selectedPets = copyMap(decoded.selectedPets)
+	selectedVisualPets = copyMap(decoded.selectedVisualPets)
+
+	return true
+end
+
+saveConfig = function()
+	if not canUseFileConfig() then
+		return false
+	end
+
+	if typeof(isfolder) == "function" and typeof(makefolder) == "function" and not isfolder(CONFIG_FOLDER) then
+		pcall(makefolder, CONFIG_FOLDER)
+	elseif typeof(makefolder) == "function" then
+		pcall(makefolder, CONFIG_FOLDER)
+	end
+
+	local payload = {
+		version = 1,
+		config = {
+			collectInterval = CONFIG.collectInterval,
+			plantInterval = CONFIG.plantInterval,
+			sellInterval = CONFIG.sellInterval,
+			buyInterval = CONFIG.buyInterval,
+			rainbowCollectInterval = CONFIG.rainbowCollectInterval,
+			petBuyInterval = CONFIG.petBuyInterval,
+			lowRaritySeedLimit = CONFIG.lowRaritySeedLimit,
+			visualPetAmount = CONFIG.visualPetAmount,
+			visualPetVariant = CONFIG.visualPetVariant,
+			selectedSeed = CONFIG.selectedSeed,
+			plantRadius = CONFIG.plantRadius,
+		},
+		state = {
+			fruitCollector = state.fruitCollector,
+			collectTeleport = state.collectTeleport,
+			seedPlacer = state.seedPlacer,
+			autoSell = state.autoSell,
+			autoBuySeeds = state.autoBuySeeds,
+			seedShopEnabled = state.seedShopEnabled,
+			autoBuyGear = state.autoBuyGear,
+			gearShopEnabled = state.gearShopEnabled,
+			autoCollectRainbowSeeds = state.autoCollectRainbowSeeds,
+			autoBuyPets = state.autoBuyPets,
+			performanceMode = state.performanceMode,
+		},
+		selectedSeeds = selectedSeeds,
+		blacklistedSeeds = blacklistedSeeds,
+		selectedGears = selectedGears,
+		selectedPets = selectedPets,
+		selectedVisualPets = selectedVisualPets,
+	}
+
+	local ok, encoded = pcall(function()
+		return HttpService:JSONEncode(payload)
+	end)
+	if not ok then
+		return false
+	end
+
+	return pcall(writefile, CONFIG_FILE, encoded)
+end
+
+local configLoaded = loadConfig()
 
 local visualVariantWords = {
 	"Big",
@@ -305,7 +455,7 @@ end
 
 local function refreshSeedNamesFromStockValues()
 	refreshNamesFromStock("SeedShop", seedNames)
-	if #seedNames > 0 and CONFIG.selectedSeed == "" then
+	if #seedNames > 0 and CONFIG.selectedSeed == "" and not configLoaded then
 		CONFIG.selectedSeed = seedNames[1]
 		selectedSeeds[CONFIG.selectedSeed] = true
 	end
@@ -313,7 +463,7 @@ end
 
 local function refreshGearNamesFromStockValues()
 	refreshNamesFromStock("GearShop", gearNames)
-	if #gearNames > 0 and next(selectedGears) == nil then
+	if #gearNames > 0 and next(selectedGears) == nil and not configLoaded then
 		selectedGears[gearNames[1]] = true
 	end
 end
@@ -330,10 +480,10 @@ local function refreshPetNamesFromAssets()
 	end
 
 	table.sort(petNames)
-	if #petNames > 0 and next(selectedPets) == nil then
+	if #petNames > 0 and next(selectedPets) == nil and not configLoaded then
 		selectedPets[petNames[1]] = true
 	end
-	if #petNames > 0 and next(selectedVisualPets) == nil then
+	if #petNames > 0 and next(selectedVisualPets) == nil and not configLoaded then
 		selectedVisualPets[petNames[1]] = true
 	end
 end
@@ -608,7 +758,7 @@ local function refreshBuyPetNamesFromWildSpawns()
 	end
 
 	table.sort(buyPetNames)
-	if #buyPetNames > 0 and next(selectedPets) == nil then
+	if #buyPetNames > 0 and next(selectedPets) == nil and not configLoaded then
 		selectedPets[buyPetNames[1]] = true
 	end
 end
@@ -3249,6 +3399,7 @@ local function makeToggle(label, key, order)
 		state[key] = not state[key]
 		button.Text = ("%s: %s"):format(label, state[key] and "ON" or "OFF")
 		button.BackgroundColor3 = state[key] and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(34, 41, 42)
+		saveConfig()
 		setStatus(("%s %s"):format(label, state[key] and "enabled" or "disabled"))
 
 		if key == "performanceMode" and state[key] then
@@ -3504,6 +3655,7 @@ local function makeSeedButton(seedName)
 		selectedSeeds[seedName] = not selectedSeeds[seedName]
 		CONFIG.selectedSeed = seedName
 		refreshSeedButton(seedName)
+		saveConfig()
 		setStatus((selectedSeeds[seedName] and "Selected " or "Unselected ") .. seedName)
 	end)
 
@@ -3557,6 +3709,7 @@ makeAvoidSeedButton = function(seedName)
 	button.Activated:Connect(function()
 		blacklistedSeeds[seedName] = not blacklistedSeeds[seedName]
 		refreshAvoidSeedButton(seedName)
+		saveConfig()
 		setStatus((blacklistedSeeds[seedName] and "Avoiding " or "Allowing ") .. seedName)
 	end)
 
@@ -3704,6 +3857,7 @@ local function makeGearButton(gearName)
 	button.Activated:Connect(function()
 		selectedGears[gearName] = not selectedGears[gearName]
 		refreshGearButton(gearName)
+		saveConfig()
 		setStatus((selectedGears[gearName] and "Selected " or "Unselected ") .. gearName)
 	end)
 
@@ -3833,6 +3987,7 @@ local function makePetButton(petName)
 	button.Activated:Connect(function()
 		selectedPets[petName] = not selectedPets[petName]
 		refreshPetButton(petName)
+		saveConfig()
 		setStatus((selectedPets[petName] and "Selected " or "Unselected ") .. petName)
 	end)
 
@@ -3865,7 +4020,7 @@ if petsFolderForBuy then
 		local baseName = stripVariantWords(pet.Name)
 		addUniqueName(petNames, baseName)
 		table.sort(petNames)
-		if next(selectedPets) == nil then
+		if next(selectedPets) == nil and not configLoaded then
 			selectedPets[baseName] = true
 		end
 		makePetButton(baseName)
@@ -3887,7 +4042,7 @@ if wildPetSpawnsForBuy then
 			addUniqueName(petNames, baseName)
 			table.sort(buyPetNames)
 			table.sort(petNames)
-			if next(selectedPets) == nil then
+			if next(selectedPets) == nil and not configLoaded then
 				selectedPets[baseName] = true
 			end
 			makePetButton(baseName)
@@ -4005,6 +4160,7 @@ local function makeVisualPetButton(petName)
 		if refreshVariantButtons then
 			refreshVariantButtons()
 		end
+		saveConfig()
 		setStatus((selectedVisualPets[petName] and "Selected spawn " or "Unselected spawn ") .. petName)
 	end)
 
@@ -4083,6 +4239,7 @@ local function makeVariantButton(variantName)
 		end
 		CONFIG.visualPetVariant = variantName
 		refreshVariantButtons()
+		saveConfig()
 		setStatus("Visual pet variant set to " .. variantName)
 	end)
 end
@@ -4134,6 +4291,7 @@ local function refreshVisualPetAmount()
 	amount = math.clamp(amount, 1, CONFIG.maxVisualPetTools)
 	CONFIG.visualPetAmount = amount
 	visualPetAmountBox.Text = tostring(amount)
+	saveConfig()
 	setStatus(("Visual pet amount set to %d"):format(amount))
 end
 
@@ -4197,6 +4355,10 @@ end)
 end
 
 buildUI()
+
+if not configLoaded and canUseFileConfig() then
+	saveConfig()
+end
 
 local timers = {
 	fruitCollector = 0,
@@ -4282,4 +4444,10 @@ RunService.Heartbeat:Connect(function(deltaTime)
 
 end)
 
-setStatus("Garden Tools loaded")
+if configLoaded then
+	setStatus("Garden Tools loaded - config restored")
+elseif canUseFileConfig() then
+	setStatus("Garden Tools loaded - config saved")
+else
+	setStatus("Garden Tools loaded - config files unsupported")
+end
