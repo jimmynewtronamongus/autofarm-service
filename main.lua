@@ -2768,7 +2768,7 @@ local function purchaseSeedRemote(seedName)
 	return bought > 0, bought
 end
 
-local function looksLikeGoldRainbowDrop(instance)
+function looksLikeGoldRainbowDrop(instance)
 	local parts = {}
 	local current = instance
 	local checked = 0
@@ -2791,7 +2791,7 @@ local function looksLikeGoldRainbowDrop(instance)
 	return hasValuableWord and hasDropWord
 end
 
-local function autoCollectRainbowSeeds()
+function autoCollectRainbowSeeds()
 	if not isEnabled("autoCollectRainbowSeeds") then
 		return
 	end
@@ -2902,7 +2902,7 @@ local performanceOptimized = setmetatable({}, { __mode = "k" })
 local performanceHidden = setmetatable({}, { __mode = "k" })
 local performanceWatcherConnected = false
 
-local function getGardenPlotForInstance(instance)
+function getGardenPlotForInstance(instance)
 	local gardens = getGardens()
 	local current = instance
 	while gardens and current and current ~= workspace do
@@ -2914,7 +2914,7 @@ local function getGardenPlotForInstance(instance)
 	return nil
 end
 
-local function gardenPlotIsOwn(plot)
+function gardenPlotIsOwn(plot)
 	if not plot then
 		return false
 	end
@@ -2936,7 +2936,7 @@ local function gardenPlotIsOwn(plot)
 	return false
 end
 
-local function isOwnPlantVisual(instance, plot)
+function isOwnPlantVisual(instance, plot)
 	local current = instance
 	while current and current ~= plot and current ~= workspace do
 		local parent = current.Parent
@@ -2955,7 +2955,7 @@ local function isOwnPlantVisual(instance, plot)
 	return false
 end
 
-local function hidePerformanceVisual(instance, hidePrompts)
+function hidePerformanceVisual(instance, hidePrompts)
 	if not instance or performanceHidden[instance] then
 		return 0
 	end
@@ -3009,7 +3009,7 @@ local function hidePerformanceVisual(instance, hidePrompts)
 	return changed
 end
 
-local function applyPerformanceGardenHiding(instance)
+function applyPerformanceGardenHiding(instance)
 	local plot = getGardenPlotForInstance(instance)
 	if not plot then
 		return 0
@@ -3025,7 +3025,7 @@ local function applyPerformanceGardenHiding(instance)
 	return hidePerformanceVisual(instance, true)
 end
 
-local function optimizePerformanceInstance(instance)
+function optimizePerformanceInstance(instance)
 	if not instance then
 		return 0
 	end
@@ -3078,7 +3078,7 @@ local function optimizePerformanceInstance(instance)
 	return changed
 end
 
-local function optimizePerformanceTree(root, budget)
+function optimizePerformanceTree(root, budget)
 	local changed = 0
 	local processed = 0
 	for _, descendant in ipairs(root:GetDescendants()) do
@@ -3091,7 +3091,7 @@ local function optimizePerformanceTree(root, budget)
 	return changed
 end
 
-local function connectPerformanceWatcher()
+function connectPerformanceWatcher()
 	if performanceWatcherConnected then
 		return
 	end
@@ -3126,7 +3126,7 @@ enablePerformanceMode = function()
 	setStatus(("Performance mode: simplified %d object(s)"):format(changed))
 end
 
-local function schedulePerformanceModeRestore()
+function schedulePerformanceModeRestore()
 	if not state.performanceMode then
 		return
 	end
@@ -3143,7 +3143,7 @@ local function schedulePerformanceModeRestore()
 	end)
 end
 
-local function plantSeed()
+function plantSeed()
 	if not isEnabled("seedPlacer") then
 		return
 	end
@@ -3252,7 +3252,7 @@ local function plantSeed()
 	end
 end
 
-local function getSelectedShovelSeedList()
+function getSelectedShovelSeedList()
 	local selected = {}
 	local seen = {}
 
@@ -3274,7 +3274,7 @@ local function getSelectedShovelSeedList()
 	return getSortedSeedList(selected)
 end
 
-local function getShovelTool()
+function getShovelTool()
 	local character = getCharacter()
 	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
 	local humanoid = getHumanoid()
@@ -3295,7 +3295,7 @@ local function getShovelTool()
 	return nil
 end
 
-local function getPlantNameForShovel(instance)
+function getPlantNameForShovel(instance)
 	local current = instance
 	local best = instance
 	while current and current ~= workspace do
@@ -3312,7 +3312,7 @@ local function getPlantNameForShovel(instance)
 	return best and best.Name or ""
 end
 
-local function getPlantModelForShovel(instance)
+function getPlantModelForShovel(instance)
 	local current = instance
 	while current and current ~= workspace do
 		local parent = current.Parent
@@ -3327,7 +3327,7 @@ local function getPlantModelForShovel(instance)
 	return nil
 end
 
-local function plantHasPromptText(plant, seedName)
+function plantHasPromptText(plant, seedName)
 	if not plant or not seedName then
 		return false
 	end
@@ -3347,7 +3347,7 @@ local function plantHasPromptText(plant, seedName)
 	return false
 end
 
-local function getPlantShovelIdentifiers(plant, part)
+function getPlantShovelIdentifiers(plant, part)
 	local identifiers = { plant, plant.Name }
 
 	for _, attributeName in ipairs({
@@ -3386,7 +3386,7 @@ local function getPlantShovelIdentifiers(plant, part)
 	return identifiers
 end
 
-local function plantMatchesShovelSelection(plant, selected)
+function plantMatchesShovelSelection(plant, selected)
 	local plantName = string.lower(getPlantNameForShovel(plant))
 	local pathText = string.lower(getObjectPath(plant))
 	local compactPlantName = string.gsub(plantName, "[%s_%-]", "")
@@ -3412,7 +3412,7 @@ local function plantMatchesShovelSelection(plant, selected)
 	return false
 end
 
-local function getShovelPrompt(target)
+function getShovelPrompt(target)
 	if not target then
 		return nil
 	end
@@ -3444,7 +3444,7 @@ local function getShovelPrompt(target)
 	return nil
 end
 
-local function shovelPlantTarget(plant)
+function shovelPlantTarget(plant)
 	if not plant or not plant.Parent then
 		return false
 	end
@@ -3508,7 +3508,7 @@ local function shovelPlantTarget(plant)
 	return fired and (not plant.Parent or plant.Parent ~= beforeParent or not plant:IsDescendantOf(workspace))
 end
 
-local function autoShovel()
+function autoShovel()
 	if not isEnabled("autoShovel") then
 		return
 	end
@@ -3576,7 +3576,7 @@ local function autoShovel()
 	setStatus(("Auto shovel: tried %d/%d matching plant(s)"):format(actions, #targets))
 end
 
-local function autoSell()
+function autoSell()
 	if not isEnabled("autoSell") then
 		return
 	end
@@ -3655,7 +3655,7 @@ local function autoSell()
 	setStatus(("Sell: %d action(s) for %d item(s)"):format(actions, #sellableTools))
 end
 
-local function buyOneSeed(seedName)
+function buyOneSeed(seedName)
 	local remoteOk, remoteCount = purchaseSeedRemote(seedName)
 	if remoteOk then
 		return true, "Seed: " .. seedName, remoteCount or 1
@@ -3699,7 +3699,7 @@ local function buyOneSeed(seedName)
 	end
 end
 
-local function buySeed()
+function buySeed()
 	if not isEnabled("autoBuySeeds") then
 		return
 	end
@@ -3741,7 +3741,7 @@ local function buySeed()
 	end
 end
 
-local function buyOneGear(gearName)
+function buyOneGear(gearName)
 	if sendPacket("PurchaseGear", gearName) or sendPacket("PurchaseGear", gearName, 1) then
 		return true, "Gear: " .. gearName
 	end
@@ -3780,7 +3780,7 @@ local function buyOneGear(gearName)
 	end
 end
 
-local function buyGear()
+function buyGear()
 	if not isEnabled("autoBuyGear") then
 		return
 	end
@@ -3816,7 +3816,7 @@ local function buyGear()
 	end
 end
 
-local function buyOnePet(petName)
+function buyOnePet(petName)
 	if not isEnabled("autoBuyPets") then
 		return false, "Auto pets: disabled"
 	end
@@ -3853,7 +3853,7 @@ local function buyOnePet(petName)
 	return false, ("Auto pets: no matching prompt for %s"):format(petName)
 end
 
-local function buyPets()
+function buyPets()
 	if not isEnabled("autoBuyPets") then
 		return
 	end
