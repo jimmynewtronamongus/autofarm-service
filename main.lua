@@ -287,6 +287,9 @@ local function refreshPetNamesFromAssets()
 	end
 
 	table.sort(petNames)
+	if #petNames > 0 and next(selectedPets) == nil then
+		selectedPets[petNames[1]] = true
+	end
 	if #petNames > 0 and next(selectedVisualPets) == nil then
 		selectedVisualPets[petNames[1]] = true
 	end
@@ -1418,7 +1421,7 @@ end
 local function getSelectedPetList()
 	local selected = {}
 
-	for _, petName in ipairs(buyPetNames) do
+	for _, petName in ipairs(petNames) do
 		if selectedPets[petName] then
 			table.insert(selected, petName)
 		end
@@ -3517,7 +3520,7 @@ local function refreshPetButton(petName)
 end
 
 local function refreshPetCanvas()
-	local rows = math.ceil(#buyPetNames / 2)
+	local rows = math.ceil(#petNames / 2)
 	petRow.CanvasSize = UDim2.fromOffset(0, rows * 34)
 end
 
@@ -3556,14 +3559,15 @@ local function makePetButton(petName)
 end
 
 local function scanPetBuyNames()
+	refreshPetNamesFromAssets()
 	refreshBuyPetNamesFromWildSpawns()
 
-	for _, petName in ipairs(buyPetNames) do
+	for _, petName in ipairs(petNames) do
 		makePetButton(petName)
 	end
 end
 
-for _, petName in ipairs(buyPetNames) do
+for _, petName in ipairs(petNames) do
 	makePetButton(petName)
 end
 
@@ -3572,6 +3576,20 @@ if petLayout then
 end
 refreshPetCanvas()
 scanPetBuyNames()
+
+local assetsForPetBuy = ReplicatedStorage:FindFirstChild("Assets")
+local petsFolderForBuy = assetsForPetBuy and assetsForPetBuy:FindFirstChild("Pets")
+if petsFolderForBuy then
+	petsFolderForBuy.ChildAdded:Connect(function(pet)
+		local baseName = stripVariantWords(pet.Name)
+		addUniqueName(petNames, baseName)
+		table.sort(petNames)
+		if next(selectedPets) == nil then
+			selectedPets[baseName] = true
+		end
+		makePetButton(baseName)
+	end)
+end
 
 local wildPetSpawnsForBuy = getWildPetSpawns()
 if wildPetSpawnsForBuy then
@@ -3585,7 +3603,9 @@ if wildPetSpawnsForBuy then
 		if model then
 			local baseName = stripVariantWords(model.Name)
 			addUniqueName(buyPetNames, baseName)
+			addUniqueName(petNames, baseName)
 			table.sort(buyPetNames)
+			table.sort(petNames)
 			if next(selectedPets) == nil then
 				selectedPets[baseName] = true
 			end
@@ -3609,7 +3629,9 @@ if mapForPetBuy then
 				if model then
 					local baseName = stripVariantWords(model.Name)
 					addUniqueName(buyPetNames, baseName)
+					addUniqueName(petNames, baseName)
 					table.sort(buyPetNames)
+					table.sort(petNames)
 					makePetButton(baseName)
 				end
 			end)
