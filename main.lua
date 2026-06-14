@@ -2283,8 +2283,16 @@ local function buyOnePet(petName)
 			local isBuyPrompt = descendant.Name == "BuyPrompt" or textMatches(descendant, { "buy", "purchase", "adopt" })
 			local isPetPrompt = string.find(modelName, petTerm, 1, true) ~= nil or textMatches(descendant, { petName })
 
-			if isBuyPrompt and isPetPrompt and triggerBuyPrompt(descendant) then
-				return true, ("Auto pets: triggered prompt for %s"):format(petName)
+			if isBuyPrompt and isPetPrompt then
+				local part = getPromptPart(descendant)
+				if part then
+					teleportToPart(part, 3)
+					task.wait(0.08)
+				end
+
+				if triggerPrompt(descendant, true) then
+					return true, ("Auto pets: moved in range and bought %s"):format(petName)
+				end
 			end
 		end
 	end
