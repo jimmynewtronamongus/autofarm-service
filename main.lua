@@ -37,6 +37,8 @@ local CONFIG = {
 	seedCountCacheRefreshInterval = 20.0,
 	maxSeedBuyPerTick = 6,
 	seedBuyRemoteRepeats = 4,
+	shovelInterval = 1.0,
+	maxShovelPerTick = 8,
 	maxDropCollectPerTick = 8,
 	maxDropScanPerRoot = 2500,
 	maxInventoryItems = 200,
@@ -54,6 +56,7 @@ local state = {
 	fruitCollector = false,
 	collectTeleport = true,
 	seedPlacer = false,
+	autoShovel = false,
 	autoSell = false,
 	autoBuySeeds = false,
 	seedShopEnabled = true,
@@ -66,6 +69,8 @@ local state = {
 }
 
 local selectedSeeds = {}
+
+local selectedShovelSeeds = {}
 
 local gearNames = {}
 
@@ -136,6 +141,7 @@ local function loadConfig()
 	copyKnownValues(decoded.config, CONFIG, {
 		"sellInterval",
 		"buyInterval",
+		"shovelInterval",
 		"lowRaritySeedLimit",
 		"selectedSeed",
 		"plantRadius",
@@ -145,6 +151,7 @@ local function loadConfig()
 		"fruitCollector",
 		"collectTeleport",
 		"seedPlacer",
+		"autoShovel",
 		"autoSell",
 		"autoBuySeeds",
 		"seedShopEnabled",
@@ -156,6 +163,7 @@ local function loadConfig()
 	})
 
 	selectedSeeds = copyMap(decoded.selectedSeeds)
+	selectedShovelSeeds = copyMap(decoded.selectedShovelSeeds)
 	selectedGears = copyMap(decoded.selectedGears)
 	selectedPets = copyMap(decoded.selectedPets)
 
@@ -178,6 +186,7 @@ saveConfig = function()
 		config = {
 			sellInterval = CONFIG.sellInterval,
 			buyInterval = CONFIG.buyInterval,
+			shovelInterval = CONFIG.shovelInterval,
 			lowRaritySeedLimit = CONFIG.lowRaritySeedLimit,
 			selectedSeed = CONFIG.selectedSeed,
 			plantRadius = CONFIG.plantRadius,
@@ -187,6 +196,7 @@ saveConfig = function()
 			fruitCollector = state.fruitCollector,
 			collectTeleport = state.collectTeleport,
 			seedPlacer = state.seedPlacer,
+			autoShovel = state.autoShovel,
 			autoSell = state.autoSell,
 			autoBuySeeds = state.autoBuySeeds,
 			seedShopEnabled = state.seedShopEnabled,
@@ -197,6 +207,7 @@ saveConfig = function()
 			performanceMode = state.performanceMode,
 		},
 		selectedSeeds = selectedSeeds,
+		selectedShovelSeeds = selectedShovelSeeds,
 		selectedGears = selectedGears,
 		selectedPets = selectedPets,
 	}
@@ -347,6 +358,7 @@ local stats = {
 	collectSkippedFull = 0,
 	collectSkippedRange = 0,
 	seedsPlanted = 0,
+	seedsShoveled = 0,
 	seedAttempts = 0,
 	seedsSkippedLimit = 0,
 	seedsBought = 0,
@@ -381,6 +393,7 @@ local function countEnabledToggles()
 	for _, key in ipairs({
 		"fruitCollector",
 		"seedPlacer",
+		"autoShovel",
 		"autoSell",
 		"autoBuySeeds",
 		"autoBuyGear",
@@ -1246,7 +1259,7 @@ local function updateStatsUI()
 			elseif key == "collect" then
 				label.Text = ("Fruit: %d total | %d/min | %d targets scanned"):format(stats.fruitCollected, fruitRate, stats.fruitTargetsChecked)
 			elseif key == "planting" then
-				label.Text = ("Planting: %d placed | %d seed(s) selected"):format(stats.seedsPlanted, countSelected(selectedSeeds))
+				label.Text = ("Planting: %d placed | %d shoveled | %d seed(s) selected"):format(stats.seedsPlanted, stats.seedsShoveled, countSelected(selectedSeeds))
 			elseif key == "shops" then
 				label.Text = ("Bought: %d seeds | %d gear | %d pets"):format(stats.seedsBought, stats.gearBought, stats.petsBought)
 			elseif key == "limits" then
@@ -3150,6 +3163,221 @@ local function plantSeed()
 	end
 end
 
+local function getSelectedShovelSeedList()
+	local selected = {}
+	local seen = {}
+
+	for _, seedName in ipairs(seedNames) do
+		if selectedShovelSeeds[seedName] then
+			seen[seedName] = true
+			table.insert(selected, seedName)
+		end
+	end
+
+	for seedName, enabled in pairs(selectedShovelSeeds) do
+		if enabled and not seen[seedName] then
+			addUniqueName(seedNames, seedName)
+			seedPriority[seedName] = seedPriority[seedName] or getSeedMetadataValue(seedName)
+			table.insert(selected, seedName)
+		end
+	end
+
+	return getSortedSeedList(selected)
+end
+
+local function getShovelTool()
+	local character = getCharacter()
+	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
+	local humanoid = getHumanoid()
+
+	for _, container in ipairs({ character, backpack }) do
+		if container then
+			for _, item in ipairs(container:GetChildren()) do
+				if item:IsA("Tool") and string.find(string.lower(item.Name), "shovel", 1, true) then
+					if item.Parent ~= character and humanoid then
+						humanoid:EquipTool(item)
+					end
+					return item
+				end
+			end
+		end
+	end
+
+	return nil
+end
+
+local function getPlantNameForShovel(instance)
+	local current = instance
+	while current and current ~= workspace do
+		local parent = current.Parent
+		local parentName = parent and string.lower(parent.Name) or ""
+		if current:IsA("Model")
+			and (parentName == "plants" or parentName == "crops" or parentName == "plant")
+		then
+			return current.Name
+		end
+		current = parent
+	end
+	return instance and instance.Name or ""
+end
+
+local function plantMatchesShovelSelection(plant, selected)
+	local plantName = string.lower(getPlantNameForShovel(plant))
+	if plantName == "" then
+		return false
+	end
+
+	for _, seedName in ipairs(selected) do
+		if string.find(plantName, string.lower(seedName), 1, true) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function getShovelPrompt(target)
+	if not target then
+		return nil
+	end
+
+	if target:IsA("ProximityPrompt") then
+		local text = string.lower((target.ActionText or "") .. " " .. (target.ObjectText or "") .. " " .. target.Name)
+		if string.find(text, "shovel", 1, true)
+			or string.find(text, "remove", 1, true)
+			or string.find(text, "delete", 1, true)
+			or string.find(text, "dig", 1, true)
+		then
+			return target
+		end
+	end
+
+	for _, descendant in ipairs(target:GetDescendants()) do
+		if descendant:IsA("ProximityPrompt") and descendant.Name ~= "StealPrompt" then
+			local text = string.lower((descendant.ActionText or "") .. " " .. (descendant.ObjectText or "") .. " " .. descendant.Name)
+			if string.find(text, "shovel", 1, true)
+				or string.find(text, "remove", 1, true)
+				or string.find(text, "delete", 1, true)
+				or string.find(text, "dig", 1, true)
+			then
+				return descendant
+			end
+		end
+	end
+
+	return nil
+end
+
+local function shovelPlantTarget(plant)
+	if not plant or not plant.Parent then
+		return false
+	end
+
+	local part = getTargetPart(plant)
+	local root = getRoot()
+	if part and root and (root.Position - part.Position).Magnitude > 18 then
+		teleportToModelOrPart(plant:IsA("Model") and plant or nil, part, 3)
+	end
+
+	local shovelTool = getShovelTool()
+	local prompt = getShovelPrompt(plant)
+	local fired = false
+
+	for _, packetName in ipairs({
+		"ShovelPlant",
+		"Shovel",
+		"RemovePlant",
+		"DeletePlant",
+		"DestroyPlant",
+		"RemoveSeed",
+		"DeleteSeed",
+		"RemoveCrop",
+	}) do
+		fired = sendPacket(packetName, plant) or fired
+		fired = sendPacket(packetName, plant.Name) or fired
+	end
+
+	if prompt then
+		fired = triggerPromptFast(prompt) or fired
+	end
+
+	if shovelTool then
+		pcall(function()
+			shovelTool:Activate()
+		end)
+		fired = true
+	end
+
+	if part then
+		touchPart(part)
+	end
+
+	return fired
+end
+
+local function autoShovel()
+	if not isEnabled("autoShovel") then
+		return
+	end
+
+	local selected = getSelectedShovelSeedList()
+	if #selected == 0 then
+		setStatus("Auto shovel: no seeds selected")
+		return
+	end
+
+	local roots = getOwnGardenRoots()
+	if #roots == 0 then
+		setStatus("Auto shovel: own garden not found")
+		return
+	end
+
+	local targets = {}
+	local seen = {}
+	for index, root in ipairs(roots) do
+		for _, descendant in ipairs(getCachedDescendants("shovelPlants" .. index, root, CONFIG.cacheRefreshInterval)) do
+			if #targets >= CONFIG.maxShovelPerTick then
+				break
+			end
+
+			if descendant.Parent
+				and descendant:IsDescendantOf(workspace)
+				and descendant:IsA("Model")
+				and plantMatchesShovelSelection(descendant, selected)
+				and not seen[descendant]
+			then
+				seen[descendant] = true
+				table.insert(targets, descendant)
+			end
+		end
+
+		if #targets >= CONFIG.maxShovelPerTick then
+			break
+		end
+	end
+
+	if #targets == 0 then
+		setStatus("Auto shovel: no matching planted seeds found")
+		return
+	end
+
+	local actions = 0
+	for _, plant in ipairs(targets) do
+		if not isEnabled("autoShovel") then
+			return
+		end
+
+		if shovelPlantTarget(plant) then
+			actions += 1
+			task.wait(0.05)
+		end
+	end
+
+	stats.seedsShoveled += actions
+	updateStatsUI()
+	setStatus(("Auto shovel: tried %d/%d matching plant(s)"):format(actions, #targets))
+end
+
 local function autoSell()
 	if not isEnabled("autoSell") then
 		return
@@ -3670,13 +3898,14 @@ makeSectionLabel("Farm", 4)
 makeToggle("Fruit Collector", "fruitCollector", 5)
 makeToggle("Teleport To Fruit", "collectTeleport", 6)
 makeToggle("Seed Placer", "seedPlacer", 7)
-makeToggle("Auto Sell Inventory", "autoSell", 8)
-makeSectionLabel("Shops", 9)
-makeToggle("Auto Buy Seeds", "autoBuySeeds", 10)
-makeToggle("Use Seed Shop", "seedShopEnabled", 11)
-makeToggle("Auto Buy Gear", "autoBuyGear", 12)
-makeToggle("Use Gear Shop", "gearShopEnabled", 13)
-makeToggle("Performance Mode", "performanceMode", 14)
+makeToggle("Auto Shovel Plants", "autoShovel", 8)
+makeToggle("Auto Sell Inventory", "autoSell", 9)
+makeSectionLabel("Shops", 10)
+makeToggle("Auto Buy Seeds", "autoBuySeeds", 11)
+makeToggle("Use Seed Shop", "seedShopEnabled", 12)
+makeToggle("Auto Buy Gear", "autoBuyGear", 13)
+makeToggle("Use Gear Shop", "gearShopEnabled", 14)
+makeToggle("Performance Mode", "performanceMode", 15)
 
 local webhookBox = make("TextBox", {
 	Name = "WebhookUrl",
@@ -3690,7 +3919,7 @@ local webhookBox = make("TextBox", {
 	TextSize = 12,
 	TextTruncate = Enum.TextTruncate.AtEnd,
 	Size = UDim2.new(1, 0, 0, 30),
-	LayoutOrder = 15,
+	LayoutOrder = 16,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, webhookBox)
 make("UIPadding", {
@@ -3712,7 +3941,7 @@ local statsTitle = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 16,
+	LayoutOrder = 17,
 }, content)
 
 local statsFrame = make("Frame", {
@@ -3720,7 +3949,7 @@ local statsFrame = make("Frame", {
 	BackgroundColor3 = Color3.fromRGB(14, 18, 19),
 	BorderSizePixel = 0,
 	Size = UDim2.new(1, 0, 0, 128),
-	LayoutOrder = 17,
+	LayoutOrder = 18,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, statsFrame)
 make("UIPadding", {
@@ -3771,7 +4000,7 @@ local selectedSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 18,
+	LayoutOrder = 19,
 }, content)
 
 local seedRow = make("ScrollingFrame", {
@@ -3782,7 +4011,7 @@ local seedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 19,
+	LayoutOrder = 20,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -3918,6 +4147,112 @@ end)
 end
 buildSeedSelector()
 
+local function buildShovelSeedSelector()
+local shovelSeedLabel = make("TextLabel", {
+	Name = "ShovelSeedLabel",
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold,
+	Text = "Seeds to shovel",
+	TextColor3 = Color3.fromRGB(221, 236, 216),
+	TextSize = 13,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Size = UDim2.new(1, 0, 0, 15),
+	LayoutOrder = 21,
+}, content)
+
+local shovelSeedRow = make("ScrollingFrame", {
+	Name = "ShovelSeedSelector",
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	CanvasSize = UDim2.fromOffset(0, 0),
+	ScrollBarThickness = 4,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
+	Size = UDim2.new(1, 0, 0, 66),
+	LayoutOrder = 22,
+}, content)
+make("UIGridLayout", {
+	CellPadding = UDim2.fromOffset(6, 6),
+	CellSize = UDim2.fromOffset(136, 24),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, shovelSeedRow)
+
+local shovelSeedLayout = shovelSeedRow:FindFirstChildOfClass("UIGridLayout")
+local shovelSeedButtons = {}
+local shovelSeedButtonCount = 0
+
+local function refreshShovelSeedButton(seedName)
+	local button = shovelSeedButtons[seedName]
+	if not button then
+		return
+	end
+
+	local enabled = selectedShovelSeeds[seedName] == true
+	button.Text = (enabled and "[x] " or "[ ] ") .. seedName
+	button.BackgroundColor3 = enabled and Color3.fromRGB(122, 65, 50) or Color3.fromRGB(52, 60, 54)
+end
+
+local function refreshShovelSeedCanvas()
+	local rows = math.ceil(#seedNames / 2)
+	shovelSeedRow.CanvasSize = UDim2.fromOffset(0, rows * 28)
+end
+
+local function makeShovelSeedButton(seedName)
+	if shovelSeedButtons[seedName] then
+		return
+	end
+
+	shovelSeedButtonCount += 1
+	local button = make("TextButton", {
+		Name = "Shovel" .. seedName,
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = seedName,
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 12,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.fromOffset(136, 24),
+		LayoutOrder = shovelSeedButtonCount,
+	}, shovelSeedRow)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
+
+	shovelSeedButtons[seedName] = button
+	refreshShovelSeedButton(seedName)
+
+	button.Activated:Connect(function()
+		selectedShovelSeeds[seedName] = not selectedShovelSeeds[seedName]
+		refreshShovelSeedButton(seedName)
+		saveConfig()
+		setStatus((selectedShovelSeeds[seedName] and "Will shovel " or "Stopped shoveling ") .. seedName)
+	end)
+
+	refreshShovelSeedCanvas()
+end
+
+for _, seedName in ipairs(seedNames) do
+	makeShovelSeedButton(seedName)
+end
+
+if shovelSeedLayout then
+	shovelSeedLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshShovelSeedCanvas)
+end
+refreshShovelSeedCanvas()
+
+local shovelSeedStockItems = getStockItemsFolder("SeedShop")
+if shovelSeedStockItems then
+	for _, item in ipairs(shovelSeedStockItems:GetChildren()) do
+		makeShovelSeedButton(item.Name)
+	end
+
+	shovelSeedStockItems.ChildAdded:Connect(function(item)
+		task.wait()
+		makeShovelSeedButton(item.Name)
+	end)
+end
+end
+buildShovelSeedSelector()
+
 local function buildGearSelector()
 local selectedGearLabel = make("TextLabel", {
 	Name = "SelectedGearLabel",
@@ -3928,7 +4263,7 @@ local selectedGearLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 20,
+	LayoutOrder = 23,
 }, content)
 
 local gearRow = make("ScrollingFrame", {
@@ -3939,7 +4274,7 @@ local gearRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 21,
+	LayoutOrder = 24,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4069,7 +4404,7 @@ local selectedPetLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 22,
+	LayoutOrder = 25,
 }, content)
 
 local petRow = make("ScrollingFrame", {
@@ -4080,7 +4415,7 @@ local petRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 23,
+	LayoutOrder = 26,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4258,6 +4593,7 @@ schedulePerformanceModeRestore()
 timers = {
 	fruitCollector = 0,
 	seedPlacer = 0,
+	autoShovel = 0,
 	autoSell = 0,
 	autoBuySeeds = 0,
 	autoBuyGear = 0,
@@ -4287,6 +4623,7 @@ end
 RunService.Heartbeat:Connect(function(deltaTime)
 	timers.fruitCollector = state.fruitCollector and (timers.fruitCollector + deltaTime) or 0
 	timers.seedPlacer = state.seedPlacer and (timers.seedPlacer + deltaTime) or 0
+	timers.autoShovel = state.autoShovel and (timers.autoShovel + deltaTime) or 0
 	timers.autoSell = state.autoSell and (timers.autoSell + deltaTime) or 0
 	timers.autoBuySeeds = state.autoBuySeeds and (timers.autoBuySeeds + deltaTime) or 0
 	timers.autoBuyGear = state.autoBuyGear and (timers.autoBuyGear + deltaTime) or 0
@@ -4318,6 +4655,11 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	if state.seedPlacer and timers.seedPlacer >= CONFIG.plantInterval then
 		timers.seedPlacer = 0
 		runGuarded("seedPlacer", plantSeed)
+	end
+
+	if state.autoShovel and timers.autoShovel >= CONFIG.shovelInterval then
+		timers.autoShovel = 0
+		runGuarded("autoShovel", autoShovel)
 	end
 
 	if state.autoSell and timers.autoSell >= CONFIG.sellInterval then
