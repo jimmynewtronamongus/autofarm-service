@@ -1172,6 +1172,18 @@ local function isHarvestPrompt(prompt)
 		or treeTextMatches(prompt, { "harvestprompt", "collect", "harvest", "pick", "fruit" }, 3)
 end
 
+local function isUsableHarvestPrompt(prompt)
+	if not isHarvestPrompt(prompt) then
+		return false
+	end
+
+	local ok, enabled = pcall(function()
+		return prompt.Enabled
+	end)
+
+	return not ok or enabled
+end
+
 local function getCollectFruitTarget(prompt)
 	local current = prompt and prompt.Parent
 
@@ -1450,9 +1462,9 @@ local function collectFruit()
 				return
 			end
 
-			if isHarvestPrompt(descendant) then
+			if isUsableHarvestPrompt(descendant) then
 				local target = getCollectFruitTarget(descendant) or descendant
-				if isLikelyFruitTarget(target) and not seenTargets[target] then
+				if not seenTargets[target] then
 					seenTargets[target] = true
 					table.insert(targets, {
 						prompt = descendant,
@@ -1655,12 +1667,18 @@ isInventorySeedTool = function(item)
 	end
 
 	local name = string.lower(item.Name)
+	for _, word in ipairs({ "kg", " lb", "fruit", "harvest", "picked", "mutation", "rainbow", "golden" }) do
+		if string.find(name, word, 1, true) then
+			return false
+		end
+	end
+
 	if string.find(name, "seed", 1, true) then
 		return true
 	end
 
 	for _, seedName in ipairs(seedNames) do
-		if string.find(name, string.lower(seedName), 1, true) and string.find(name, "pack", 1, true) then
+		if string.find(name, string.lower(seedName), 1, true) then
 			return true
 		end
 	end
