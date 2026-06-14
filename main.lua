@@ -3327,7 +3327,9 @@ if petLayout then
 	petLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshPetCanvas)
 end
 refreshPetCanvas()
+end)()
 
+(function()
 local selectedVisualPetLabel = make("TextLabel", {
 	Name = "SelectedVisualPetLabel",
 	BackgroundTransparency = 1,
@@ -3550,7 +3552,6 @@ if petsFolder then
 	petsFolder.ChildAdded:Connect(function(pet)
 		local baseName = stripVariantWords(pet.Name)
 		addUniqueName(petNames, baseName)
-		makePetButton(baseName)
 		makeVisualPetButton(baseName)
 		refreshVariantButtons()
 	end)
@@ -3563,7 +3564,6 @@ if gearImages then
 			local baseName = stripVariantWords(imageValue.Name)
 			if hasKnownPetBase(baseName) then
 				addUniqueName(petNames, baseName)
-				makePetButton(baseName)
 				makeVisualPetButton(baseName)
 			end
 			refreshVariantButtons()
