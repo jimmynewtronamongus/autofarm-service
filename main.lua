@@ -18,8 +18,8 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 local CONFIG = {
-	collectInterval = 2.5,
-	plantInterval = 1.5,
+	collectInterval = 1.0,
+	plantInterval = 0.75,
 	sellInterval = 12.0,
 	buyInterval = 5.0,
 	rainbowCollectInterval = 2.5,
@@ -27,8 +27,8 @@ local CONFIG = {
 	cacheRefreshInterval = 7.0,
 	inventoryRefreshInterval = 1.5,
 	guiInventoryRefreshInterval = 5.0,
-	maxFruitCollectPerTick = 12,
-	maxFruitScanPerRoot = 180,
+	maxFruitCollectPerTick = 24,
+	maxFruitScanPerRoot = 700,
 	maxDropCollectPerTick = 8,
 	maxInventoryItems = 200,
 	lowRaritySeedLimit = 10,
@@ -132,8 +132,6 @@ local function loadConfig()
 	end
 
 	copyKnownValues(decoded.config, CONFIG, {
-		"collectInterval",
-		"plantInterval",
 		"sellInterval",
 		"buyInterval",
 		"rainbowCollectInterval",
@@ -181,8 +179,6 @@ saveConfig = function()
 	local payload = {
 		version = 1,
 		config = {
-			collectInterval = CONFIG.collectInterval,
-			plantInterval = CONFIG.plantInterval,
 			sellInterval = CONFIG.sellInterval,
 			buyInterval = CONFIG.buyInterval,
 			rainbowCollectInterval = CONFIG.rainbowCollectInterval,
@@ -670,6 +666,8 @@ local cache = {
 local touchPart
 local getPromptPart
 local triggerPrompt
+local teleportToPart
+local teleportToModelOrPart
 
 local function getCachedDescendants(key, root)
 	local now = os.clock()
@@ -778,7 +776,23 @@ local function plotBelongsToLocalPlayer(plot)
 	return false
 end
 
+local ownGardenCache = {
+	roots = {},
+	checkedAt = 0,
+}
+
+local function invalidateOwnGardenCache()
+	ownGardenCache.checkedAt = 0
+	cache.ownGardenDescendants = nil
+	cache.ownGardenAt = nil
+end
+
 local function getOwnGardenRoots()
+	local now = os.clock()
+	if now - ownGardenCache.checkedAt < 5 and #ownGardenCache.roots > 0 then
+		return ownGardenCache.roots
+	end
+
 	local gardens = getGardens()
 	local userId = tostring(localPlayer.UserId)
 	local roots = {}
@@ -801,6 +815,8 @@ local function getOwnGardenRoots()
 		end
 	end
 
+	ownGardenCache.roots = roots
+	ownGardenCache.checkedAt = now
 	return roots
 end
 
@@ -864,6 +880,12 @@ local function getOwnGardenAnchor()
 	end
 
 	return nil
+end
+
+local gardensForCache = getGardens()
+if gardensForCache then
+	gardensForCache.ChildAdded:Connect(invalidateOwnGardenCache)
+	gardensForCache.ChildRemoved:Connect(invalidateOwnGardenCache)
 end
 
 local function textMatches(instance, terms)
@@ -1167,9 +1189,13 @@ local function collectPrompt(prompt)
 		return false
 	end
 
-	if part and touchPart and state.collectTeleport then
-		touchPart(part)
-		task.wait(0.03)
+	if part and state.collectTeleport then
+		local model = prompt and prompt:FindFirstAncestorWhichIsA("Model")
+		if model then
+			teleportToModelOrPart(model, part, 3)
+		else
+			teleportToPart(part, 3)
+		end
 	end
 
 	local prompted = triggerPrompt(prompt, true)
@@ -1446,13 +1472,10 @@ local function tryPlantSeedRemote(seedName, position)
 			{ seedName, position },
 			{ position, seedName },
 			{ seedName, cframe },
-			{ cframe, seedName },
-			{ seedName, position.X, position.Y, position.Z },
-			{ { seed = seedName, seedName = seedName, position = position, cframe = cframe } },
 		}) do
 			attempts += 1
 			sendPacket(packetName, unpackArgs(args))
-			task.wait(0.02)
+			task.wait(0.005)
 		end
 	end
 
@@ -1798,7 +1821,7 @@ function touchPart(part)
 	return ok
 end
 
-local function teleportToPart(part, height)
+teleportToPart = function(part, height)
 	local root = getRoot()
 	if not root or not part or not part:IsA("BasePart") then
 		return false
@@ -1820,7 +1843,7 @@ local function teleportToPart(part, height)
 	return ok
 end
 
-local function teleportToModelOrPart(model, part, height)
+teleportToModelOrPart = function(model, part, height)
 	if model and model:IsA("Model") then
 		local pivotOk, pivot = pcall(function()
 			return model:GetPivot()
@@ -2074,6 +2097,10 @@ local function plantSeed()
 		local tool = getEquippedSeedTool(seedName)
 		if tool then
 			local position = getSeedPlantPosition(index, gardenPosition)
+			pcall(function()
+				tool:Activate()
+			end)
+
 			if position then
 				attempts += tryPlantSeedRemote(seedName, position)
 			end
@@ -2083,7 +2110,7 @@ local function plantSeed()
 			end)
 
 			planted += 1
-			task.wait(0.08)
+			task.wait(0.025)
 		else
 			missing += 1
 		end
