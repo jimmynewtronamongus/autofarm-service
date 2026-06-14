@@ -1353,6 +1353,59 @@ local function getCollectFruitTarget(prompt)
 	return prompt and prompt.Parent
 end
 
+local function getFruitPlantTarget(fruit)
+	local current = fruit
+	while current and current ~= workspace do
+		if current.Parent and current.Parent.Name == "Fruits" then
+			return current.Parent.Parent
+		end
+		current = current.Parent
+	end
+	return nil
+end
+
+local function collectFruitPacket(target)
+	if not target then
+		return false
+	end
+
+	local fruit = target
+	local current = target
+	while current and current ~= workspace do
+		if current.Parent and current.Parent.Name == "Fruits" then
+			fruit = current
+			break
+		end
+		current = current.Parent
+	end
+
+	local plant = getFruitPlantTarget(fruit)
+	local tries = {
+		{ fruit },
+		{ fruit and fruit.Name },
+		{ target },
+		{ target and target.Name },
+		{ plant, fruit },
+		{ plant and plant.Name, fruit and fruit.Name },
+		{ plant and plant.Name, fruit },
+	}
+	local unpackArgs = table.unpack or unpack
+
+	for _, args in ipairs(tries) do
+		local clean = {}
+		for _, value in ipairs(args) do
+			if value ~= nil then
+				table.insert(clean, value)
+			end
+		end
+		if #clean > 0 and sendPacket("CollectFruit", unpackArgs(clean)) then
+			return true
+		end
+	end
+
+	return false
+end
+
 local function isFruitContainer(instance)
 	local current = instance
 	local checked = 0
@@ -1426,19 +1479,14 @@ local function collectPrompt(prompt)
 	end
 
 	local target = getCollectFruitTarget(prompt)
-	local packeted = target ~= nil and sendPacket("CollectFruit", target)
+	local packeted = target ~= nil and collectFruitPacket(target)
 
 	if part and state.collectTeleport then
-		local model = prompt and prompt:FindFirstAncestorWhichIsA("Model")
-		if model then
-			teleportToModelOrPart(model, part, 3)
-		else
-			teleportToPart(part, 3)
-		end
+		teleportToPart(part, 2)
 	end
 
 	local prompted = triggerPrompt(prompt, true)
-	packeted = target ~= nil and sendPacket("CollectFruit", target)
+	packeted = target ~= nil and collectFruitPacket(target)
 
 	return prompted or packeted
 end
@@ -1468,7 +1516,7 @@ local function collectFruitTarget(target)
 		return false
 	end
 
-	local sent = sendPacket("CollectFruit", target)
+	local sent = collectFruitPacket(target)
 		or sendPacket("HarvestFruit", target)
 		or sendPacket("Collect", target)
 		or sendPacket("Harvest", target)
@@ -1492,7 +1540,7 @@ local function collectFruitTarget(target)
 	local prompt = getHarvestPromptInTarget(target)
 	local prompted = prompt and collectPrompt(prompt) or false
 
-	sent = sendPacket("CollectFruit", target)
+	sent = collectFruitPacket(target)
 		or sendPacket("HarvestFruit", target)
 		or sendPacket("Collect", target)
 		or sendPacket("Harvest", target)
