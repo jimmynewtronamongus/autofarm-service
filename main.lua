@@ -92,6 +92,7 @@ local visualPetVariants = {
 
 local statusValue
 local statsLabels = {}
+local sessionStartedAt = os.clock()
 
 local stats = {
 	fruitTargetsChecked = 0,
@@ -115,6 +116,43 @@ local function setStatus(message)
 	if statusValue then
 		statusValue.Value = state.lastStatus
 	end
+end
+
+local function countSelected(map)
+	local count = 0
+	for _, enabled in pairs(map) do
+		if enabled then
+			count += 1
+		end
+	end
+	return count
+end
+
+local function countEnabledToggles()
+	local count = 0
+	for _, key in ipairs({
+		"fruitCollector",
+		"seedPlacer",
+		"autoSell",
+		"autoBuySeeds",
+		"autoBuyGear",
+		"autoCollectRainbowSeeds",
+		"autoBuyPets",
+	}) do
+		if state[key] then
+			count += 1
+		end
+	end
+	return count
+end
+
+local function shortStatus(text, maxLength)
+	text = tostring(text or "")
+	maxLength = maxLength or 42
+	if #text <= maxLength then
+		return text
+	end
+	return string.sub(text, 1, maxLength - 3) .. "..."
 end
 
 local function addUniqueName(list, name)
@@ -826,18 +864,26 @@ local function refreshInventoryStats(force)
 end
 
 local function updateStatsUI()
+	local elapsedMinutes = math.max((os.clock() - sessionStartedAt) / 60, 0.01)
+	local fruitRate = math.floor((stats.fruitCollected / elapsedMinutes) + 0.5)
+	local freeSlots = math.max((stats.inventoryCapacity or CONFIG.maxInventoryItems) - (stats.inventoryItems or 0), 0)
+
 	for key, label in pairs(statsLabels) do
 		if label and label.Parent then
-			if key == "inventory" then
-				label.Text = ("Inventory: %d/%d%s"):format(stats.inventoryItems, stats.inventoryCapacity, stats.inventoryFull and " FULL" or "")
-			elseif key == "fruit" then
-				label.Text = ("Fruit: %d collected, %d checked"):format(stats.fruitCollected, stats.fruitTargetsChecked)
-			elseif key == "seed" then
-				label.Text = ("Seeds: %d planted, %d remote try(s)"):format(stats.seedsPlanted, stats.seedAttempts)
-			elseif key == "shop" then
-				label.Text = ("Shop: %d seed buy(s), %d gear buy(s), %d pet buy(s)"):format(stats.seedsBought, stats.gearBought, stats.petsBought)
-			elseif key == "skips" then
-				label.Text = ("Skips: %d full, %d range, %d limit, %d avoid"):format(stats.collectSkippedFull, stats.collectSkippedRange, stats.seedsSkippedLimit, stats.seedsSkippedBlacklist)
+			if key == "status" then
+				label.Text = ("Status: %s"):format(shortStatus(state.lastStatus, 46))
+			elseif key == "systems" then
+				label.Text = ("Enabled: %d systems | Teleport %s"):format(countEnabledToggles(), state.collectTeleport and "ON" or "OFF")
+			elseif key == "inventory" then
+				label.Text = ("Inventory: %d/%d (%d free)%s"):format(stats.inventoryItems, stats.inventoryCapacity, freeSlots, stats.inventoryFull and " FULL" or "")
+			elseif key == "collect" then
+				label.Text = ("Fruit: %d total | %d/min | %d targets scanned"):format(stats.fruitCollected, fruitRate, stats.fruitTargetsChecked)
+			elseif key == "planting" then
+				label.Text = ("Planting: %d placed | %d seed(s) selected | %d avoided"):format(stats.seedsPlanted, countSelected(selectedSeeds), countSelected(blacklistedSeeds))
+			elseif key == "shops" then
+				label.Text = ("Bought: %d seeds | %d gear | %d pets"):format(stats.seedsBought, stats.gearBought, stats.petsBought)
+			elseif key == "limits" then
+				label.Text = ("Blocked: %d full | %d range | %d seed limit"):format(stats.collectSkippedFull, stats.collectSkippedRange, stats.seedsSkippedLimit)
 			end
 		end
 	end
@@ -3286,7 +3332,7 @@ local statsFrame = make("Frame", {
 	Name = "Stats",
 	BackgroundColor3 = Color3.fromRGB(14, 18, 19),
 	BorderSizePixel = 0,
-	Size = UDim2.new(1, 0, 0, 112),
+	Size = UDim2.new(1, 0, 0, 150),
 	LayoutOrder = 13,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, statsFrame)
@@ -3309,6 +3355,7 @@ local function makeStatsLabel(key, order)
 		Text = "",
 		TextColor3 = Color3.fromRGB(201, 219, 202),
 		TextSize = 12,
+		TextTruncate = Enum.TextTruncate.AtEnd,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Size = UDim2.new(1, 0, 0, 16),
 		LayoutOrder = order,
@@ -3317,11 +3364,13 @@ local function makeStatsLabel(key, order)
 	return label
 end
 
-makeStatsLabel("inventory", 1)
-makeStatsLabel("fruit", 2)
-makeStatsLabel("seed", 3)
-makeStatsLabel("shop", 4)
-makeStatsLabel("skips", 5)
+makeStatsLabel("status", 1)
+makeStatsLabel("systems", 2)
+makeStatsLabel("inventory", 3)
+makeStatsLabel("collect", 4)
+makeStatsLabel("planting", 5)
+makeStatsLabel("shops", 6)
+makeStatsLabel("limits", 7)
 refreshInventoryStats()
 updateStatsUI()
 
