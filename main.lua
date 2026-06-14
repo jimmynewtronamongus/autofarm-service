@@ -2959,7 +2959,7 @@ visualControlsToggle.Activated:Connect(function()
 	setStatus("Visual controls " .. (visualControlsVisible and "shown" or "hidden"))
 end)
 
-(function()
+;(function()
 local selectedSeedLabel = make("TextLabel", {
 	Name = "SelectedSeedLabel",
 	BackgroundTransparency = 1,
@@ -3184,7 +3184,7 @@ playerGui.ChildAdded:Connect(function(child)
 end)
 end)()
 
-(function()
+;(function()
 local selectedGearLabel = make("TextLabel", {
 	Name = "SelectedGearLabel",
 	BackgroundTransparency = 1,
@@ -3312,7 +3312,7 @@ playerGui.ChildAdded:Connect(function(child)
 end)
 end)()
 
-(function()
+;(function()
 local selectedPetLabel = make("TextLabel", {
 	Name = "SelectedPetLabel",
 	BackgroundTransparency = 1,
@@ -3451,7 +3451,7 @@ if wildPetSpawnsForBuy then
 end
 end)()
 
-(function()
+;(function()
 local selectedVisualPetLabel = make("TextLabel", {
 	Name = "SelectedVisualPetLabel",
 	BackgroundTransparency = 1,
