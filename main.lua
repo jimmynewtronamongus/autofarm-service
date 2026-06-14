@@ -39,8 +39,8 @@ local CONFIG = {
 	maxSeedBuyPerTick = 6,
 	seedBuyRemoteRepeats = 4,
 	shovelInterval = 0.35,
-	shovelHoldDuration = 2.8,
-	maxShovelPerTick = 3,
+	shovelHoldDuration = 3.1,
+	maxShovelPerTick = 1,
 	maxDropCollectPerTick = 8,
 	maxDropScanPerRoot = 2500,
 	maxInventoryItems = 200,
@@ -3593,8 +3593,7 @@ function shovelPlantTarget(plant)
 	end
 
 	if part then
-		fired = aimAndHoldPart(part, math.max(CONFIG.shovelHoldDuration * 0.35, 0.8), shovelTool) or fired
-		touchPart(part)
+		fired = aimAndHoldPart(part, 0.35, shovelTool) or fired
 	end
 
 	task.wait(0.12)
@@ -5023,18 +5022,6 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		updateStatsUI()
 	end
 
-	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval then
-		if tryRun("autoBuyPets", buyPets) then
-			timers.autoBuyPets = 0
-		end
-	end
-
-	if state.autoCollectRainbowSeeds and timers.autoCollectRainbowSeeds >= CONFIG.rainbowCollectInterval then
-		if tryRun("autoCollectRainbowSeeds", autoCollectRainbowSeeds) then
-			timers.autoCollectRainbowSeeds = 0
-		end
-	end
-
 	local shovelDue = state.autoShovel and timers.autoShovel >= CONFIG.shovelInterval
 	if shovelDue then
 		if tryRun("autoShovel", autoShovel) then
@@ -5042,8 +5029,22 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		end
 	end
 
+	local movementLocked = shovelDue or running.autoShovel
+
+	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval and not movementLocked then
+		if tryRun("autoBuyPets", buyPets) then
+			timers.autoBuyPets = 0
+		end
+	end
+
+	if state.autoCollectRainbowSeeds and timers.autoCollectRainbowSeeds >= CONFIG.rainbowCollectInterval and not movementLocked then
+		if tryRun("autoCollectRainbowSeeds", autoCollectRainbowSeeds) then
+			timers.autoCollectRainbowSeeds = 0
+		end
+	end
+
 	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
-		if shovelDue or running.autoShovel then
+		if movementLocked then
 			timers.fruitCollector = CONFIG.collectInterval
 		else
 			if tryRun("fruitCollector", collectFruit) then
@@ -5052,25 +5053,25 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		end
 	end
 
-	if state.seedPlacer and timers.seedPlacer >= CONFIG.plantInterval and not running.autoShovel then
+	if state.seedPlacer and timers.seedPlacer >= CONFIG.plantInterval and not movementLocked then
 		if tryRun("seedPlacer", plantSeed) then
 			timers.seedPlacer = 0
 		end
 	end
 
-	if state.autoSell and timers.autoSell >= CONFIG.sellInterval and not running.autoShovel then
+	if state.autoSell and timers.autoSell >= CONFIG.sellInterval and not movementLocked then
 		if tryRun("autoSell", autoSell) then
 			timers.autoSell = 0
 		end
 	end
 
-	if state.autoBuySeeds and timers.autoBuySeeds >= CONFIG.buyInterval and not running.autoShovel then
+	if state.autoBuySeeds and timers.autoBuySeeds >= CONFIG.buyInterval and not movementLocked then
 		if tryRun("autoBuySeeds", buySeed) then
 			timers.autoBuySeeds = 0
 		end
 	end
 
-	if state.autoBuyGear and timers.autoBuyGear >= CONFIG.buyInterval and not running.autoShovel then
+	if state.autoBuyGear and timers.autoBuyGear >= CONFIG.buyInterval and not movementLocked then
 		if tryRun("autoBuyGear", buyGear) then
 			timers.autoBuyGear = 0
 		end
