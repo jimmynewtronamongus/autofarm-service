@@ -1612,22 +1612,59 @@ function triggerPrompt(prompt, skipTouch)
 		task.wait(0.05)
 	end
 
+	local oldHoldDuration
+	local oldRequiresLineOfSight
+	local oldMaxActivationDistance
+	pcall(function()
+		oldHoldDuration = prompt.HoldDuration
+		oldRequiresLineOfSight = prompt.RequiresLineOfSight
+		oldMaxActivationDistance = prompt.MaxActivationDistance
+		prompt.HoldDuration = 0
+		prompt.RequiresLineOfSight = false
+		prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 20)
+	end)
+
+	local fired = false
 	if typeof(fireproximityprompt) == "function" then
-		fireproximityprompt(prompt)
-		return true
+		fired = pcall(fireproximityprompt, prompt)
+			or pcall(fireproximityprompt, prompt, 1)
+			or pcall(fireproximityprompt, prompt, 0)
 	end
 
 	local ok = pcall(function()
 		prompt:InputHoldBegin()
-		task.wait(math.max(prompt.HoldDuration, 0.05))
+		task.wait(math.max(prompt.HoldDuration or 0, 0.08))
 		prompt:InputHoldEnd()
 	end)
 
 	if ok then
-		return true
+		fired = true
 	end
 
-	return false
+	if virtualInputManager then
+		local keyOk = pcall(function()
+			virtualInputManager:SendKeyEvent(true, prompt.KeyboardKeyCode or Enum.KeyCode.E, false, game)
+			task.wait(0.05)
+			virtualInputManager:SendKeyEvent(false, prompt.KeyboardKeyCode or Enum.KeyCode.E, false, game)
+		end)
+		if keyOk then
+			fired = true
+		end
+	end
+
+	pcall(function()
+		if oldHoldDuration ~= nil then
+			prompt.HoldDuration = oldHoldDuration
+		end
+		if oldRequiresLineOfSight ~= nil then
+			prompt.RequiresLineOfSight = oldRequiresLineOfSight
+		end
+		if oldMaxActivationDistance ~= nil then
+			prompt.MaxActivationDistance = oldMaxActivationDistance
+		end
+	end)
+
+	return fired
 end
 
 local function activateButton(button)
