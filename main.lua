@@ -664,6 +664,7 @@ local getPromptPart
 local triggerPrompt
 local teleportToPart
 local teleportToModelOrPart
+local isInventorySeedTool
 
 local function getCachedDescendants(key, root)
 	local now = os.clock()
@@ -1183,7 +1184,7 @@ local function isFruitContainer(instance)
 	local checked = 0
 	while current and current ~= workspace and checked <= 5 do
 		local name = string.lower(current.Name)
-		if name == "fruits" or name == "fruit" or string.find(name, "harvest", 1, true) then
+		if name == "fruits" or name == "fruit" then
 			return true
 		end
 		current = current.Parent
@@ -1220,7 +1221,6 @@ local function isLikelyFruitTarget(instance)
 	if string.find(blob, "kg", 1, true)
 		or string.find(blob, "lb", 1, true)
 		or string.find(blob, "fruit", 1, true)
-		or string.find(blob, "harvest", 1, true)
 		or string.find(blob, "mutation", 1, true)
 	then
 		return true
@@ -1251,6 +1251,12 @@ local function collectPrompt(prompt)
 		return false
 	end
 
+	local target = getCollectFruitTarget(prompt)
+	local packeted = target ~= nil and sendPacket("CollectFruit", target)
+	if packeted then
+		return true
+	end
+
 	if part and state.collectTeleport then
 		local model = prompt and prompt:FindFirstAncestorWhichIsA("Model")
 		if model then
@@ -1261,8 +1267,7 @@ local function collectPrompt(prompt)
 	end
 
 	local prompted = triggerPrompt(prompt, true)
-	local target = getCollectFruitTarget(prompt)
-	local packeted = target ~= nil and sendPacket("CollectFruit", target)
+	packeted = target ~= nil and sendPacket("CollectFruit", target)
 
 	return prompted or packeted
 end
@@ -1429,7 +1434,7 @@ local function collectFruit()
 		for _, descendant in ipairs(getCachedDescendants("garden" .. index, root)) do
 			if isHarvestPrompt(descendant) then
 				local target = getCollectFruitTarget(descendant) or descendant
-				if not seenTargets[target] then
+				if isLikelyFruitTarget(target) and not seenTargets[target] then
 					seenTargets[target] = true
 					table.insert(targets, {
 						prompt = descendant,
@@ -1496,7 +1501,11 @@ local function getEquippedSeedTool(seedName)
 	for _, container in ipairs({ character, backpack }) do
 		if container then
 			for _, item in ipairs(container:GetChildren()) do
-				if item:IsA("Tool") and string.find(string.lower(item.Name), string.lower(targetSeed), 1, true) then
+				if item:IsA("Tool")
+					and isInventorySeedTool
+					and isInventorySeedTool(item)
+					and string.find(string.lower(item.Name), string.lower(targetSeed), 1, true)
+				then
 					if item.Parent ~= character and humanoid then
 						humanoid:EquipTool(item)
 					end
@@ -1516,10 +1525,6 @@ local function getSelectedSeedList()
 		if selectedSeeds[seedName] and not blacklistedSeeds[seedName] then
 			table.insert(selected, seedName)
 		end
-	end
-
-	if #selected == 0 and CONFIG.selectedSeed ~= "" and not blacklistedSeeds[CONFIG.selectedSeed] then
-		table.insert(selected, CONFIG.selectedSeed)
 	end
 
 	return getSortedSeedList(selected)
@@ -1622,7 +1627,7 @@ local function moveToOwnGarden()
 	return gardenPosition, nil
 end
 
-local function isInventorySeedTool(item)
+isInventorySeedTool = function(item)
 	if not item or not item:IsA("Tool") then
 		return false
 	end
