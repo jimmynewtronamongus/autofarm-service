@@ -2526,7 +2526,7 @@ local function make(className, properties, parent)
 	return instance
 end
 
-do
+function buildUI()
 local existing = playerGui:FindFirstChild("GardenAutomationGui")
 if existing then
 	existing:Destroy()
@@ -3595,6 +3595,8 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 end
+
+buildUI()
 
 local timers = {
 	fruitCollector = 0,
