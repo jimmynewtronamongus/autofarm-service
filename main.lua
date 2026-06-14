@@ -18,18 +18,20 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 local CONFIG = {
-	collectInterval = 1.0,
-	plantInterval = 0.75,
+	collectInterval = 1.15,
+	plantInterval = 0.9,
 	sellInterval = 12.0,
 	buyInterval = 5.0,
-	rainbowCollectInterval = 0.75,
+	rainbowCollectInterval = 2.5,
 	petBuyInterval = 0.75,
-	cacheRefreshInterval = 7.0,
+	cacheRefreshInterval = 12.0,
+	dropCacheRefreshInterval = 2.5,
 	inventoryRefreshInterval = 1.5,
 	guiInventoryRefreshInterval = 5.0,
-	maxFruitCollectPerTick = 48,
-	maxFruitScanPerRoot = 5000,
+	maxFruitCollectPerTick = 32,
+	maxFruitScanPerRoot = 1200,
 	maxDropCollectPerTick = 8,
+	maxDropScanPerRoot = 2500,
 	maxInventoryItems = 200,
 	lowRaritySeedLimit = 10,
 	maxVisualPets = 24,
@@ -144,17 +146,9 @@ local function loadConfig()
 		"webhookUrl",
 	})
 	copyKnownValues(decoded.state, state, {
-		"fruitCollector",
 		"collectTeleport",
-		"seedPlacer",
-		"autoSell",
-		"autoBuySeeds",
 		"seedShopEnabled",
-		"autoBuyGear",
 		"gearShopEnabled",
-		"autoCollectRainbowSeeds",
-		"autoBuyPets",
-		"performanceMode",
 	})
 
 	selectedSeeds = copyMap(decoded.selectedSeeds)
@@ -755,10 +749,11 @@ local teleportToPart
 local teleportToModelOrPart
 local isInventorySeedTool
 
-local function getCachedDescendants(key, root)
+local function getCachedDescendants(key, root, maxAge)
 	local now = os.clock()
 	local atKey = key .. "At"
 	local listKey = key .. "Descendants"
+	maxAge = maxAge or CONFIG.cacheRefreshInterval
 
 	if not root then
 		cache[atKey] = now
@@ -766,7 +761,7 @@ local function getCachedDescendants(key, root)
 		return cache[listKey]
 	end
 
-	if not cache[atKey] or now - cache[atKey] > CONFIG.cacheRefreshInterval then
+	if not cache[atKey] or now - cache[atKey] > maxAge then
 		cache[atKey] = now
 		cache[listKey] = root:GetDescendants()
 	end
@@ -795,8 +790,6 @@ local function watchDropRoot(root)
 	end
 
 	dropCacheRoots[root] = true
-	root.DescendantAdded:Connect(invalidateDropCaches)
-	root.DescendantRemoving:Connect(invalidateDropCaches)
 end
 
 local function watchDropRoots()
@@ -877,12 +870,25 @@ local ownGardenCache = {
 	checkedAt = 0,
 }
 
-local watchedOwnPlots = {}
-
 local function invalidateOwnGardenCache()
 	ownGardenCache.checkedAt = 0
 	cache.ownGardenDescendants = nil
 	cache.ownGardenAt = nil
+end
+
+local function addUniqueInstance(list, instance)
+	if not instance then
+		return false
+	end
+
+	for _, existing in ipairs(list) do
+		if existing == instance then
+			return false
+		end
+	end
+
+	table.insert(list, instance)
+	return true
 end
 
 local function getOwnGardenRoots()
@@ -904,17 +910,16 @@ local function getOwnGardenRoots()
 			return
 		end
 
-		for _, existing in ipairs(roots) do
-			if existing == plot then
-				return
+		local added = false
+		for _, name in ipairs({ "Plants", "Fruits", "Fruit", "Crops", "Harvest", "Harvests", "Drops" }) do
+			local child = plot:FindFirstChild(name)
+			if child then
+				added = addUniqueInstance(roots, child) or added
 			end
 		end
 
-		table.insert(roots, plot)
-		if not watchedOwnPlots[plot] then
-			watchedOwnPlots[plot] = true
-			plot.DescendantAdded:Connect(invalidateOwnGardenCache)
-			plot.DescendantRemoving:Connect(invalidateOwnGardenCache)
+		if not added then
+			addUniqueInstance(roots, plot)
 		end
 	end
 
@@ -2250,12 +2255,17 @@ local function autoCollectRainbowSeeds()
 			return
 		end
 
-		for _, descendant in ipairs(getCachedDescendants("rainbow" .. rootIndex, root)) do
+		local scanned = 0
+		for _, descendant in ipairs(getCachedDescendants("rainbow" .. rootIndex, root, CONFIG.dropCacheRefreshInterval)) do
 			if not isEnabled("autoCollectRainbowSeeds") then
 				return
 			end
 
 			if #targets >= CONFIG.maxDropCollectPerTick then
+				break
+			end
+			scanned += 1
+			if scanned >= CONFIG.maxDropScanPerRoot then
 				break
 			end
 
