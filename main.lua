@@ -605,6 +605,68 @@ local function getOwnGardenRoots()
 	return roots
 end
 
+local function getGardenAnchorPart(root)
+	if not root then
+		return nil
+	end
+
+	if root:IsA("BasePart") then
+		return root
+	end
+
+	local parent = root.Parent
+	for _, name in ipairs({ "PlantingGround", "PlantingArea", "Soil", "Dirt", "Ground", "Base", "Plot" }) do
+		local direct = root:FindFirstChild(name) or (parent and parent:FindFirstChild(name))
+		if direct and direct:IsA("BasePart") then
+			return direct
+		end
+	end
+
+	if parent then
+		for _, descendant in ipairs(parent:GetChildren()) do
+			if descendant:IsA("BasePart") then
+				local lowered = string.lower(descendant.Name)
+				if string.find(lowered, "soil", 1, true)
+					or string.find(lowered, "dirt", 1, true)
+					or string.find(lowered, "ground", 1, true)
+					or string.find(lowered, "plot", 1, true)
+					or string.find(lowered, "plant", 1, true)
+				then
+					return descendant
+				end
+			end
+		end
+	end
+
+	if parent and parent:IsA("Model") then
+		local ok, cframe = pcall(function()
+			return parent:GetBoundingBox()
+		end)
+		if ok then
+			return cframe.Position
+		end
+	end
+
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			return descendant
+		end
+	end
+
+	return nil
+end
+
+local function getOwnGardenAnchor()
+	for _, root in ipairs(getOwnGardenRoots()) do
+		local part = getGardenAnchorPart(root)
+		if part then
+			return part
+		end
+	end
+
+	return nil
+end
+
 local function textMatches(instance, terms)
 	local instanceText = ""
 	pcall(function()
@@ -1101,7 +1163,7 @@ local function canPlaceSeed(seedName)
 	return true
 end
 
-local function getSeedPlantPosition(index)
+local function getSeedPlantPosition(index, center)
 	local root = getRoot()
 	if not root then
 		return nil
@@ -1109,7 +1171,8 @@ local function getSeedPlantPosition(index)
 
 	local angle = ((index or 1) - 1) * math.rad(45)
 	local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * math.min(CONFIG.plantRadius, 6)
-	local origin = root.Position + offset + Vector3.new(0, 12, 0)
+	local basePosition = center or root.Position
+	local origin = basePosition + offset + Vector3.new(0, 12, 0)
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = { getCharacter() }
@@ -1119,7 +1182,7 @@ local function getSeedPlantPosition(index)
 		return result.Position
 	end
 
-	return root.Position + offset
+	return basePosition + offset
 end
 
 local function tryPlantSeedRemote(seedName, position)
@@ -1144,6 +1207,26 @@ local function tryPlantSeedRemote(seedName, position)
 	end
 
 	return attempts
+end
+
+local function moveToOwnGarden()
+	local root = getRoot()
+	if not root then
+		return nil, "character"
+	end
+
+	local anchor = getOwnGardenAnchor()
+	if not anchor then
+		return nil, "garden"
+	end
+
+	local gardenPosition = typeof(anchor) == "Vector3" and anchor or anchor.Position
+	if (root.Position - gardenPosition).Magnitude > math.max(CONFIG.plantRadius, 18) then
+		root.CFrame = CFrame.new(gardenPosition + Vector3.new(0, 4, 0))
+		task.wait(0.15)
+	end
+
+	return gardenPosition, nil
 end
 
 local function isInventorySeedTool(item)
@@ -1607,6 +1690,12 @@ local function plantSeed()
 		return
 	end
 
+	local gardenPosition, moveReason = moveToOwnGarden()
+	if not gardenPosition then
+		setStatus(moveReason == "garden" and "Seed placer: own garden not found" or "Seed placer: character root missing")
+		return
+	end
+
 	local planted = 0
 	local attempts = 0
 	local missing = 0
@@ -1623,7 +1712,7 @@ local function plantSeed()
 
 		local tool = getEquippedSeedTool(seedName)
 		if tool then
-			local position = getSeedPlantPosition(index)
+			local position = getSeedPlantPosition(index, gardenPosition)
 			if position then
 				attempts += tryPlantSeedRemote(seedName, position)
 			end
@@ -1645,7 +1734,7 @@ local function plantSeed()
 	updateStatsUI()
 
 	if planted > 0 then
-		setStatus(("Seed placer: %d seed(s), %d remote try(s)"):format(planted, attempts))
+		setStatus(("Seed placer: placed %d seed(s) in garden, %d remote try(s)"):format(planted, attempts))
 	else
 		setStatus(("Seed placer: no selected seed tool found (%d missing)"):format(missing))
 	end
