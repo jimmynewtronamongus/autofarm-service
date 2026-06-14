@@ -34,6 +34,7 @@ local CONFIG = {
 	maxFruitTargetsCached = 180,
 	maxSeedPlantPerTick = 40,
 	maxSeedPlacementsPerTool = 8,
+	seedCountCacheRefreshInterval = 20.0,
 	maxSeedBuyPerTick = 6,
 	seedBuyRemoteRepeats = 4,
 	maxDropCollectPerTick = 8,
@@ -2111,7 +2112,7 @@ local function countPlacedSeed(seedName)
 	local needle = string.lower(seedName)
 
 	for _, root in ipairs(getOwnGardenRoots()) do
-		for _, descendant in ipairs(getCachedDescendants("seedCount" .. seedName, root)) do
+		for _, descendant in ipairs(getCachedDescendants("seedCount" .. seedName, root, CONFIG.seedCountCacheRefreshInterval)) do
 			if descendant:IsA("Model") and string.find(string.lower(descendant.Name), needle, 1, true) then
 				count += 1
 			end
@@ -2731,8 +2732,88 @@ local function autoCollectRainbowSeeds()
 	setStatus(("Gold/rainbow drops: collected %d/%d target(s)"):format(checked, #targets))
 end
 
+local performanceOptimized = setmetatable({}, { __mode = "k" })
+local performanceWatcherConnected = false
+
+local function optimizePerformanceInstance(instance)
+	if not instance or performanceOptimized[instance] then
+		return 0
+	end
+
+	local changed = 0
+	if instance:IsA("BasePart") then
+		performanceOptimized[instance] = true
+		pcall(function()
+			instance.Material = Enum.Material.SmoothPlastic
+			instance.Reflectance = 0
+			instance.CastShadow = false
+			if instance:IsA("MeshPart") then
+				instance.RenderFidelity = Enum.RenderFidelity.Performance
+			end
+		end)
+		changed = 1
+	elseif instance:IsA("Decal") or instance:IsA("Texture") then
+		performanceOptimized[instance] = true
+		pcall(function()
+			instance.Transparency = 1
+		end)
+		changed = 1
+	elseif instance:IsA("ParticleEmitter")
+		or instance:IsA("Trail")
+		or instance:IsA("Beam")
+		or instance:IsA("Smoke")
+		or instance:IsA("Fire")
+		or instance:IsA("Sparkles")
+	then
+		performanceOptimized[instance] = true
+		pcall(function()
+			instance.Enabled = false
+		end)
+		changed = 1
+	elseif instance:IsA("PointLight")
+		or instance:IsA("SpotLight")
+		or instance:IsA("SurfaceLight")
+	then
+		performanceOptimized[instance] = true
+		pcall(function()
+			instance.Enabled = false
+		end)
+		changed = 1
+	end
+
+	return changed
+end
+
+local function optimizePerformanceTree(root, budget)
+	local changed = 0
+	local processed = 0
+	for _, descendant in ipairs(root:GetDescendants()) do
+		changed += optimizePerformanceInstance(descendant)
+		processed += 1
+		if budget and processed % budget == 0 then
+			task.wait()
+		end
+	end
+	return changed
+end
+
+local function connectPerformanceWatcher()
+	if performanceWatcherConnected then
+		return
+	end
+
+	performanceWatcherConnected = true
+	workspace.DescendantAdded:Connect(function(descendant)
+		if state.performanceMode then
+			optimizePerformanceInstance(descendant)
+		end
+	end)
+end
+
 local function enablePerformanceMode()
 	local changed = 0
+
+	connectPerformanceWatcher()
 
 	pcall(function()
 		settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
@@ -2746,32 +2827,7 @@ local function enablePerformanceMode()
 		workspace.Terrain.Decoration = false
 	end)
 
-	for _, descendant in ipairs(workspace:GetDescendants()) do
-		if descendant:IsA("BasePart") then
-			descendant.Material = Enum.Material.SmoothPlastic
-			descendant.Reflectance = 0
-			descendant.CastShadow = false
-			changed += 1
-		elseif descendant:IsA("Decal") or descendant:IsA("Texture") then
-			descendant.Transparency = 1
-			changed += 1
-		elseif descendant:IsA("ParticleEmitter")
-			or descendant:IsA("Trail")
-			or descendant:IsA("Beam")
-			or descendant:IsA("Smoke")
-			or descendant:IsA("Fire")
-			or descendant:IsA("Sparkles")
-		then
-			descendant.Enabled = false
-			changed += 1
-		elseif descendant:IsA("PointLight")
-			or descendant:IsA("SpotLight")
-			or descendant:IsA("SurfaceLight")
-		then
-			descendant.Enabled = false
-			changed += 1
-		end
-	end
+	changed += optimizePerformanceTree(workspace, 300)
 
 	setStatus(("Performance mode: simplified %d object(s)"):format(changed))
 end
@@ -3987,6 +4043,10 @@ end)
 end
 
 buildUI()
+
+if state.performanceMode then
+	task.spawn(enablePerformanceMode)
+end
 
 timers = {
 	fruitCollector = 0,
