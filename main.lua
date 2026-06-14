@@ -1548,6 +1548,9 @@ local function getTargetPart(target)
 			or target:FindFirstChild("HumanoidRootPart", true)
 			or target:FindFirstChildWhichIsA("BasePart", true)
 	end
+	if target:IsA("Folder") then
+		return target:FindFirstChildWhichIsA("BasePart", true)
+	end
 	return nil
 end
 
@@ -1634,7 +1637,7 @@ local function collectFruitTarget(target)
 	sendPacket("Harvest", target)
 
 	if part then
-		touchPart(part)
+		touchPart(part, state.collectTeleport)
 	end
 
 	return collectionTookEffect(target, beforeInventoryCount)
@@ -1880,7 +1883,7 @@ local function collectFruitEntryFast(entry)
 	end
 
 	if part then
-		fired = touchPart(part) or fired
+		fired = touchPart(part, state.collectTeleport) or fired
 	end
 
 	return fired
@@ -2559,10 +2562,14 @@ local function getSelectedPetList()
 	return selected
 end
 
-function touchPart(part)
+function touchPart(part, allowTeleportFallback)
 	local root = getRoot()
 	if not root or not part or not part:IsA("BasePart") then
 		return false
+	end
+
+	if allowTeleportFallback == nil then
+		allowTeleportFallback = true
 	end
 
 	if typeof(firetouchinterest) == "function" then
@@ -2570,6 +2577,10 @@ function touchPart(part)
 		task.wait()
 		pcall(firetouchinterest, root, part, 1)
 		return true
+	end
+
+	if not allowTeleportFallback then
+		return false
 	end
 
 	local oldCFrame = root.CFrame
@@ -3212,7 +3223,7 @@ local function getPlantNameForShovel(instance)
 	while current and current ~= workspace do
 		local parent = current.Parent
 		local parentName = parent and string.lower(parent.Name) or ""
-		if current:IsA("Model")
+		if (current:IsA("Model") or current:IsA("Folder") or current:IsA("BasePart"))
 			and (parentName == "plants" or parentName == "crops" or parentName == "plant")
 		then
 			best = current
@@ -3228,20 +3239,81 @@ local function getPlantModelForShovel(instance)
 	while current and current ~= workspace do
 		local parent = current.Parent
 		local parentName = parent and string.lower(parent.Name) or ""
-		if current:IsA("Model")
+		if (current:IsA("Model") or current:IsA("Folder") or current:IsA("BasePart"))
 			and (parentName == "plants" or parentName == "crops" or parentName == "plant")
 		then
 			return current
 		end
 		current = parent
 	end
-	return instance
+	return nil
+end
+
+local function plantHasPromptText(plant, seedName)
+	if not plant or not seedName then
+		return false
+	end
+
+	local lowered = string.lower(seedName)
+	local compactSeed = string.gsub(lowered, "[%s_%-]", "")
+	for _, descendant in ipairs(plant:GetDescendants()) do
+		if descendant:IsA("ProximityPrompt") and descendant.Name ~= "StealPrompt" then
+			local text = string.lower((descendant.ObjectText or "") .. " " .. (descendant.ActionText or "") .. " " .. descendant.Name)
+			local compactText = string.gsub(text, "[%s_%-]", "")
+			if string.find(text, lowered, 1, true) or string.find(compactText, compactSeed, 1, true) then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+local function getPlantShovelIdentifiers(plant, part)
+	local identifiers = { plant, plant.Name }
+
+	for _, attributeName in ipairs({
+		"ID",
+		"Id",
+		"UUID",
+		"Guid",
+		"PlantId",
+		"PlantID",
+		"Seed",
+		"SeedName",
+	}) do
+		local ok, value = pcall(function()
+			return plant:GetAttribute(attributeName)
+		end)
+		if ok and value ~= nil then
+			table.insert(identifiers, value)
+		end
+	end
+
+	for _, child in ipairs(plant:GetChildren()) do
+		if child:IsA("ValueBase") then
+			local ok, value = pcall(function()
+				return child.Value
+			end)
+			if ok and value ~= nil then
+				table.insert(identifiers, value)
+			end
+		end
+	end
+
+	if part then
+		table.insert(identifiers, part.Position)
+	end
+
+	return identifiers
 end
 
 local function plantMatchesShovelSelection(plant, selected)
 	local plantName = string.lower(getPlantNameForShovel(plant))
+	local pathText = string.lower(getObjectPath(plant))
 	local compactPlantName = string.gsub(plantName, "[%s_%-]", "")
-	if plantName == "" then
+	local compactPath = string.gsub(pathText, "[%s_%-]", "")
+	if plantName == "" and pathText == "" then
 		return false
 	end
 
@@ -3250,6 +3322,9 @@ local function plantMatchesShovelSelection(plant, selected)
 		local compactSeed = string.gsub(lowered, "[%s_%-]", "")
 		if string.find(plantName, lowered, 1, true)
 			or string.find(compactPlantName, compactSeed, 1, true)
+			or string.find(pathText, lowered, 1, true)
+			or string.find(compactPath, compactSeed, 1, true)
+			or plantHasPromptText(plant, seedName)
 			or treeTextMatches(plant, { seedName }, 3)
 		then
 			return true
@@ -3313,17 +3388,26 @@ local function shovelPlantTarget(plant)
 	local beforeParent = plant.Parent
 	local plantName = plant.Name
 	local plantPosition = part and part.Position
+	local identifiers = getPlantShovelIdentifiers(plant, part)
 
 	for _, packetName in ipairs({
 		"UseShovel",
 		"SwingShovel",
 	}) do
+		fired = sendPacket(packetName) or fired
 		fired = sendPacket(packetName, plant) or fired
 		fired = sendPacket(packetName, plantName) or fired
 		if plantPosition then
 			fired = sendPacket(packetName, plantPosition) or fired
 			fired = sendPacket(packetName, plant, plantPosition) or fired
 			fired = sendPacket(packetName, plantName, plantPosition) or fired
+		end
+		for _, identifier in ipairs(identifiers) do
+			fired = sendPacket(packetName, identifier) or fired
+			if plantPosition and identifier ~= plantPosition then
+				fired = sendPacket(packetName, identifier, plantPosition) or fired
+				fired = sendPacket(packetName, plantPosition, identifier) or fired
+			end
 		end
 	end
 
@@ -3373,12 +3457,17 @@ local function autoShovel()
 
 			if descendant.Parent
 				and descendant:IsDescendantOf(workspace)
-				and descendant:IsA("Model")
-				and plantMatchesShovelSelection(descendant, selected)
-				and not seen[descendant]
 			then
-				seen[descendant] = true
-				table.insert(targets, descendant)
+				local plant = getPlantModelForShovel(descendant)
+				if plant
+					and plant.Parent
+					and plant:IsDescendantOf(workspace)
+					and not seen[plant]
+					and plantMatchesShovelSelection(plant, selected)
+				then
+					seen[plant] = true
+					table.insert(targets, plant)
+				end
 			end
 		end
 
