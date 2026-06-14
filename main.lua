@@ -1820,13 +1820,49 @@ local function teleportToPart(part, height)
 		return false
 	end
 
+	local character = getCharacter()
+	local targetCFrame = part.CFrame + Vector3.new(0, height or 3, 0)
 	local ok = pcall(function()
-		root.CFrame = part.CFrame + Vector3.new(0, height or 3, 0)
+		if character and character.PivotTo then
+			character:PivotTo(targetCFrame)
+		end
+		root.CFrame = targetCFrame
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
 	end)
 	if ok then
-		task.wait(0.08)
+		task.wait(0.15)
 	end
 	return ok
+end
+
+local function teleportToModelOrPart(model, part, height)
+	if model and model:IsA("Model") then
+		local pivotOk, pivot = pcall(function()
+			return model:GetPivot()
+		end)
+		if pivotOk then
+			local root = getRoot()
+			local character = getCharacter()
+			local targetCFrame = CFrame.new(pivot.Position + Vector3.new(0, height or 3, 0))
+			local ok = pcall(function()
+				if character and character.PivotTo then
+					character:PivotTo(targetCFrame)
+				end
+				if root then
+					root.CFrame = targetCFrame
+					root.AssemblyLinearVelocity = Vector3.zero
+					root.AssemblyAngularVelocity = Vector3.zero
+				end
+			end)
+			if ok then
+				task.wait(0.15)
+				return true
+			end
+		end
+	end
+
+	return teleportToPart(part, height)
 end
 
 function getPromptPart(prompt)
@@ -2286,11 +2322,12 @@ local function buyOnePet(petName)
 			if isBuyPrompt and isPetPrompt then
 				local part = getPromptPart(descendant)
 				if part then
-					teleportToPart(part, 3)
-					task.wait(0.08)
+					teleportToModelOrPart(model, part, 3)
 				end
 
-				if triggerPrompt(descendant, true) then
+				local root = getRoot()
+				local inRange = not root or not part or (root.Position - part.Position).Magnitude <= ((descendant.MaxActivationDistance or 10) + 4)
+				if inRange and triggerPrompt(descendant, true) then
 					return true, ("Auto pets: moved in range and bought %s"):format(petName)
 				end
 			end
