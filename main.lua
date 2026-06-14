@@ -24,6 +24,7 @@ local CONFIG = {
 	rainbowCollectInterval = 2.5,
 	petBuyInterval = 6.0,
 	cacheRefreshInterval = 7.0,
+	maxDropCollectPerTick = 8,
 	maxInventoryItems = 200,
 	lowRaritySeedLimit = 10,
 	maxVisualPets = 24,
@@ -516,6 +517,28 @@ end
 
 local function getGardens()
 	return workspace:FindFirstChild("Gardens")
+end
+
+local dropCacheRoots = {}
+
+local function invalidateDropCaches()
+	cache.rainbow1At = nil
+	cache.rainbow2At = nil
+end
+
+local function watchDropRoot(root)
+	if not root or dropCacheRoots[root] then
+		return
+	end
+
+	dropCacheRoots[root] = true
+	root.DescendantAdded:Connect(invalidateDropCaches)
+	root.DescendantRemoving:Connect(invalidateDropCaches)
+end
+
+local function watchDropRoots()
+	watchDropRoot(getMap())
+	watchDropRoot(getGardens())
 end
 
 local function getWildPetSpawns()
@@ -1548,6 +1571,21 @@ function touchPart(part)
 	return ok
 end
 
+local function teleportToPart(part, height)
+	local root = getRoot()
+	if not root or not part or not part:IsA("BasePart") then
+		return false
+	end
+
+	local ok = pcall(function()
+		root.CFrame = part.CFrame + Vector3.new(0, height or 3, 0)
+	end)
+	if ok then
+		task.wait(0.08)
+	end
+	return ok
+end
+
 function getPromptPart(prompt)
 	local current = prompt.Parent
 	while current and current ~= workspace do
@@ -1599,10 +1637,16 @@ local function autoCollectRainbowSeeds()
 	end
 
 	local checked = 0
+	local targets = {}
 	local roots = { getMap(), getGardens() }
+	watchDropRoots()
 
 	for rootIndex, root in ipairs(roots) do
 		for _, descendant in ipairs(getCachedDescendants("rainbow" .. rootIndex, root)) do
+			if #targets >= CONFIG.maxDropCollectPerTick then
+				break
+			end
+
 			local matchesRainbowSeed = treeTextMatches(descendant, {
 				"rainbow",
 				"gold",
@@ -1615,27 +1659,51 @@ local function autoCollectRainbowSeeds()
 			}, 3)
 
 			if descendant:IsA("ProximityPrompt") and descendant.Name ~= "StealPrompt" and matchesRainbowSeed then
-				if triggerPrompt(descendant) then
-					checked += 1
-					task.wait(0.03)
-				end
+				table.insert(targets, descendant)
 			elseif descendant:IsA("BasePart")
 				and descendant.CanTouch
 				and matchesRainbowSeed
 				and treeTextMatches(descendant, { "seed", "pack", "drop", "collect", "pickup", "rain" }, 3)
 			then
-				if touchPart(descendant) then
-					checked += 1
-					task.wait(0.03)
-				end
-
+				table.insert(targets, descendant)
 			end
+		end
+
+		if #targets >= CONFIG.maxDropCollectPerTick then
+			break
+		end
+	end
+
+	table.sort(targets, function(left, right)
+		local leftPart = left:IsA("ProximityPrompt") and getPromptPart(left) or left
+		local rightPart = right:IsA("ProximityPrompt") and getPromptPart(right) or right
+		local root = getRoot()
+		local leftDistance = root and leftPart and (root.Position - leftPart.Position).Magnitude or math.huge
+		local rightDistance = root and rightPart and (root.Position - rightPart.Position).Magnitude or math.huge
+		return leftDistance < rightDistance
+	end)
+
+	for _, target in ipairs(targets) do
+		if checked >= CONFIG.maxDropCollectPerTick then
+			break
+		end
+
+		local part = target:IsA("ProximityPrompt") and getPromptPart(target) or target
+		if part and teleportToPart(part, 3) then
+			if target:IsA("ProximityPrompt") then
+				if triggerPrompt(target, true) then
+					checked += 1
+				end
+			elseif touchPart(target) then
+				checked += 1
+			end
+			task.wait(0.05)
 		end
 	end
 
 	refreshInventoryStats()
 	updateStatsUI()
-	setStatus(("Gold/rainbow seeds: %d target(s) checked"):format(checked))
+	setStatus(("Gold/rainbow drops: collected %d/%d target(s)"):format(checked, #targets))
 end
 
 local function enablePerformanceMode()
