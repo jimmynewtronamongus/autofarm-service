@@ -213,6 +213,7 @@ end
 local configLoaded = loadConfig()
 
 local webhookSentAt = {}
+local getStockItemsFolder
 
 local function getRequestFunction()
 	return (syn and syn.request)
@@ -249,8 +250,8 @@ local function sendWebhook(title, description, key)
 		},
 	}
 
-	local ok = pcall(function()
-		requestFunction({
+	local ok, response = pcall(function()
+		return requestFunction({
 			Url = CONFIG.webhookUrl,
 			Method = "POST",
 			Headers = {
@@ -260,19 +261,52 @@ local function sendWebhook(title, description, key)
 		})
 	end)
 
-	if ok and key then
+	local statusCode = 200
+	if ok and type(response) == "table" then
+		statusCode = tonumber(response.StatusCode or response.Status or response.status_code) or statusCode
+	end
+	local sent = ok and statusCode >= 200 and statusCode < 300
+
+	if sent and key then
 		webhookSentAt[key] = now
+	elseif not sent then
+		setStatus(("Webhook failed%s"):format(ok and (" (" .. tostring(statusCode) .. ")") or ""))
 	end
 
-	return ok
+	return sent
 end
 
 local function shouldNotifySelected(map, name)
 	return name and name ~= "" and map[name] == true
 end
 
+local function listHasName(list, name)
+	for _, value in ipairs(list) do
+		if value == name then
+			return true
+		end
+	end
+	return false
+end
+
+local function getStockFolderName(shopName)
+	if shopName == "Seed shop" then
+		return "SeedShop"
+	elseif shopName == "Gear shop" then
+		return "GearShop"
+	end
+	return shopName
+end
+
+local function itemIsInStock(shopName, itemName)
+	local items = getStockItemsFolder and getStockItemsFolder(getStockFolderName(shopName))
+	return items and items:FindFirstChild(itemName) ~= nil
+end
+
 local function notifyStock(shopName, itemName)
-	if shouldNotifySelected(selectedSeeds, itemName) or shouldNotifySelected(selectedGears, itemName) then
+	if itemIsInStock(shopName, itemName)
+		and (shouldNotifySelected(selectedSeeds, itemName) or shouldNotifySelected(selectedGears, itemName))
+	then
 		sendWebhook(
 			shopName .. " stock",
 			itemName .. " is now in stock.",
@@ -419,7 +453,7 @@ local function getGearImagesFolder()
 	return sharedModules and sharedModules:FindFirstChild("GearImages")
 end
 
-local function getStockItemsFolder(shopName)
+getStockItemsFolder = function(shopName)
 	local stockValues = ReplicatedStorage:FindFirstChild("StockValues")
 	local shop = stockValues and stockValues:FindFirstChild(shopName)
 	return shop and shop:FindFirstChild("Items")
@@ -3542,6 +3576,9 @@ local function makeSeedButton(seedName)
 		refreshSeedButton(seedName)
 		saveConfig()
 		setStatus((selectedSeeds[seedName] and "Selected " or "Unselected ") .. seedName)
+		if selectedSeeds[seedName] then
+			notifyStock("Seed shop", seedName)
+		end
 	end)
 
 	refreshSeedCanvas()
@@ -3565,6 +3602,7 @@ local function scanSeedShopNames()
 					if child:FindFirstChild("Main_Frame", true) or child:FindFirstChildWhichIsA("GuiButton", true) then
 						addUniqueName(seedNames, child.Name)
 						makeSeedButton(child.Name)
+						notifyStock("Seed shop", child.Name)
 					end
 				end
 			end
@@ -3584,6 +3622,13 @@ scanSeedShopNames()
 
 local seedStockItems = getStockItemsFolder("SeedShop")
 if seedStockItems then
+	for _, item in ipairs(seedStockItems:GetChildren()) do
+		addUniqueName(seedNames, item.Name)
+		seedPriority[item.Name] = seedPriority[item.Name] or getSeedMetadataValue(item.Name)
+		makeSeedButton(item.Name)
+		notifyStock("Seed shop", item.Name)
+	end
+
 	seedStockItems.ChildAdded:Connect(function(item)
 		addUniqueName(seedNames, item.Name)
 		seedPriority[item.Name] = getSeedMetadataValue(item.Name)
@@ -3687,6 +3732,9 @@ local function makeGearButton(gearName)
 		refreshGearButton(gearName)
 		saveConfig()
 		setStatus((selectedGears[gearName] and "Selected " or "Unselected ") .. gearName)
+		if selectedGears[gearName] then
+			notifyStock("Gear shop", gearName)
+		end
 	end)
 
 	refreshGearCanvas()
@@ -3703,6 +3751,7 @@ local function scanGearShopNames()
 			if child.Name ~= "ItemTemplate" and not string.find(string.lower(child.Name), "shelf", 1, true) then
 				if child:FindFirstChild("Main_Frame", true) or child:FindFirstChildWhichIsA("GuiButton", true) then
 					addUniqueName(gearNames, child.Name)
+					notifyStock("Gear shop", child.Name)
 				end
 			end
 		end
@@ -3722,6 +3771,12 @@ scanGearShopNames()
 
 local gearStockItems = getStockItemsFolder("GearShop")
 if gearStockItems then
+	for _, item in ipairs(gearStockItems:GetChildren()) do
+		addUniqueName(gearNames, item.Name)
+		makeGearButton(item.Name)
+		notifyStock("Gear shop", item.Name)
+	end
+
 	gearStockItems.ChildAdded:Connect(function(item)
 		addUniqueName(gearNames, item.Name)
 		table.sort(gearNames)
@@ -3818,6 +3873,9 @@ local function makePetButton(petName)
 		refreshPetButton(petName)
 		saveConfig()
 		setStatus((selectedPets[petName] and "Selected " or "Unselected ") .. petName)
+		if selectedPets[petName] and listHasName(buyPetNames, petName) then
+			notifyPetSpawn(petName)
+		end
 	end)
 
 	refreshPetCanvas()
