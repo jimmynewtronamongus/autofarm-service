@@ -2959,7 +2959,7 @@ visualControlsToggle.Activated:Connect(function()
 	setStatus("Visual controls " .. (visualControlsVisible and "shown" or "hidden"))
 end)
 
-;(function()
+local function buildSeedSelector()
 local selectedSeedLabel = make("TextLabel", {
 	Name = "SelectedSeedLabel",
 	BackgroundTransparency = 1,
@@ -3182,9 +3182,10 @@ playerGui.ChildAdded:Connect(function(child)
 		scanSeedShopNames()
 	end
 end)
-end)()
+end
+buildSeedSelector()
 
-;(function()
+local function buildGearSelector()
 local selectedGearLabel = make("TextLabel", {
 	Name = "SelectedGearLabel",
 	BackgroundTransparency = 1,
@@ -3310,9 +3311,10 @@ playerGui.ChildAdded:Connect(function(child)
 		scanGearShopNames()
 	end
 end)
-end)()
+end
+buildGearSelector()
 
-;(function()
+local function buildPetSelector()
 local selectedPetLabel = make("TextLabel", {
 	Name = "SelectedPetLabel",
 	BackgroundTransparency = 1,
@@ -3449,9 +3451,10 @@ if wildPetSpawnsForBuy then
 		end
 	end)
 end
-end)()
+end
+buildPetSelector()
 
-;(function()
+local function buildVisualPetSelector()
 local selectedVisualPetLabel = make("TextLabel", {
 	Name = "SelectedVisualPetLabel",
 	BackgroundTransparency = 1,
@@ -3692,7 +3695,8 @@ if gearImages then
 		end
 	end)
 end
-end)()
+end
+buildVisualPetSelector()
 
 registerVisualControl(makeActionButton("Spawn", 28, spawnVisualPets))
 registerVisualControl(makeActionButton("Clear", 29, clearVisualPets))
