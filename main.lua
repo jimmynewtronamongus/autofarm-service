@@ -19,7 +19,7 @@ local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 local CONFIG = {
 	collectInterval = 0.35,
-	plantInterval = 0.9,
+	plantInterval = 0.45,
 	sellInterval = 12.0,
 	buyInterval = 5.0,
 	rainbowCollectInterval = 2.5,
@@ -32,6 +32,8 @@ local CONFIG = {
 	maxFruitScanPerRoot = 3500,
 	fruitCacheRefreshInterval = 1.0,
 	maxFruitTargetsCached = 180,
+	maxSeedPlantPerTick = 40,
+	maxSeedPlacementsPerTool = 8,
 	maxDropCollectPerTick = 8,
 	maxDropScanPerRoot = 2500,
 	maxInventoryItems = 200,
@@ -1984,7 +1986,7 @@ local function collectFruit()
 	end
 end
 
-local function getEquippedSeedTool(seedName)
+local function findSeedTool(seedName, shouldEquip)
 	local character = getCharacter()
 	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
 	local humanoid = getHumanoid()
@@ -2001,7 +2003,7 @@ local function getEquippedSeedTool(seedName)
 					and isInventorySeedTool(item)
 					and string.find(string.lower(item.Name), string.lower(targetSeed), 1, true)
 				then
-					if item.Parent ~= character and humanoid then
+					if shouldEquip and item.Parent ~= character and humanoid then
 						humanoid:EquipTool(item)
 					end
 					return item
@@ -2011,6 +2013,44 @@ local function getEquippedSeedTool(seedName)
 	end
 
 	return nil
+end
+
+local function getEquippedSeedTool(seedName)
+	return findSeedTool(seedName, true)
+end
+
+local function getSeedToolAmount(tool)
+	if not tool then
+		return 1
+	end
+
+	for _, key in ipairs({ "Count", "Amount", "Quantity", "Stack", "Uses", "SeedCount" }) do
+		local ok, attribute = pcall(function()
+			return tool:GetAttribute(key)
+		end)
+		local amount = ok and tonumber(attribute) or nil
+		if amount and amount > 0 then
+			return math.floor(amount)
+		end
+
+		local child = tool:FindFirstChild(key)
+		if child and child:IsA("ValueBase") then
+			amount = tonumber(child.Value)
+			if amount and amount > 0 then
+				return math.floor(amount)
+			end
+		end
+	end
+
+	local stack = string.match(tool.Name, "[xX](%d+)")
+		or string.match(tool.Name, "%((%d+)%)")
+		or string.match(tool.Name, "%[(%d+)%]")
+	local amount = tonumber(stack)
+	if amount and amount > 0 then
+		return math.floor(amount)
+	end
+
+	return 1
 end
 
 local function getSelectedSeedList()
@@ -2075,8 +2115,10 @@ local function getSeedPlantPosition(index, center)
 		return nil
 	end
 
-	local angle = ((index or 1) - 1) * math.rad(45)
-	local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * math.min(CONFIG.plantRadius, 6)
+	local step = math.max(index or 1, 1)
+	local angle = step * 2.399963229728653
+	local radius = math.min(CONFIG.plantRadius, 2.75 + math.sqrt(step) * 2.15)
+	local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * radius
 	local basePosition = center or root.Position
 	local origin = basePosition + offset + Vector3.new(0, 12, 0)
 	local params = RaycastParams.new()
@@ -2105,7 +2147,6 @@ local function tryPlantSeedRemote(seedName, position)
 		}) do
 			attempts += 1
 			sendPacket(packetName, unpackArgs(args))
-			task.wait(0.005)
 		end
 	end
 
@@ -2719,8 +2760,9 @@ local function plantSeed()
 	local attempts = 0
 	local missing = 0
 	local readySeeds = {}
+	local selectedList = getSelectedSeedList()
 
-	for index, seedName in ipairs(getSelectedSeedList()) do
+	for _, seedName in ipairs(selectedList) do
 		if not isEnabled("seedPlacer") then
 			return
 		end
@@ -2734,19 +2776,15 @@ local function plantSeed()
 			continue
 		end
 
-		local tool = getEquippedSeedTool(seedName)
-		if tool then
-			table.insert(readySeeds, {
-				name = seedName,
-				tool = tool,
-			})
+		if findSeedTool(seedName, false) then
+			table.insert(readySeeds, seedName)
 		else
 			missing += 1
 		end
 	end
 
 	if #readySeeds == 0 then
-		setStatus(("Seed placer: no selected seed tool found (%d missing)"):format(missing))
+		setStatus(("Seed placer: no selected seeds ready (%d skipped)"):format(missing))
 		return
 	end
 
@@ -2760,28 +2798,50 @@ local function plantSeed()
 		return
 	end
 
-	for index, entry in ipairs(readySeeds) do
+	local placementIndex = 0
+	for _, seedName in ipairs(readySeeds) do
 		if not isEnabled("seedPlacer") then
 			return
 		end
 
-		local tool = entry.tool
-		if tool and tool.Parent then
-			local position = getSeedPlantPosition(index, gardenPosition)
-			pcall(function()
-				tool:Activate()
-			end)
+		if planted >= CONFIG.maxSeedPlantPerTick then
+			break
+		end
 
-			if position then
-				attempts += tryPlantSeedRemote(entry.name, position)
+		local tool = getEquippedSeedTool(seedName)
+		if tool and tool.Parent then
+			local amount = math.min(getSeedToolAmount(tool), CONFIG.maxSeedPlacementsPerTool, CONFIG.maxSeedPlantPerTick - planted)
+			for _ = 1, amount do
+				if not isEnabled("seedPlacer") then
+					return
+				end
+
+				if not tool.Parent then
+					break
+				end
+
+				placementIndex += 1
+				local position = getSeedPlantPosition(placementIndex, gardenPosition)
+				if position then
+					attempts += tryPlantSeedRemote(seedName, position)
+				end
+
+				pcall(function()
+					tool:Activate()
+				end)
+
+				planted += 1
+				if planted >= CONFIG.maxSeedPlantPerTick then
+					break
+				end
+				task.wait()
 			end
 
 			pcall(function()
 				tool:Activate()
 			end)
-
-			planted += 1
-			task.wait(0.025)
+		else
+			missing += 1
 		end
 	end
 
