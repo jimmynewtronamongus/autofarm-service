@@ -18,7 +18,7 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 local CONFIG = {
-	collectInterval = 1.15,
+	collectInterval = 0.35,
 	plantInterval = 0.9,
 	sellInterval = 12.0,
 	buyInterval = 5.0,
@@ -28,8 +28,10 @@ local CONFIG = {
 	dropCacheRefreshInterval = 2.5,
 	inventoryRefreshInterval = 1.5,
 	guiInventoryRefreshInterval = 5.0,
-	maxFruitCollectPerTick = 32,
-	maxFruitScanPerRoot = 1200,
+	maxFruitCollectPerTick = 80,
+	maxFruitScanPerRoot = 3500,
+	fruitCacheRefreshInterval = 1.0,
+	maxFruitTargetsCached = 180,
 	maxDropCollectPerTick = 8,
 	maxDropScanPerRoot = 2500,
 	maxInventoryItems = 200,
@@ -736,6 +738,7 @@ local cache = {
 local touchPart
 local getPromptPart
 local triggerPrompt
+local triggerPromptFast
 local teleportToPart
 local teleportToModelOrPart
 local isInventorySeedTool
@@ -861,10 +864,20 @@ local ownGardenCache = {
 	checkedAt = 0,
 }
 
+local fruitTargetCache = {
+	targets = {},
+	refreshedAt = 0,
+	cursor = 1,
+	rootCount = 0,
+}
+
 local function invalidateOwnGardenCache()
 	ownGardenCache.checkedAt = 0
 	cache.ownGardenDescendants = nil
 	cache.ownGardenAt = nil
+	fruitTargetCache.refreshedAt = 0
+	fruitTargetCache.targets = {}
+	fruitTargetCache.cursor = 1
 end
 
 local function addUniqueInstance(list, instance)
@@ -1558,6 +1571,15 @@ local function collectFruitTarget(target)
 	return collectionTookEffect(target, beforeInventoryCount)
 end
 
+local function getTargetDistance(target)
+	local root = getRoot()
+	local part = target and getTargetPart(target)
+	if not root or not part then
+		return math.huge
+	end
+	return (root.Position - part.Position).Magnitude
+end
+
 local function getFruitPriority(instance)
 	local weight = getFruitWeight(instance)
 	local rarity = getFruitRarity(instance)
@@ -1586,6 +1608,172 @@ local function getFruitPriority(instance)
 	end
 
 	return priority
+end
+
+local function isLiveFruitEntry(entry)
+	if not entry then
+		return false
+	end
+
+	local target = entry.target or entry.prompt
+	if not target or not target.Parent then
+		return false
+	end
+
+	if not target:IsDescendantOf(workspace) then
+		return false
+	end
+
+	if entry.prompt and (not entry.prompt.Parent or not isUsableHarvestPrompt(entry.prompt)) then
+		return false
+	end
+
+	return true
+end
+
+local function addFruitTarget(targets, seenTargets, prompt, target)
+	target = target or prompt
+	if not target or seenTargets[target] then
+		return
+	end
+
+	seenTargets[target] = true
+	table.insert(targets, {
+		prompt = prompt,
+		target = target,
+		priority = getFruitPriority(target),
+	})
+end
+
+local function rebuildFruitTargetCache(roots)
+	local targets = {}
+	local seenTargets = {}
+
+	for index, root in ipairs(roots) do
+		if not root then
+			continue
+		end
+
+		local scanned = 0
+		local descendants = getCachedDescendants("fruitFast" .. index, root, CONFIG.fruitCacheRefreshInterval)
+		for _, descendant in ipairs(descendants) do
+			if #targets >= CONFIG.maxFruitTargetsCached then
+				break
+			end
+
+			scanned += 1
+			if scanned > CONFIG.maxFruitScanPerRoot then
+				break
+			end
+
+			if isUsableHarvestPrompt(descendant) then
+				addFruitTarget(targets, seenTargets, descendant, getCollectFruitTarget(descendant))
+			elseif isLikelyFruitTarget(descendant) then
+				addFruitTarget(targets, seenTargets, nil, getFruitObjectTarget(descendant))
+			end
+		end
+	end
+
+	table.sort(targets, function(left, right)
+		if left.priority ~= right.priority then
+			return left.priority > right.priority
+		end
+		return getTargetDistance(left.target) < getTargetDistance(right.target)
+	end)
+
+	fruitTargetCache.targets = targets
+	fruitTargetCache.refreshedAt = os.clock()
+	fruitTargetCache.cursor = 1
+	fruitTargetCache.rootCount = #roots
+	return targets
+end
+
+local function getFruitTargetBatch(roots)
+	local now = os.clock()
+	local targets = fruitTargetCache.targets
+	if #targets == 0
+		or now - fruitTargetCache.refreshedAt > CONFIG.fruitCacheRefreshInterval
+		or fruitTargetCache.rootCount ~= #roots
+	then
+		targets = rebuildFruitTargetCache(roots)
+	end
+
+	local batch = {}
+	local checked = 0
+	while #batch < CONFIG.maxFruitCollectPerTick and checked < #targets do
+		if fruitTargetCache.cursor > #targets then
+			fruitTargetCache.cursor = 1
+		end
+
+		local entry = targets[fruitTargetCache.cursor]
+		fruitTargetCache.cursor += 1
+		checked += 1
+
+		if isLiveFruitEntry(entry) then
+			table.insert(batch, entry)
+		end
+	end
+
+	if #batch == 0 and #targets > 0 then
+		targets = rebuildFruitTargetCache(roots)
+		for index, entry in ipairs(targets) do
+			if index > CONFIG.maxFruitCollectPerTick then
+				break
+			end
+			if isLiveFruitEntry(entry) then
+				table.insert(batch, entry)
+			end
+		end
+	end
+
+	return batch, #targets
+end
+
+local function collectFruitEntryFast(entry)
+	if not isLiveFruitEntry(entry) then
+		return false
+	end
+
+	local target = entry.target
+	local prompt = entry.prompt or getHarvestPromptInTarget(target)
+	local part = prompt and getPromptPart(prompt) or getTargetPart(target)
+
+	if part and state.collectTeleport then
+		local model = target and target:IsA("Model") and target or (target and target:FindFirstAncestorWhichIsA("Model"))
+		if model then
+			teleportToModelOrPart(model, part, 2.5)
+		else
+			teleportToPart(part, 2.5)
+		end
+	elseif part and not state.collectTeleport then
+		local root = getRoot()
+		if root and (root.Position - part.Position).Magnitude > ((prompt and prompt.MaxActivationDistance) or 16) then
+			stats.collectSkippedRange += 1
+			return false
+		end
+	end
+
+	local fired = false
+	if target then
+		fired = collectFruitPacket(target) or fired
+		fired = sendPacket("HarvestFruit", target) or fired
+		fired = sendPacket("Collect", target) or fired
+		fired = sendPacket("Harvest", target) or fired
+	end
+
+	if prompt then
+		fired = triggerPromptFast(prompt) or fired
+	end
+
+	if target then
+		fired = collectFruitPacket(target) or fired
+	end
+
+	if part then
+		fired = touchPart(part) or fired
+	end
+
+	return fired
 end
 
 function triggerPrompt(prompt, skipTouch)
@@ -1634,6 +1822,51 @@ function triggerPrompt(prompt, skipTouch)
 			fired = true
 		end
 	end
+
+	pcall(function()
+		if oldHoldDuration ~= nil then
+			prompt.HoldDuration = oldHoldDuration
+		end
+		if oldRequiresLineOfSight ~= nil then
+			prompt.RequiresLineOfSight = oldRequiresLineOfSight
+		end
+		if oldMaxActivationDistance ~= nil then
+			prompt.MaxActivationDistance = oldMaxActivationDistance
+		end
+	end)
+
+	return fired
+end
+
+triggerPromptFast = function(prompt)
+	if not prompt or not prompt.Parent then
+		return false
+	end
+
+	local oldHoldDuration
+	local oldRequiresLineOfSight
+	local oldMaxActivationDistance
+	pcall(function()
+		oldHoldDuration = prompt.HoldDuration
+		oldRequiresLineOfSight = prompt.RequiresLineOfSight
+		oldMaxActivationDistance = prompt.MaxActivationDistance
+		prompt.HoldDuration = 0
+		prompt.RequiresLineOfSight = false
+		prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 24)
+	end)
+
+	local fired = false
+	if typeof(fireproximityprompt) == "function" then
+		fired = pcall(fireproximityprompt, prompt)
+			or pcall(fireproximityprompt, prompt, 0)
+			or pcall(fireproximityprompt, prompt, 1)
+	end
+
+	local ok = pcall(function()
+		prompt:InputHoldBegin()
+		prompt:InputHoldEnd()
+	end)
+	fired = fired or ok
 
 	pcall(function()
 		if oldHoldDuration ~= nil then
@@ -1705,9 +1938,6 @@ local function collectFruit()
 		return
 	end
 
-	local fired = 0
-	local targets = {}
-	local seenTargets = {}
 	local roots = getOwnGardenRoots()
 
 	if #roots == 0 then
@@ -1715,86 +1945,42 @@ local function collectFruit()
 		return
 	end
 
-	for index, root in ipairs(roots) do
-		if not isEnabled("fruitCollector") then
-			return
-		end
-
-		local scanned = 0
-		for _, descendant in ipairs(getCachedDescendants("garden" .. index, root)) do
-			if not isEnabled("fruitCollector") then
-				return
-			end
-
-			if isUsableHarvestPrompt(descendant) then
-				local target = getCollectFruitTarget(descendant) or descendant
-				if not seenTargets[target] then
-					seenTargets[target] = true
-					table.insert(targets, {
-						prompt = descendant,
-						target = target,
-						priority = getFruitPriority(descendant),
-					})
-				end
-			elseif isLikelyFruitTarget(descendant) then
-				local target = getFruitObjectTarget(descendant)
-				if not seenTargets[target] then
-					seenTargets[target] = true
-					table.insert(targets, {
-						target = target,
-						priority = getFruitPriority(target),
-					})
-				end
-			end
-
-			if #targets >= CONFIG.maxFruitCollectPerTick * 2 then
-				break
-			end
-			scanned += 1
-			if scanned >= CONFIG.maxFruitScanPerRoot then
-				break
-			end
-		end
-
-		if #targets >= CONFIG.maxFruitCollectPerTick * 2 then
-			break
-		end
-	end
+	local targets, totalCached = getFruitTargetBatch(roots)
 
 	if #targets == 0 then
-		stats.fruitTargetsChecked += 0
 		updateStatsUI()
 		setStatus(("Fruit collector: no harvest targets found (%d root(s))"):format(#roots))
 		return
 	end
 
-	table.sort(targets, function(left, right)
-		return left.priority > right.priority
-	end)
-
+	local beforeInventoryCount = countInventoryTools()
+	local fired = 0
 	for index, entry in ipairs(targets) do
 		if not isEnabled("fruitCollector") then
 			return
 		end
 
-		if index > CONFIG.maxFruitCollectPerTick then
-			break
-		end
-		local collected = entry.prompt and collectPrompt(entry.prompt) or collectFruitTarget(entry.target)
-		if collected then
+		if collectFruitEntryFast(entry) then
 			fired += 1
-			stats.fruitCollected += 1
-			task.wait(0.015)
+		end
+
+		if index % 10 == 0 then
+			task.wait()
 		end
 	end
 
-	stats.fruitTargetsChecked += #targets
+	task.wait(0.05)
+	local afterInventoryCount = countInventoryTools()
+	local gained = math.max((afterInventoryCount or 0) - (beforeInventoryCount or 0), 0)
+	stats.fruitCollected += gained
+	stats.fruitTargetsChecked += totalCached
 	refreshInventoryStats()
 	updateStatsUI()
 	if fired == 0 then
-		setStatus(("Fruit collector: found %d target(s), failed to trigger"):format(#targets))
+		fruitTargetCache.refreshedAt = 0
+		setStatus(("Fruit collector: found %d cached target(s), failed to trigger"):format(totalCached))
 	else
-		setStatus(("Fruit collector: collected %d/%d target(s)"):format(fired, #targets))
+		setStatus(("Fruit collector: triggered %d/%d target(s), inventory +%d"):format(fired, #targets, gained))
 	end
 end
 
