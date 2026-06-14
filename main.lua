@@ -18,7 +18,7 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 local CONFIG = {
-	collectInterval = 0.25,
+	collectInterval = 0.12,
 	plantInterval = 0.45,
 	sellInterval = 12.0,
 	buyInterval = 1.0,
@@ -28,10 +28,11 @@ local CONFIG = {
 	dropCacheRefreshInterval = 2.5,
 	inventoryRefreshInterval = 1.5,
 	guiInventoryRefreshInterval = 5.0,
-	maxFruitCollectPerTick = 80,
-	maxFruitScanPerRoot = 3500,
-	fruitCacheRefreshInterval = 0.75,
-	maxFruitTargetsCached = 260,
+	maxFruitCollectPerTick = 160,
+	maxFruitScanPerRoot = 5000,
+	fruitCacheRefreshInterval = 0.35,
+	maxFruitTargetsCached = 600,
+	maxFruitPromptFallbackPerTick = 45,
 	maxSeedPlantPerTick = 40,
 	maxSeedPlacementsPerTool = 8,
 	seedCountCacheRefreshInterval = 20.0,
@@ -1967,6 +1968,26 @@ local function collectFruitEntryFast(entry)
 	return fired
 end
 
+local function collectFruitEntryRemoteOnly(entry)
+	if not isLiveFruitEntry(entry) then
+		return false
+	end
+
+	local target = entry.target
+	local prompt = entry.prompt
+	if not target and prompt then
+		target = getCollectFruitTarget(prompt)
+	end
+
+	if not target then
+		return false
+	end
+
+	local fired = collectFruitPacket(target)
+	fired = sendPacket("CollectFruit", target) or fired
+	return fired
+end
+
 function triggerPrompt(prompt, skipTouch)
 	local part = getPromptPart and getPromptPart(prompt)
 	if part and not skipTouch then
@@ -2146,21 +2167,41 @@ local function collectFruit()
 
 	local beforeInventoryCount = countInventoryTools()
 	local fired = 0
+	local fallback = 0
 	for index, entry in ipairs(targets) do
 		if not isEnabled("fruitCollector") then
 			return
 		end
 
-		if collectFruitEntryFast(entry) then
+		if collectFruitEntryRemoteOnly(entry) then
 			fired += 1
 		end
 
-		if index % 10 == 0 then
+		if index % 30 == 0 then
 			task.wait()
 		end
 	end
 
-	task.wait(0.05)
+	task.wait(0.03)
+	for _, entry in ipairs(targets) do
+		if not isEnabled("fruitCollector") then
+			return
+		end
+
+		if fallback >= CONFIG.maxFruitPromptFallbackPerTick then
+			break
+		end
+
+		if isLiveFruitEntry(entry) and collectFruitEntryFast(entry) then
+			fallback += 1
+		end
+
+		if fallback > 0 and fallback % 15 == 0 then
+			task.wait()
+		end
+	end
+
+	task.wait(0.03)
 	local afterInventoryCount = countInventoryTools()
 	local gained = math.max((afterInventoryCount or 0) - (beforeInventoryCount or 0), 0)
 	stats.fruitCollected += gained
@@ -2172,7 +2213,7 @@ local function collectFruit()
 		fruitTargetCache.refreshedAt = 0
 		setStatus(("Fruit collector: found %d cached target(s), failed to trigger"):format(totalCached))
 	else
-		setStatus(("Fruit collector: triggered %d/%d target(s), inventory +%d"):format(fired, #targets, gained))
+		setStatus(("Fruit collector: fast %d/%d, fallback %d, inventory +%d"):format(fired, #targets, fallback, gained))
 	end
 end
 
