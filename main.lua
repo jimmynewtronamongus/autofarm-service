@@ -34,11 +34,6 @@ local CONFIG = {
 	maxDropScanPerRoot = 2500,
 	maxInventoryItems = 200,
 	lowRaritySeedLimit = 10,
-	maxVisualPets = 24,
-	maxVisualPetTools = 24,
-	maxEquippedVisualPets = 3,
-	visualPetAmount = 24,
-	visualPetVariant = "Normal",
 	selectedSeed = "",
 	plantRadius = 18,
 	webhookUrl = "",
@@ -76,8 +71,6 @@ local petNames = {}
 local buyPetNames = {}
 
 local selectedPets = {}
-
-local selectedVisualPets = {}
 
 local saveConfig = function() end
 local setStatus = function() end
@@ -139,8 +132,6 @@ local function loadConfig()
 		"sellInterval",
 		"buyInterval",
 		"lowRaritySeedLimit",
-		"visualPetAmount",
-		"visualPetVariant",
 		"selectedSeed",
 		"plantRadius",
 		"webhookUrl",
@@ -163,7 +154,6 @@ local function loadConfig()
 	blacklistedSeeds = copyMap(decoded.blacklistedSeeds)
 	selectedGears = copyMap(decoded.selectedGears)
 	selectedPets = copyMap(decoded.selectedPets)
-	selectedVisualPets = copyMap(decoded.selectedVisualPets)
 
 	return true
 end
@@ -185,8 +175,6 @@ saveConfig = function()
 			sellInterval = CONFIG.sellInterval,
 			buyInterval = CONFIG.buyInterval,
 			lowRaritySeedLimit = CONFIG.lowRaritySeedLimit,
-			visualPetAmount = CONFIG.visualPetAmount,
-			visualPetVariant = CONFIG.visualPetVariant,
 			selectedSeed = CONFIG.selectedSeed,
 			plantRadius = CONFIG.plantRadius,
 			webhookUrl = CONFIG.webhookUrl,
@@ -208,7 +196,6 @@ saveConfig = function()
 		blacklistedSeeds = blacklistedSeeds,
 		selectedGears = selectedGears,
 		selectedPets = selectedPets,
-		selectedVisualPets = selectedVisualPets,
 	}
 
 	local ok, encoded = pcall(function()
@@ -302,7 +289,7 @@ local function notifyPetSpawn(petName)
 	end
 end
 
-local visualVariantWords = {
+local petVariantWords = {
 	"Big",
 	"Huge",
 	"Giant",
@@ -311,10 +298,6 @@ local visualVariantWords = {
 	"Gold",
 	"Golden",
 	"Shiny",
-}
-
-local visualPetVariants = {
-	"Normal",
 }
 
 local statusValue
@@ -408,7 +391,7 @@ end
 
 local function stripVariantWords(name)
 	local result = tostring(name or "")
-	for _, word in ipairs(visualVariantWords) do
+	for _, word in ipairs(petVariantWords) do
 		result = string.gsub(result, "^" .. word .. "%s+", "")
 		result = string.gsub(result, "%s+" .. word .. "$", "")
 	end
@@ -2063,16 +2046,8 @@ local function isKnownPetTool(item)
 		return false
 	end
 
-	if item:GetAttribute("VisualPetTool") or item:GetAttribute("Pet") or item:GetAttribute("PetName") then
+	if item:GetAttribute("Pet") or item:GetAttribute("PetName") then
 		return true
-	end
-
-	local parent = item.Parent
-	while parent do
-		if parent.Name == "GardenToolsVisualPets" then
-			return true
-		end
-		parent = parent.Parent
 	end
 
 	if toolNameMatchesList(item, petNames) or toolNameMatchesList(item, buyPetNames) then
@@ -2246,18 +2221,6 @@ local function getSelectedPetList()
 
 	for _, petName in ipairs(petNames) do
 		if selectedPets[petName] then
-			table.insert(selected, petName)
-		end
-	end
-
-	return selected
-end
-
-local function getSelectedVisualPetList()
-	local selected = {}
-
-	for _, petName in ipairs(petNames) do
-		if selectedVisualPets[petName] then
 			table.insert(selected, petName)
 		end
 	end
@@ -2945,105 +2908,9 @@ local function buyPets()
 	end
 end
 
-local visualPetFolder
-local showPetInfo = function() end
-
 local function getPetsFolder()
 	local assets = ReplicatedStorage:FindFirstChild("Assets")
 	return assets and assets:FindFirstChild("Pets")
-end
-
-local function getVisualPetFolder()
-	if visualPetFolder and visualPetFolder.Parent then
-		return visualPetFolder
-	end
-
-	visualPetFolder = workspace:FindFirstChild("GardenToolsVisualPets")
-	if not visualPetFolder then
-		visualPetFolder = Instance.new("Folder")
-		visualPetFolder.Name = "GardenToolsVisualPets"
-		visualPetFolder.Parent = workspace
-	end
-
-	return visualPetFolder
-end
-
-local function getModelRootPart(instance)
-	if instance:IsA("BasePart") then
-		return instance
-	end
-
-	if not instance:IsA("Model") then
-		return nil
-	end
-
-	return instance.PrimaryPart
-		or instance:FindFirstChild("RootPart", true)
-		or instance:FindFirstChild("HumanoidRootPart", true)
-		or instance:FindFirstChildWhichIsA("BasePart", true)
-end
-
-local function prepVisualPet(instance, anchorRootOnly)
-	local rootPart = anchorRootOnly and getModelRootPart(instance) or nil
-
-	for _, descendant in ipairs(instance:GetDescendants()) do
-		if descendant:IsA("BasePart") then
-			descendant.Anchored = anchorRootOnly and descendant == rootPart or not anchorRootOnly
-			descendant.CanCollide = false
-			descendant.CanTouch = false
-			descendant.CanQuery = false
-			descendant.CastShadow = false
-		elseif descendant:IsA("Script") or descendant:IsA("LocalScript") then
-			descendant.Disabled = true
-		end
-	end
-
-	if instance:IsA("BasePart") then
-		instance.Anchored = true
-		instance.CanCollide = false
-		instance.CanTouch = false
-		instance.CanQuery = false
-		instance.CastShadow = false
-	end
-end
-
-local petDataModule
-
-local function getPetDataModule()
-	if petDataModule ~= nil then
-		return petDataModule
-	end
-
-	petDataModule = false
-	local sharedData = ReplicatedStorage:FindFirstChild("SharedData")
-	local petDataScript = sharedData and sharedData:FindFirstChild("PetData")
-	if petDataScript and petDataScript:IsA("ModuleScript") then
-		pcall(function()
-			petDataModule = require(petDataScript)
-		end)
-	end
-
-	return petDataModule
-end
-
-local function normalizeIconAsset(value)
-	if type(value) == "number" then
-		return "rbxassetid://" .. tostring(value)
-	end
-
-	if type(value) ~= "string" or value == "" then
-		return ""
-	end
-
-	if string.find(value, "rbxasset", 1, true) or string.find(value, "http", 1, true) then
-		return value
-	end
-
-	if tonumber(value) then
-		return "rbxassetid://" .. value
-	end
-
-	return ""
 end
 
 local function compactName(value)
@@ -3053,15 +2920,6 @@ end
 local function getPetModulesFolder()
 	local sharedModules = ReplicatedStorage:FindFirstChild("SharedModules")
 	return sharedModules and sharedModules:FindFirstChild("PetModules")
-end
-
-local function getGearImageValue(name)
-	local gearImages = getGearImagesFolder()
-	local value = gearImages and gearImages:FindFirstChild(name)
-	if value and value:IsA("StringValue") then
-		return normalizeIconAsset(value.Value)
-	end
-	return ""
 end
 
 local function hasKnownPetBase(baseName)
@@ -3116,630 +2974,6 @@ local function refreshPetNamesFromGearImages()
 end
 
 refreshPetNamesFromGearImages()
-
-local function findIconField(data)
-	if type(data) ~= "table" then
-		return ""
-	end
-
-	for _, key in ipairs({ "Icon", "IconId", "Image", "ImageId", "InventoryIcon", "InventoryImage", "Thumbnail", "ThumbnailImage", "TextureId", "TextureID" }) do
-		local icon = normalizeIconAsset(data[key])
-		if icon ~= "" then
-			return icon
-		end
-	end
-
-	return ""
-end
-
-local function findPetIconInData(data, petName, seen)
-	if type(data) ~= "table" then
-		return ""
-	end
-
-	seen = seen or {}
-	if seen[data] then
-		return ""
-	end
-	seen[data] = true
-
-	local wanted = compactName(petName)
-	for key, value in pairs(data) do
-		if compactName(key) == wanted then
-			local icon = normalizeIconAsset(value)
-			if icon ~= "" then
-				return icon
-			end
-
-			icon = findIconField(value)
-			if icon ~= "" then
-				return icon
-			end
-		end
-
-		if type(value) == "table" then
-			local nameMatches = compactName(value.Name) == wanted
-				or compactName(value.DisplayName) == wanted
-				or compactName(value.Pet) == wanted
-				or compactName(value.PetName) == wanted
-			if nameMatches then
-				local icon = findIconField(value)
-				if icon ~= "" then
-					return icon
-				end
-			end
-
-			local nestedIcon = findPetIconInData(value, petName, seen)
-			if nestedIcon ~= "" then
-				return nestedIcon
-			end
-		end
-	end
-
-	return ""
-end
-
-local function getPetIcon(petName, template, displayName)
-	local gearIcon = getGearImageValue(displayName or petName)
-	if gearIcon ~= "" then
-		return gearIcon
-	end
-
-	gearIcon = getGearImageValue(petName)
-	if gearIcon ~= "" then
-		return gearIcon
-	end
-
-	local petData = getPetDataModule()
-	local dataIcon = findPetIconInData(petData, petName)
-	if dataIcon ~= "" then
-		return dataIcon
-	end
-
-	for _, attrName in ipairs({ "Icon", "IconId", "Image", "ImageId", "InventoryIcon", "InventoryImage", "Thumbnail", "ThumbnailImage" }) do
-		local value = template:GetAttribute(attrName)
-		local icon = normalizeIconAsset(value)
-		if icon ~= "" then
-			return icon
-		end
-	end
-
-	return ""
-end
-
-local function getVariantFlags(variant)
-	variant = tostring(variant or "Normal")
-	local isHuge = string.find(variant, "Giant", 1, true) ~= nil or string.find(variant, "Huge", 1, true) ~= nil
-	local isBig = string.find(variant, "Big", 1, true) ~= nil
-	local isRainbow = string.find(variant, "Rainbow", 1, true) ~= nil
-	local isGold = string.find(variant, "Gold", 1, true) ~= nil or string.find(variant, "Golden", 1, true) ~= nil
-	return isHuge, isRainbow, isBig, isGold
-end
-
-local function findBasePetTemplate(petsFolder, petName)
-	local exact = petsFolder:FindFirstChild(petName)
-	if exact then
-		return exact
-	end
-
-	local wanted = compactName(petName)
-	for _, child in ipairs(petsFolder:GetChildren()) do
-		if compactName(stripVariantWords(child.Name)) == wanted then
-			return child
-		end
-	end
-
-	return nil
-end
-
-local function findVisualPetTemplate(petsFolder, petName, variant)
-	variant = variant or "Normal"
-	if variant == "Normal" then
-		return findBasePetTemplate(petsFolder, petName), "Normal", false
-	end
-
-	local compactPet = compactName(petName)
-	local compactVariant = compactName(variant)
-	for _, child in ipairs(petsFolder:GetChildren()) do
-		local childVariant = extractVariantLabel(child.Name, stripVariantWords(child.Name))
-		local baseName = stripVariantWords(child.Name)
-		if compactName(baseName) == compactPet and compactName(childVariant) == compactVariant then
-			return child, childVariant, true
-		end
-	end
-
-	local displayName = variant .. " " .. petName
-	if getGearImageValue(displayName) ~= "" then
-		local baseTemplate = findBasePetTemplate(petsFolder, petName)
-		if baseTemplate then
-			return baseTemplate, variant, false
-		end
-	end
-
-	local baseTemplate = findBasePetTemplate(petsFolder, petName)
-	if baseTemplate then
-		return baseTemplate, variant, false
-	end
-
-	return nil, nil, false
-end
-
-local function refreshVisualPetVariantsFromAssets()
-	local petsFolder = getPetsFolder()
-	if petsFolder then
-		for _, pet in ipairs(petsFolder:GetChildren()) do
-			local baseName = stripVariantWords(pet.Name)
-			local variant = extractVariantLabel(pet.Name, baseName)
-			if variant ~= "" then
-				addUniqueName(visualPetVariants, variant)
-			end
-		end
-	end
-
-	local gearImages = getGearImagesFolder()
-	if gearImages then
-		for _, imageValue in ipairs(gearImages:GetChildren()) do
-			if imageValue:IsA("StringValue") then
-				local baseName = stripVariantWords(imageValue.Name)
-				local variant = extractVariantLabel(imageValue.Name, baseName)
-				if variant ~= "" and hasKnownPetBase(baseName) then
-					addUniqueName(visualPetVariants, variant)
-				end
-			end
-		end
-	end
-
-	table.sort(visualPetVariants, function(a, b)
-		if a == "Normal" then
-			return true
-		elseif b == "Normal" then
-			return false
-		end
-		return a < b
-	end)
-end
-
-local function isVisualVariantAvailable(variant)
-	if variant == "Normal" then
-		return true
-	end
-
-	local petsFolder = getPetsFolder()
-	if not petsFolder then
-		return false
-	end
-
-	local selected = getSelectedVisualPetList()
-	if #selected == 0 then
-		for _, petName in ipairs(petNames) do
-			table.insert(selected, petName)
-		end
-	end
-
-	for _, petName in ipairs(selected) do
-		if findVisualPetTemplate(petsFolder, petName, variant) then
-			return true
-		end
-	end
-
-	return false
-end
-
-local function applyVisualPetVariant(instance, variant, usedVariantAsset)
-	local wantsGiant, wantsRainbow, wantsBig, wantsGold = getVariantFlags(variant)
-	if variant and variant ~= "Normal" then
-		instance:SetAttribute("Variant", variant)
-	end
-
-	if wantsGiant then
-		instance:SetAttribute("Giant", true)
-		instance:SetAttribute("SizeMultiplier", 2)
-	elseif wantsBig then
-		instance:SetAttribute("Big", true)
-		instance:SetAttribute("SizeMultiplier", 1.45)
-	end
-
-	if wantsRainbow then
-		instance:SetAttribute("Mutation", "Rainbow")
-		instance:SetAttribute("Rainbow", true)
-	elseif wantsGold then
-		instance:SetAttribute("Mutation", "Gold")
-		instance:SetAttribute("Gold", true)
-	end
-
-	if (wantsGiant or wantsBig) and not usedVariantAsset and instance:IsA("Model") then
-		pcall(function()
-			instance:ScaleTo(wantsGiant and 2 or 1.45)
-		end)
-	end
-
-	if not usedVariantAsset and (wantsRainbow or wantsGold) then
-		local rootPart = getModelRootPart(instance)
-		if instance:IsA("BasePart") then
-			if wantsGold then
-				instance.Color = Color3.fromRGB(255, 198, 54)
-				instance.Material = Enum.Material.Neon
-				instance.Reflectance = math.max(instance.Reflectance, 0.18)
-			elseif wantsRainbow then
-				instance.Material = Enum.Material.Neon
-				instance.Reflectance = math.max(instance.Reflectance, 0.12)
-			end
-		end
-
-		for _, descendant in ipairs(instance:GetDescendants()) do
-			if descendant:IsA("BasePart") then
-				if wantsGold then
-					descendant.Color = Color3.fromRGB(255, 198, 54)
-					descendant.Material = Enum.Material.Neon
-					descendant.Reflectance = math.max(descendant.Reflectance, 0.18)
-				elseif wantsRainbow then
-					descendant.Material = Enum.Material.Neon
-					descendant.Reflectance = math.max(descendant.Reflectance, 0.12)
-				end
-			end
-		end
-
-		if rootPart then
-			local light = Instance.new("PointLight")
-			light.Name = "VariantGlow"
-			light.Brightness = wantsGold and 1.8 or 1.4
-			light.Range = wantsGold and 12 or 14
-			light.Color = wantsGold and Color3.fromRGB(255, 213, 74) or Color3.fromRGB(170, 92, 255)
-			light.Parent = rootPart
-
-			if wantsRainbow then
-				local sparkles = Instance.new("Sparkles")
-				sparkles.Name = "RainbowVariantSparkles"
-				sparkles.SparkleColor = Color3.fromRGB(160, 95, 255)
-				sparkles.Parent = rootPart
-			end
-		end
-	end
-end
-
-local function playPetAnimations(instance)
-	for _, descendant in ipairs(instance:GetDescendants()) do
-		if descendant:IsA("Animator") then
-			for _, track in ipairs(descendant:GetPlayingAnimationTracks()) do
-				pcall(function()
-					track:Stop(0)
-				end)
-			end
-		end
-	end
-end
-
-local function makeLocalPetTool(petName, template, slot, variant, usedVariantAsset)
-	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-	if not backpack then
-		return false
-	end
-
-	local wantsGiant, wantsRainbow, wantsBig, wantsGold = getVariantFlags(variant)
-	local toolName = petName
-	if variant and variant ~= "Normal" then
-		toolName = variant .. " " .. petName
-	end
-
-	local tool = Instance.new("Tool")
-	tool.Name = toolName
-	tool.ToolTip = toolName
-	tool.RequiresHandle = true
-	tool.CanBeDropped = false
-	tool:SetAttribute("VisualPetTool", true)
-	tool:SetAttribute("PetName", petName)
-	tool:SetAttribute("Pet", petName)
-	tool:SetAttribute("PetId", ("local-%s-%d-%d"):format(string.gsub(petName, "%s+", "-"), slot or 0, math.floor(os.clock() * 1000)))
-	tool:SetAttribute("Count", 0)
-	tool:SetAttribute("Slot", slot or 0)
-	if variant and variant ~= "Normal" then
-		tool:SetAttribute("Variant", variant)
-	end
-	if wantsGiant then
-		tool:SetAttribute("Giant", true)
-		tool:SetAttribute("SizeMultiplier", 2)
-	elseif wantsBig then
-		tool:SetAttribute("Big", true)
-		tool:SetAttribute("SizeMultiplier", 1.45)
-	end
-	if wantsRainbow then
-		tool:SetAttribute("Mutation", "Rainbow")
-		tool:SetAttribute("Rainbow", true)
-	elseif wantsGold then
-		tool:SetAttribute("Mutation", "Gold")
-		tool:SetAttribute("Gold", true)
-	end
-
-	local icon = getPetIcon(petName, template, toolName)
-	if icon ~= "" then
-		tool.TextureId = icon
-		tool:SetAttribute("Icon", icon)
-		tool:SetAttribute("InventoryIcon", icon)
-	end
-
-	local handle = Instance.new("Part")
-	handle.Name = "Handle"
-	handle.Size = Vector3.new(1, 1, 1)
-	handle.Transparency = 1
-	handle.CanCollide = false
-	handle.CanTouch = false
-	handle.CanQuery = false
-	handle.Massless = true
-	handle.Parent = tool
-
-	tool.Activated:Connect(function()
-		showPetInfo(petName, variant or "Normal", icon, tool)
-	end)
-
-	tool.Parent = backpack
-	return true
-end
-
-local function clearVisualPetTools()
-	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-	local character = localPlayer.Character
-
-	for _, container in ipairs({ backpack, character }) do
-		if container then
-			for _, child in ipairs(container:GetChildren()) do
-				if child:IsA("Tool") and child:GetAttribute("VisualPetTool") then
-					child:Destroy()
-				end
-			end
-		end
-	end
-end
-
-local function countVisualPetTools()
-	local count = 0
-	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-	local character = localPlayer.Character
-
-	for _, container in ipairs({ backpack, character }) do
-		if container then
-			for _, child in ipairs(container:GetChildren()) do
-				if child:IsA("Tool") and child:GetAttribute("VisualPetTool") then
-					count += 1
-				end
-			end
-		end
-	end
-
-	return count
-end
-
-local function trimVisualPets()
-	local folder = getVisualPetFolder()
-	local children = folder:GetChildren()
-	table.sort(children, function(a, b)
-		return (a:GetAttribute("SpawnedAt") or 0) < (b:GetAttribute("SpawnedAt") or 0)
-	end)
-
-	while #children > CONFIG.maxVisualPets do
-		local oldest = table.remove(children, 1)
-		if oldest then
-			oldest:Destroy()
-		end
-	end
-end
-
-local function getPetPivot(instance)
-	if instance:IsA("Model") then
-		return instance:GetPivot()
-	end
-
-	if instance:IsA("BasePart") then
-		return instance.CFrame
-	end
-
-	return nil
-end
-
-local function storeVisualOrientationOffset(instance)
-	local pivot = getPetPivot(instance)
-	if not pivot then
-		return
-	end
-
-	local offset = Instance.new("CFrameValue")
-	offset.Name = "VisualOrientationOffset"
-	offset.Value = pivot.Rotation
-	offset.Parent = instance
-end
-
-local function applyVisualOrientationOffset(instance, target)
-	local offset = instance:FindFirstChild("VisualOrientationOffset")
-	if offset and offset:IsA("CFrameValue") then
-		return CFrame.new(target.Position) * offset.Value
-	end
-
-	return target
-end
-
-local function moveVisualPet(instance, target)
-	pcall(function()
-		target = applyVisualOrientationOffset(instance, target)
-		if instance:IsA("Model") then
-			instance:PivotTo(target)
-		elseif instance:IsA("BasePart") then
-			instance.CFrame = target
-		end
-	end)
-end
-
-local function addVisualPetNameplate(instance, petName, variant)
-	local rootPart = getModelRootPart(instance)
-	if not rootPart then
-		return
-	end
-
-	local labelText = petName
-	if variant and variant ~= "Normal" then
-		labelText = variant .. " " .. petName
-	end
-
-	local billboard = Instance.new("BillboardGui")
-	billboard.Name = "PetNameplate"
-	billboard.AlwaysOnTop = true
-	billboard.Enabled = false
-	billboard.LightInfluence = 0
-	billboard.MaxDistance = 90
-	billboard.Size = UDim2.fromOffset(170, 36)
-	billboard.StudsOffsetWorldSpace = Vector3.new(0, 3.2, 0)
-	billboard.Parent = rootPart
-
-	local label = Instance.new("TextLabel")
-	label.BackgroundTransparency = 1
-	label.BorderSizePixel = 0
-	label.Font = Enum.Font.GothamBlack
-	label.Text = labelText
-	label.TextColor3 = Color3.fromRGB(255, 255, 255)
-	label.TextScaled = true
-	label.TextStrokeColor3 = Color3.fromRGB(18, 18, 18)
-	label.TextStrokeTransparency = 0
-	label.Size = UDim2.fromScale(1, 1)
-	label.Parent = billboard
-	return billboard
-end
-
-local function attachVisualPetInfoPrompt(instance, petName, variant, icon)
-	local rootPart = getModelRootPart(instance)
-	if not rootPart then
-		return
-	end
-
-	local click = Instance.new("ClickDetector")
-	click.Name = "PetInfoClick"
-	click.MaxActivationDistance = 24
-	click.Parent = rootPart
-	click.MouseClick:Connect(function(player)
-		if player == localPlayer then
-			showPetInfo(petName, variant or "Normal", icon, instance)
-		end
-	end)
-
-	local nameplate = addVisualPetNameplate(instance, petName, variant)
-	click.MouseHoverEnter:Connect(function(player)
-		if player == localPlayer and nameplate then
-			nameplate.Enabled = true
-		end
-	end)
-	click.MouseHoverLeave:Connect(function(player)
-		if player == localPlayer and nameplate then
-			nameplate.Enabled = false
-		end
-	end)
-end
-
-local function updateVisualPetBehavior()
-	return
-end
-
-local function clearVisualPets()
-	local folder = getVisualPetFolder()
-	for _, child in ipairs(folder:GetChildren()) do
-		child:Destroy()
-	end
-	setStatus("Visuals cleared")
-end
-
-local function spawnVisualPets()
-	local root = getRoot()
-	local petsFolder = getPetsFolder()
-	if not root then
-		setStatus("Visual pets: character root missing")
-		return
-	end
-
-	if not petsFolder then
-		setStatus("Visual pets: Assets.Pets missing")
-		return
-	end
-
-	local selected = getSelectedVisualPetList()
-	if #selected == 0 then
-		for _, petName in ipairs(petNames) do
-			table.insert(selected, petName)
-		end
-	end
-
-	local spawned = 0
-	local toolCount = 0
-	local folder = getVisualPetFolder()
-	local amount = math.floor(tonumber(CONFIG.visualPetAmount) or 1)
-	local equipped = #folder:GetChildren()
-	local availableSlots = math.max(CONFIG.maxEquippedVisualPets - equipped, 0)
-	local equippedAmount = math.clamp(amount, 1, CONFIG.maxEquippedVisualPets)
-	equippedAmount = math.min(equippedAmount, availableSlots)
-	local availableToolSlots = math.max(CONFIG.maxVisualPetTools - countVisualPetTools(), 0)
-	local toolAmount = availableToolSlots
-	local totalAmount = math.max(equippedAmount, toolAmount)
-	if totalAmount <= 0 then
-		setStatus(("Visual pets: max equipped %d/%d, backpack full %d/%d"):format(equipped, CONFIG.maxEquippedVisualPets, CONFIG.maxVisualPetTools, CONFIG.maxVisualPetTools))
-		return
-	end
-	local startSlot = #folder:GetChildren()
-	local unavailable = 0
-
-	for index = 1, totalAmount do
-		local petName = selected[((index - 1) % #selected) + 1]
-		local template, actualVariant, usedVariantAsset = findVisualPetTemplate(petsFolder, petName, CONFIG.visualPetVariant)
-		if template then
-			local slot = startSlot + index
-			local displayName = actualVariant ~= "Normal" and (actualVariant .. " " .. petName) or petName
-			local icon = getPetIcon(petName, template, displayName)
-
-			if index <= equippedAmount and #folder:GetChildren() < CONFIG.maxEquippedVisualPets then
-				local clone = template:Clone()
-				clone.Name = petName
-				clone:SetAttribute("PetName", petName)
-				clone:SetAttribute("Slot", slot)
-				clone:SetAttribute("SpawnedAt", os.clock())
-				applyVisualPetVariant(clone, actualVariant, usedVariantAsset)
-				prepVisualPet(clone)
-				storeVisualOrientationOffset(clone)
-				clone.Parent = folder
-				playPetAnimations(clone)
-				attachVisualPetInfoPrompt(clone, petName, actualVariant, icon)
-
-				local angle = ((index - 1) / math.max(equippedAmount, 1)) * math.pi * 2
-				local radius = 6 + (spawned % 3) * 2
-				local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
-				local position = root.Position + offset
-				local rayParams = RaycastParams.new()
-				rayParams.FilterType = Enum.RaycastFilterType.Exclude
-				rayParams.FilterDescendantsInstances = { localPlayer.Character, folder }
-				local rayResult = workspace:Raycast(position + Vector3.new(0, 20, 0), Vector3.new(0, -80, 0), rayParams)
-				if rayResult then
-					position = rayResult.Position + Vector3.new(0, 1.5, 0)
-				else
-					position += Vector3.new(0, -2, 0)
-				end
-				local target = CFrame.new(position, Vector3.new(root.Position.X, position.Y, root.Position.Z))
-
-				moveVisualPet(clone, target)
-				spawned += 1
-			end
-
-			if toolCount < toolAmount and makeLocalPetTool(petName, template, slot, actualVariant, usedVariantAsset) then
-				toolCount += 1
-			end
-
-			task.wait(0.03)
-		else
-			unavailable += 1
-		end
-	end
-
-	trimVisualPets()
-	pcall(updateVisualPetBehavior)
-	if spawned == 0 and toolCount == 0 and unavailable > 0 then
-		setStatus(("Visual pets: %s not available for selected pet(s)"):format(CONFIG.visualPetVariant))
-		return
-	end
-	setStatus(("Visual pets: equipped %d/%d, %d backpack item(s)"):format(#folder:GetChildren(), CONFIG.maxEquippedVisualPets, toolCount))
-end
-
 function make(className, properties, parent)
 	local instance = Instance.new(className)
 	for key, value in pairs(properties or {}) do
@@ -3832,182 +3066,6 @@ statusValue.Changed:Connect(function(value)
 	statusLabel.Text = value
 end)
 
-local petInfoFrame = make("Frame", {
-	Name = "PetInfo",
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = Color3.fromRGB(96, 48, 27),
-	BorderSizePixel = 0,
-	Position = UDim2.fromScale(0.5, 0.48),
-	Size = UDim2.fromOffset(560, 230),
-	Visible = false,
-	ZIndex = 20,
-}, gui)
-make("UICorner", { CornerRadius = UDim.new(0, 8) }, petInfoFrame)
-make("UIStroke", { Color = Color3.fromRGB(40, 20, 10), Thickness = 5 }, petInfoFrame)
-
-local petInfoHeader = make("Frame", {
-	Name = "Header",
-	BackgroundColor3 = Color3.fromRGB(91, 194, 66),
-	BorderSizePixel = 0,
-	Size = UDim2.new(1, 0, 0, 54),
-	ZIndex = 21,
-}, petInfoFrame)
-make("UICorner", { CornerRadius = UDim.new(0, 8) }, petInfoHeader)
-make("UIStroke", { Color = Color3.fromRGB(35, 88, 26), Thickness = 2 }, petInfoHeader)
-
-make("TextLabel", {
-	Name = "Heart",
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBlack,
-	Text = "<3",
-	TextColor3 = Color3.fromRGB(225, 36, 32),
-	TextScaled = true,
-	TextStrokeColor3 = Color3.fromRGB(104, 16, 16),
-	TextStrokeTransparency = 0,
-	Position = UDim2.fromOffset(12, 7),
-	Size = UDim2.fromOffset(38, 38),
-	ZIndex = 22,
-}, petInfoHeader)
-
-make("TextLabel", {
-	Name = "Title",
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBlack,
-	Text = "Pet Info",
-	TextColor3 = Color3.fromRGB(255, 255, 245),
-	TextScaled = true,
-	TextStrokeColor3 = Color3.fromRGB(25, 25, 25),
-	TextStrokeTransparency = 0,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	Position = UDim2.fromOffset(62, 8),
-	Size = UDim2.new(1, -120, 0, 36),
-	ZIndex = 22,
-}, petInfoHeader)
-
-local petInfoClose = make("TextButton", {
-	Name = "Close",
-	AutoButtonColor = true,
-	BackgroundColor3 = Color3.fromRGB(222, 35, 35),
-	BorderSizePixel = 0,
-	Font = Enum.Font.GothamBlack,
-	Text = "X",
-	TextColor3 = Color3.fromRGB(255, 255, 255),
-	TextScaled = true,
-	TextStrokeColor3 = Color3.fromRGB(80, 0, 0),
-	TextStrokeTransparency = 0,
-	Position = UDim2.new(1, -46, 0, 8),
-	Size = UDim2.fromOffset(34, 34),
-	ZIndex = 23,
-}, petInfoHeader)
-make("UICorner", { CornerRadius = UDim.new(0, 4) }, petInfoClose)
-petInfoClose.Activated:Connect(function()
-	petInfoFrame.Visible = false
-end)
-
-local petInfoIcon = make("ImageLabel", {
-	Name = "Icon",
-	BackgroundColor3 = Color3.fromRGB(54, 27, 15),
-	BorderSizePixel = 0,
-	Image = "",
-	Position = UDim2.fromOffset(28, 82),
-	ScaleType = Enum.ScaleType.Fit,
-	Size = UDim2.fromOffset(126, 126),
-	ZIndex = 21,
-}, petInfoFrame)
-make("UIStroke", { Color = Color3.fromRGB(24, 12, 8), Thickness = 4 }, petInfoIcon)
-
-local petInfoName = make("TextLabel", {
-	Name = "PetName",
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBlack,
-	Text = "Pet",
-	TextColor3 = Color3.fromRGB(255, 255, 255),
-	TextScaled = true,
-	TextStrokeColor3 = Color3.fromRGB(18, 18, 18),
-	TextStrokeTransparency = 0,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	Position = UDim2.fromOffset(178, 76),
-	Size = UDim2.new(1, -205, 0, 48),
-	ZIndex = 21,
-}, petInfoFrame)
-
-local petInfoDesc = make("TextLabel", {
-	Name = "Description",
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamSemibold,
-	Text = "Follows you around the garden.",
-	TextColor3 = Color3.fromRGB(255, 240, 225),
-	TextSize = 17,
-	TextWrapped = true,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	TextYAlignment = Enum.TextYAlignment.Top,
-	Position = UDim2.fromOffset(180, 124),
-	Size = UDim2.new(1, -205, 0, 52),
-	ZIndex = 21,
-}, petInfoFrame)
-
-local petInfoTag1 = make("TextLabel", {
-	Name = "Tag1",
-	BackgroundColor3 = Color3.fromRGB(140, 53, 204),
-	BorderSizePixel = 0,
-	Font = Enum.Font.GothamBlack,
-	Text = "NORMAL",
-	TextColor3 = Color3.fromRGB(255, 255, 255),
-	TextScaled = true,
-	TextStrokeColor3 = Color3.fromRGB(32, 18, 38),
-	TextStrokeTransparency = 0.15,
-	Position = UDim2.fromOffset(184, 180),
-	Size = UDim2.fromOffset(126, 36),
-	ZIndex = 21,
-}, petInfoFrame)
-make("UICorner", { CornerRadius = UDim.new(0, 5) }, petInfoTag1)
-make("UIStroke", { Color = Color3.fromRGB(68, 26, 102), Thickness = 2 }, petInfoTag1)
-
-local petInfoTag2 = make("TextLabel", {
-	Name = "Tag2",
-	BackgroundColor3 = Color3.fromRGB(237, 65, 139),
-	BorderSizePixel = 0,
-	Font = Enum.Font.GothamBlack,
-	Text = "Visual",
-	TextColor3 = Color3.fromRGB(255, 255, 255),
-	TextScaled = true,
-	TextStrokeColor3 = Color3.fromRGB(70, 15, 38),
-	TextStrokeTransparency = 0.15,
-	Position = UDim2.fromOffset(326, 180),
-	Size = UDim2.fromOffset(126, 36),
-	ZIndex = 21,
-}, petInfoFrame)
-make("UICorner", { CornerRadius = UDim.new(0, 5) }, petInfoTag2)
-make("UIStroke", { Color = Color3.fromRGB(128, 25, 78), Thickness = 2 }, petInfoTag2)
-
-showPetInfo = function(petName, variant, icon)
-	variant = variant or "Normal"
-	local displayName = petName
-	if variant ~= "Normal" then
-		displayName = variant .. " " .. petName
-	end
-
-	local wantsHuge, wantsRainbow, wantsBig = getVariantFlags(variant)
-	local infoIcon = icon or ""
-	if infoIcon == "" then
-		infoIcon = getGearImageValue(displayName)
-	end
-	if infoIcon == "" then
-		infoIcon = getGearImageValue(petName)
-	end
-
-	petInfoName.Text = displayName
-	petInfoDesc.Text = ("Follows you around your garden and keeps close to your character. Equipped %d/%d."):format(math.min(#getVisualPetFolder():GetChildren(), CONFIG.maxEquippedVisualPets), CONFIG.maxEquippedVisualPets)
-	petInfoIcon.Image = infoIcon
-	petInfoTag1.Text = string.upper(variant)
-	petInfoTag1.BackgroundColor3 = wantsRainbow and Color3.fromRGB(138, 45, 214)
-		or (variant == "Normal" and Color3.fromRGB(73, 148, 215) or Color3.fromRGB(63, 155, 224))
-	petInfoTag2.Text = wantsHuge and "Huge" or (wantsBig and "Big" or "Super")
-	petInfoTag2.BackgroundColor3 = wantsHuge and Color3.fromRGB(243, 78, 134)
-		or (wantsBig and Color3.fromRGB(244, 148, 54) or Color3.fromRGB(92, 197, 82))
-	petInfoFrame.Visible = true
-end
-
 local function makeToggle(label, key, order)
 	local enabled = state[key] == true
 	local button = make("TextButton", {
@@ -4039,53 +3097,6 @@ local function makeToggle(label, key, order)
 			task.spawn(enablePerformanceMode)
 		end
 	end)
-end
-
-local function makeActionButton(label, order, callback)
-	local button = make("TextButton", {
-		Name = string.gsub(label, "%s+", ""),
-		AutoButtonColor = true,
-		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
-		BorderSizePixel = 0,
-		Font = Enum.Font.GothamSemibold,
-		Text = label,
-		TextColor3 = Color3.fromRGB(242, 247, 239),
-		TextSize = 12,
-		Size = UDim2.new(1, 0, 0, 30),
-		LayoutOrder = order,
-	}, content)
-	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
-
-	button.Activated:Connect(function()
-		task.spawn(callback)
-	end)
-
-	return button
-end
-
-local visualControls = {}
-local visualControlsVisible = false
-local visualControlsToggle
-
-local function refreshVisualControlsVisibility()
-	for _, control in ipairs(visualControls) do
-		if control and control.Parent then
-			control.Visible = visualControlsVisible
-		end
-	end
-
-	if visualControlsToggle then
-		visualControlsToggle.Text = "Visuals: " .. (visualControlsVisible and "ON" or "OFF")
-		visualControlsToggle.BackgroundColor3 = visualControlsVisible and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(34, 41, 42)
-	end
-
-	content.CanvasSize = UDim2.fromOffset(0, contentLayout.AbsoluteContentSize.Y + 8)
-end
-
-local function registerVisualControl(control)
-	table.insert(visualControls, control)
-	control.Visible = visualControlsVisible
-	return control
 end
 
 local function makeSectionLabel(text, order)
@@ -4200,25 +3211,6 @@ makeStatsLabel("limits", 7)
 refreshInventoryStats()
 updateStatsUI()
 
-visualControlsToggle = make("TextButton", {
-	Name = "VisualControlsToggle",
-	AutoButtonColor = false,
-	BackgroundColor3 = Color3.fromRGB(34, 41, 42),
-	BorderSizePixel = 0,
-	Font = Enum.Font.GothamSemibold,
-	Text = "Visuals: OFF",
-	TextColor3 = Color3.fromRGB(235, 244, 233),
-	TextSize = 12,
-	Size = UDim2.new(1, 0, 0, 30),
-	LayoutOrder = 18,
-}, content)
-make("UICorner", { CornerRadius = UDim.new(0, 6) }, visualControlsToggle)
-visualControlsToggle.Activated:Connect(function()
-	visualControlsVisible = not visualControlsVisible
-	refreshVisualControlsVisibility()
-	setStatus("Visual controls " .. (visualControlsVisible and "shown" or "hidden"))
-end)
-
 local function buildSeedSelector()
 local selectedSeedLabel = make("TextLabel", {
 	Name = "SelectedSeedLabel",
@@ -4229,7 +3221,7 @@ local selectedSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 19,
+	LayoutOrder = 18,
 }, content)
 
 local seedRow = make("ScrollingFrame", {
@@ -4240,7 +3232,7 @@ local seedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 20,
+	LayoutOrder = 19,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4262,7 +3254,7 @@ local avoidSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 21,
+	LayoutOrder = 20,
 }, content)
 
 local avoidSeedRow = make("ScrollingFrame", {
@@ -4273,7 +3265,7 @@ local avoidSeedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 22,
+	LayoutOrder = 21,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4466,7 +3458,7 @@ local selectedGearLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 23,
+	LayoutOrder = 22,
 }, content)
 
 local gearRow = make("ScrollingFrame", {
@@ -4477,7 +3469,7 @@ local gearRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 24,
+	LayoutOrder = 23,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4597,7 +3589,7 @@ local selectedPetLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 25,
+	LayoutOrder = 24,
 }, content)
 
 local petRow = make("ScrollingFrame", {
@@ -4608,7 +3600,7 @@ local petRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 26,
+	LayoutOrder = 25,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4749,257 +3741,6 @@ if mapForPetBuy then
 end
 end
 buildPetSelector()
-
-local function buildVisualPetSelector()
-local selectedVisualPetLabel = make("TextLabel", {
-	Name = "SelectedVisualPetLabel",
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamSemibold,
-	Text = "Pets to visually spawn",
-	TextColor3 = Color3.fromRGB(221, 236, 216),
-	TextSize = 13,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 27,
-}, content)
-registerVisualControl(selectedVisualPetLabel)
-
-local visualPetRow = make("ScrollingFrame", {
-	Name = "VisualPetSelector",
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	CanvasSize = UDim2.fromOffset(0, 0),
-	ScrollBarThickness = 4,
-	ScrollingDirection = Enum.ScrollingDirection.Y,
-	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 28,
-}, content)
-registerVisualControl(visualPetRow)
-make("UIGridLayout", {
-	CellPadding = UDim2.fromOffset(6, 6),
-	CellSize = UDim2.fromOffset(136, 24),
-	SortOrder = Enum.SortOrder.LayoutOrder,
-}, visualPetRow)
-
-local visualPetLayout = visualPetRow:FindFirstChildOfClass("UIGridLayout")
-local visualPetButtons = {}
-local visualPetButtonCount = 0
-local refreshVariantButtons
-
-local function refreshVisualPetButton(petName)
-	local button = visualPetButtons[petName]
-	if not button then
-		return
-	end
-
-	local enabled = selectedVisualPets[petName] == true
-	button.Text = (enabled and "[x] " or "[ ] ") .. petName
-	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
-end
-
-local function refreshVisualPetCanvas()
-	local rows = math.ceil(#petNames / 2)
-	visualPetRow.CanvasSize = UDim2.fromOffset(0, rows * 28)
-end
-
-local function makeVisualPetButton(petName)
-	if visualPetButtons[petName] then
-		return
-	end
-
-	visualPetButtonCount += 1
-
-	local button = make("TextButton", {
-		Name = "Visual" .. petName,
-		AutoButtonColor = false,
-		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
-		BorderSizePixel = 0,
-		Font = Enum.Font.GothamSemibold,
-		Text = petName,
-		TextColor3 = Color3.fromRGB(242, 247, 239),
-		TextSize = 12,
-		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(136, 24),
-		LayoutOrder = visualPetButtonCount,
-	}, visualPetRow)
-	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
-
-	visualPetButtons[petName] = button
-	refreshVisualPetButton(petName)
-
-	button.Activated:Connect(function()
-		selectedVisualPets[petName] = not selectedVisualPets[petName]
-		refreshVisualPetButton(petName)
-		if refreshVariantButtons then
-			refreshVariantButtons()
-		end
-		saveConfig()
-		setStatus((selectedVisualPets[petName] and "Selected spawn " or "Unselected spawn ") .. petName)
-	end)
-
-	refreshVisualPetCanvas()
-end
-
-for _, petName in ipairs(petNames) do
-	makeVisualPetButton(petName)
-end
-
-if visualPetLayout then
-	visualPetLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshVisualPetCanvas)
-end
-refreshVisualPetCanvas()
-
-local selectedVisualVariantLabel = make("TextLabel", {
-	Name = "SelectedVisualVariantLabel",
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamSemibold,
-	Text = "Visual pet variant",
-	TextColor3 = Color3.fromRGB(221, 236, 216),
-	TextSize = 13,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 29,
-}, content)
-registerVisualControl(selectedVisualVariantLabel)
-
-local variantRow = make("ScrollingFrame", {
-	Name = "VisualPetVariantSelector",
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	CanvasSize = UDim2.fromOffset(0, 0),
-	ScrollBarThickness = 4,
-	ScrollingDirection = Enum.ScrollingDirection.Y,
-	Size = UDim2.new(1, 0, 0, 58),
-	LayoutOrder = 30,
-}, content)
-registerVisualControl(variantRow)
-local variantLayout = make("UIGridLayout", {
-	CellPadding = UDim2.fromOffset(6, 6),
-	CellSize = UDim2.fromOffset(136, 24),
-	SortOrder = Enum.SortOrder.LayoutOrder,
-}, variantRow)
-
-local variantButtons = {}
-local variantButtonCount = 0
-
-local function makeVariantButton(variantName)
-	if variantButtons[variantName] then
-		return
-	end
-
-	variantButtonCount += 1
-
-	local button = make("TextButton", {
-		Name = "Variant" .. string.gsub(variantName, "%s+", ""),
-		AutoButtonColor = false,
-		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
-		BorderSizePixel = 0,
-		Font = Enum.Font.GothamSemibold,
-		Text = variantName,
-		TextColor3 = Color3.fromRGB(242, 247, 239),
-		TextSize = 12,
-		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(136, 24),
-		LayoutOrder = variantButtonCount,
-	}, variantRow)
-	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
-
-	variantButtons[variantName] = button
-	button.Activated:Connect(function()
-		if not isVisualVariantAvailable(variantName) then
-			setStatus("Variant unavailable for selected pet(s): " .. variantName)
-			return
-		end
-		CONFIG.visualPetVariant = variantName
-		refreshVariantButtons()
-		saveConfig()
-		setStatus("Visual pet variant set to " .. variantName)
-	end)
-end
-
-refreshVariantButtons = function()
-	refreshVisualPetVariantsFromAssets()
-	for _, variantName in ipairs(visualPetVariants) do
-		makeVariantButton(variantName)
-	end
-	variantRow.CanvasSize = UDim2.fromOffset(0, variantLayout.AbsoluteContentSize.Y + 6)
-
-	if not isVisualVariantAvailable(CONFIG.visualPetVariant) then
-		CONFIG.visualPetVariant = "Normal"
-	end
-
-	for variantName, button in pairs(variantButtons) do
-		local available = isVisualVariantAvailable(variantName)
-		local enabled = CONFIG.visualPetVariant == variantName
-		button.Text = (enabled and "[x] " or "[ ] ") .. variantName
-		button.TextColor3 = available and Color3.fromRGB(242, 247, 239) or Color3.fromRGB(150, 150, 150)
-		button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67)
-			or (available and Color3.fromRGB(52, 60, 54) or Color3.fromRGB(33, 35, 34))
-	end
-end
-refreshVariantButtons()
-
-local visualPetAmountBox = make("TextBox", {
-	Name = "VisualPetAmountBox",
-	BackgroundColor3 = Color3.fromRGB(34, 41, 42),
-	BorderSizePixel = 0,
-	ClearTextOnFocus = false,
-	Font = Enum.Font.GothamSemibold,
-	PlaceholderText = "Visual pet amount",
-	Text = tostring(CONFIG.visualPetAmount),
-	TextColor3 = Color3.fromRGB(242, 247, 239),
-	TextSize = 13,
-	Size = UDim2.new(1, 0, 0, 34),
-	LayoutOrder = 31,
-}, content)
-registerVisualControl(visualPetAmountBox)
-make("UICorner", { CornerRadius = UDim.new(0, 6) }, visualPetAmountBox)
-make("UIPadding", {
-	PaddingLeft = UDim.new(0, 10),
-	PaddingRight = UDim.new(0, 10),
-}, visualPetAmountBox)
-
-local function refreshVisualPetAmount()
-	local amount = math.floor(tonumber(visualPetAmountBox.Text) or CONFIG.visualPetAmount)
-	amount = math.clamp(amount, 1, CONFIG.maxVisualPetTools)
-	CONFIG.visualPetAmount = amount
-	visualPetAmountBox.Text = tostring(amount)
-	saveConfig()
-	setStatus(("Visual pet amount set to %d"):format(amount))
-end
-
-visualPetAmountBox.FocusLost:Connect(refreshVisualPetAmount)
-
-local assets = ReplicatedStorage:FindFirstChild("Assets")
-local petsFolder = assets and assets:FindFirstChild("Pets")
-if petsFolder then
-	petsFolder.ChildAdded:Connect(function(pet)
-		local baseName = stripVariantWords(pet.Name)
-		addUniqueName(petNames, baseName)
-		makeVisualPetButton(baseName)
-		refreshVariantButtons()
-	end)
-end
-
-local gearImages = getGearImagesFolder()
-if gearImages then
-	gearImages.ChildAdded:Connect(function(imageValue)
-		if imageValue:IsA("StringValue") then
-			local baseName = stripVariantWords(imageValue.Name)
-			if hasKnownPetBase(baseName) then
-				addUniqueName(petNames, baseName)
-				makeVisualPetButton(baseName)
-			end
-			refreshVariantButtons()
-		end
-	end)
-end
-end
-buildVisualPetSelector()
-
-registerVisualControl(makeActionButton("Spawn", 32, spawnVisualPets))
-registerVisualControl(makeActionButton("Clear", 33, clearVisualPets))
-refreshVisualControlsVisibility()
 
 local dragStart
 local startPos
