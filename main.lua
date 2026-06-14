@@ -38,8 +38,8 @@ local CONFIG = {
 	seedCountCacheRefreshInterval = 20.0,
 	maxSeedBuyPerTick = 6,
 	seedBuyRemoteRepeats = 4,
-	shovelInterval = 1.0,
-	maxShovelPerTick = 8,
+	shovelInterval = 0.2,
+	maxShovelPerTick = 20,
 	maxDropCollectPerTick = 8,
 	maxDropScanPerRoot = 2500,
 	maxInventoryItems = 200,
@@ -5017,32 +5017,37 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		runGuarded("autoCollectRainbowSeeds", autoCollectRainbowSeeds)
 	end
 
-	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
-		timers.fruitCollector = 0
-		runGuarded("fruitCollector", collectFruit)
-	end
-
-	if state.seedPlacer and timers.seedPlacer >= CONFIG.plantInterval then
-		timers.seedPlacer = 0
-		runGuarded("seedPlacer", plantSeed)
-	end
-
-	if state.autoShovel and timers.autoShovel >= CONFIG.shovelInterval then
+	local shovelDue = state.autoShovel and timers.autoShovel >= CONFIG.shovelInterval
+	if shovelDue then
 		timers.autoShovel = 0
 		runGuarded("autoShovel", autoShovel)
 	end
 
-	if state.autoSell and timers.autoSell >= CONFIG.sellInterval then
+	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
+		if shovelDue or running.autoShovel then
+			timers.fruitCollector = CONFIG.collectInterval
+		else
+			timers.fruitCollector = 0
+			runGuarded("fruitCollector", collectFruit)
+		end
+	end
+
+	if state.seedPlacer and timers.seedPlacer >= CONFIG.plantInterval and not running.autoShovel then
+		timers.seedPlacer = 0
+		runGuarded("seedPlacer", plantSeed)
+	end
+
+	if state.autoSell and timers.autoSell >= CONFIG.sellInterval and not running.autoShovel then
 		timers.autoSell = 0
 		runGuarded("autoSell", autoSell)
 	end
 
-	if state.autoBuySeeds and timers.autoBuySeeds >= CONFIG.buyInterval then
+	if state.autoBuySeeds and timers.autoBuySeeds >= CONFIG.buyInterval and not running.autoShovel then
 		timers.autoBuySeeds = 0
 		runGuarded("autoBuySeeds", buySeed)
 	end
 
-	if state.autoBuyGear and timers.autoBuyGear >= CONFIG.buyInterval then
+	if state.autoBuyGear and timers.autoBuyGear >= CONFIG.buyInterval and not running.autoShovel then
 		timers.autoBuyGear = 0
 		runGuarded("autoBuyGear", buyGear)
 	end
