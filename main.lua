@@ -27,8 +27,8 @@ local CONFIG = {
 	cacheRefreshInterval = 7.0,
 	inventoryRefreshInterval = 1.5,
 	guiInventoryRefreshInterval = 5.0,
-	maxFruitCollectPerTick = 24,
-	maxFruitScanPerRoot = 700,
+	maxFruitCollectPerTick = 48,
+	maxFruitScanPerRoot = 5000,
 	maxDropCollectPerTick = 8,
 	maxInventoryItems = 200,
 	lowRaritySeedLimit = 10,
@@ -1182,6 +1182,78 @@ local function getCollectFruitTarget(prompt)
 	return prompt and prompt.Parent
 end
 
+local function isFruitContainer(instance)
+	local current = instance
+	local checked = 0
+	while current and current ~= workspace and checked <= 5 do
+		local name = string.lower(current.Name)
+		if name == "fruits" or name == "fruit" or string.find(name, "harvest", 1, true) then
+			return true
+		end
+		current = current.Parent
+		checked += 1
+	end
+	return false
+end
+
+local function getFruitObjectTarget(instance)
+	local current = instance
+	while current and current ~= workspace do
+		if current.Parent and current.Parent.Name == "Fruits" then
+			return current
+		end
+		current = current.Parent
+	end
+	return instance
+end
+
+local function isLikelyFruitTarget(instance)
+	if not instance or instance:IsA("ProximityPrompt") then
+		return false
+	end
+
+	if not (instance:IsA("Model") or instance:IsA("BasePart")) then
+		return false
+	end
+
+	local blob = getInstanceTextBlob(instance, 3)
+	if isFruitContainer(instance) then
+		return true
+	end
+
+	if string.find(blob, "kg", 1, true)
+		or string.find(blob, "lb", 1, true)
+		or string.find(blob, "fruit", 1, true)
+		or string.find(blob, "harvest", 1, true)
+		or string.find(blob, "mutation", 1, true)
+	then
+		return true
+	end
+
+	for _, seedName in ipairs(seedNames) do
+		if string.find(blob, string.lower(seedName), 1, true) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function getTargetPart(target)
+	if not target then
+		return nil
+	end
+	if target:IsA("BasePart") then
+		return target
+	end
+	if target:IsA("Model") then
+		return target.PrimaryPart
+			or target:FindFirstChild("HumanoidRootPart", true)
+			or target:FindFirstChildWhichIsA("BasePart", true)
+	end
+	return nil
+end
+
 local function collectPrompt(prompt)
 	local part = getPromptPart and getPromptPart(prompt)
 	if part and not state.collectTeleport and getPromptDistance(prompt) > (prompt.MaxActivationDistance or 10) then
@@ -1203,6 +1275,39 @@ local function collectPrompt(prompt)
 	local packeted = target ~= nil and sendPacket("CollectFruit", target)
 
 	return prompted or packeted
+end
+
+local function collectFruitTarget(target)
+	if not target then
+		return false
+	end
+
+	local part = getTargetPart(target)
+	if part and state.collectTeleport then
+		local model = target:IsA("Model") and target or target:FindFirstAncestorWhichIsA("Model")
+		if model then
+			teleportToModelOrPart(model, part, 3)
+		else
+			teleportToPart(part, 3)
+		end
+	elseif part and not state.collectTeleport then
+		local root = getRoot()
+		if root and (root.Position - part.Position).Magnitude > 16 then
+			stats.collectSkippedRange += 1
+			return false
+		end
+	end
+
+	local sent = sendPacket("CollectFruit", target)
+		or sendPacket("HarvestFruit", target)
+		or sendPacket("Collect", target)
+		or sendPacket("Harvest", target)
+
+	if not sent and part then
+		sent = touchPart(part)
+	end
+
+	return sent
 end
 
 local function getFruitPriority(instance)
@@ -1312,7 +1417,8 @@ local function collectFruit()
 	end
 
 	local fired = 0
-	local prompts = {}
+	local targets = {}
+	local seenTargets = {}
 	local roots = getOwnGardenRoots()
 
 	if #roots == 0 then
@@ -1324,13 +1430,28 @@ local function collectFruit()
 		local scanned = 0
 		for _, descendant in ipairs(getCachedDescendants("garden" .. index, root)) do
 			if isHarvestPrompt(descendant) then
-				table.insert(prompts, {
-					prompt = descendant,
-					priority = getFruitPriority(descendant),
-				})
-				if #prompts >= CONFIG.maxFruitCollectPerTick * 2 then
-					break
+				local target = getCollectFruitTarget(descendant) or descendant
+				if not seenTargets[target] then
+					seenTargets[target] = true
+					table.insert(targets, {
+						prompt = descendant,
+						target = target,
+						priority = getFruitPriority(descendant),
+					})
 				end
+			elseif isLikelyFruitTarget(descendant) then
+				local target = getFruitObjectTarget(descendant)
+				if not seenTargets[target] then
+					seenTargets[target] = true
+					table.insert(targets, {
+						target = target,
+						priority = getFruitPriority(target),
+					})
+				end
+			end
+
+			if #targets >= CONFIG.maxFruitCollectPerTick * 2 then
+				break
 			end
 			scanned += 1
 			if scanned >= CONFIG.maxFruitScanPerRoot then
@@ -1338,30 +1459,31 @@ local function collectFruit()
 			end
 		end
 
-		if #prompts >= CONFIG.maxFruitCollectPerTick * 2 then
+		if #targets >= CONFIG.maxFruitCollectPerTick * 2 then
 			break
 		end
 	end
 
-	table.sort(prompts, function(left, right)
+	table.sort(targets, function(left, right)
 		return left.priority > right.priority
 	end)
 
-	for index, entry in ipairs(prompts) do
+	for index, entry in ipairs(targets) do
 		if index > CONFIG.maxFruitCollectPerTick then
 			break
 		end
-		if collectPrompt(entry.prompt) then
+		local collected = entry.prompt and collectPrompt(entry.prompt) or collectFruitTarget(entry.target)
+		if collected then
 			fired += 1
 			stats.fruitCollected += 1
-			task.wait(0.03)
+			task.wait(0.015)
 		end
 	end
 
-	stats.fruitTargetsChecked += #prompts
+	stats.fruitTargetsChecked += #targets
 	refreshInventoryStats()
 	updateStatsUI()
-	setStatus(("Fruit collector: %d target(s) checked"):format(fired))
+	setStatus(("Fruit collector: collected %d/%d target(s)"):format(fired, #targets))
 end
 
 local function getEquippedSeedTool(seedName)
