@@ -2733,14 +2733,138 @@ local function autoCollectRainbowSeeds()
 end
 
 local performanceOptimized = setmetatable({}, { __mode = "k" })
+local performanceHidden = setmetatable({}, { __mode = "k" })
 local performanceWatcherConnected = false
+
+local function getGardenPlotForInstance(instance)
+	local gardens = getGardens()
+	local current = instance
+	while gardens and current and current ~= workspace do
+		if current.Parent == gardens then
+			return current
+		end
+		current = current.Parent
+	end
+	return nil
+end
+
+local function gardenPlotIsOwn(plot)
+	if not plot then
+		return false
+	end
+
+	if plotBelongsToLocalPlayer(plot) then
+		return true
+	end
+
+	local plants = plot:FindFirstChild("Plants")
+	local userId = tostring(localPlayer.UserId)
+	if plants then
+		for _, plant in ipairs(plants:GetChildren()) do
+			if string.sub(plant.Name, 1, #userId + 1) == userId .. "_" then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+local function isOwnPlantVisual(instance, plot)
+	local current = instance
+	while current and current ~= plot and current ~= workspace do
+		local parent = current.Parent
+		local parentName = parent and string.lower(parent.Name) or ""
+		if parentName == "plants"
+			or parentName == "fruits"
+			or parentName == "fruit"
+			or parentName == "crops"
+			or parentName == "harvest"
+			or parentName == "harvests"
+		then
+			return true
+		end
+		current = parent
+	end
+	return false
+end
+
+local function hidePerformanceVisual(instance, hidePrompts)
+	if not instance or performanceHidden[instance] then
+		return 0
+	end
+
+	local changed = 0
+	if instance:IsA("BasePart") then
+		performanceHidden[instance] = true
+		pcall(function()
+			instance.LocalTransparencyModifier = 1
+			instance.CastShadow = false
+		end)
+		changed = 1
+	elseif instance:IsA("Decal") or instance:IsA("Texture") then
+		performanceHidden[instance] = true
+		pcall(function()
+			instance.Transparency = 1
+		end)
+		changed = 1
+	elseif instance:IsA("ParticleEmitter")
+		or instance:IsA("Trail")
+		or instance:IsA("Beam")
+		or instance:IsA("Smoke")
+		or instance:IsA("Fire")
+		or instance:IsA("Sparkles")
+		or instance:IsA("PointLight")
+		or instance:IsA("SpotLight")
+		or instance:IsA("SurfaceLight")
+	then
+		performanceHidden[instance] = true
+		pcall(function()
+			instance.Enabled = false
+		end)
+		changed = 1
+	elseif instance:IsA("BillboardGui")
+		or instance:IsA("SurfaceGui")
+		or instance:IsA("Highlight")
+	then
+		performanceHidden[instance] = true
+		pcall(function()
+			instance.Enabled = false
+		end)
+		changed = 1
+	elseif hidePrompts and instance:IsA("ProximityPrompt") then
+		performanceHidden[instance] = true
+		pcall(function()
+			instance.Enabled = false
+		end)
+		changed = 1
+	end
+
+	return changed
+end
+
+local function applyPerformanceGardenHiding(instance)
+	local plot = getGardenPlotForInstance(instance)
+	if not plot then
+		return 0
+	end
+
+	if gardenPlotIsOwn(plot) then
+		if isOwnPlantVisual(instance, plot) then
+			return hidePerformanceVisual(instance, false)
+		end
+		return 0
+	end
+
+	return hidePerformanceVisual(instance, true)
+end
 
 local function optimizePerformanceInstance(instance)
 	if not instance or performanceOptimized[instance] then
 		return 0
 	end
 
-	local changed = 0
+	local changed = applyPerformanceGardenHiding(instance)
 	if instance:IsA("BasePart") then
 		performanceOptimized[instance] = true
 		pcall(function()
