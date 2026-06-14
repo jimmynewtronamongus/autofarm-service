@@ -18,7 +18,7 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 local CONFIG = {
-	collectInterval = 0.35,
+	collectInterval = 0.25,
 	plantInterval = 0.45,
 	sellInterval = 12.0,
 	buyInterval = 1.0,
@@ -30,8 +30,8 @@ local CONFIG = {
 	guiInventoryRefreshInterval = 5.0,
 	maxFruitCollectPerTick = 80,
 	maxFruitScanPerRoot = 3500,
-	fruitCacheRefreshInterval = 1.0,
-	maxFruitTargetsCached = 180,
+	fruitCacheRefreshInterval = 0.75,
+	maxFruitTargetsCached = 260,
 	maxSeedPlantPerTick = 40,
 	maxSeedPlacementsPerTool = 8,
 	seedCountCacheRefreshInterval = 20.0,
@@ -776,6 +776,7 @@ local triggerPromptFast
 local teleportToPart
 local teleportToModelOrPart
 local isInventorySeedTool
+local enablePerformanceMode
 
 local function getCachedDescendants(key, root, maxAge)
 	local now = os.clock()
@@ -1076,6 +1077,27 @@ if gardensForCache then
 	gardensForCache.ChildAdded:Connect(invalidateOwnGardenCache)
 	gardensForCache.ChildRemoved:Connect(invalidateOwnGardenCache)
 end
+
+workspace.ChildAdded:Connect(function(child)
+	if child.Name == "Gardens" then
+		invalidateOwnGardenCache()
+		child.ChildAdded:Connect(invalidateOwnGardenCache)
+		child.ChildRemoved:Connect(invalidateOwnGardenCache)
+		if state.performanceMode then
+			task.defer(function()
+				if enablePerformanceMode then
+					enablePerformanceMode()
+				end
+			end)
+		end
+	elseif child.Name == "Map" and state.performanceMode then
+		task.defer(function()
+			if enablePerformanceMode then
+				enablePerformanceMode()
+			end
+		end)
+	end
+end)
 
 local function textMatches(instance, terms)
 	local instanceText = ""
@@ -1702,8 +1724,31 @@ local function rebuildFruitTargetCache(roots)
 
 			if isUsableHarvestPrompt(descendant) then
 				addFruitTarget(targets, seenTargets, descendant, getCollectFruitTarget(descendant))
-			elseif isLikelyFruitTarget(descendant) then
-				addFruitTarget(targets, seenTargets, nil, getFruitObjectTarget(descendant))
+			end
+		end
+	end
+
+	if #targets == 0 then
+		for index, root in ipairs(roots) do
+			if not root then
+				continue
+			end
+
+			local scanned = 0
+			local descendants = getCachedDescendants("fruitFallback" .. index, root, CONFIG.fruitCacheRefreshInterval)
+			for _, descendant in ipairs(descendants) do
+				if #targets >= CONFIG.maxFruitTargetsCached then
+					break
+				end
+
+				scanned += 1
+				if scanned > math.floor(CONFIG.maxFruitScanPerRoot / 3) then
+					break
+				end
+
+				if isLikelyFruitTarget(descendant) then
+					addFruitTarget(targets, seenTargets, nil, getFruitObjectTarget(descendant))
+				end
 			end
 		end
 	end
@@ -1763,6 +1808,20 @@ local function getFruitTargetBatch(roots)
 	return batch, #targets
 end
 
+local function pruneFruitTargetCache()
+	local live = {}
+	for _, entry in ipairs(fruitTargetCache.targets) do
+		if isLiveFruitEntry(entry) then
+			table.insert(live, entry)
+		end
+	end
+
+	fruitTargetCache.targets = live
+	if fruitTargetCache.cursor > #live then
+		fruitTargetCache.cursor = 1
+	end
+end
+
 local function collectFruitEntryFast(entry)
 	if not isLiveFruitEntry(entry) then
 		return false
@@ -1773,11 +1832,15 @@ local function collectFruitEntryFast(entry)
 	local part = prompt and getPromptPart(prompt) or getTargetPart(target)
 
 	if part and state.collectTeleport then
-		local model = target and target:IsA("Model") and target or (target and target:FindFirstAncestorWhichIsA("Model"))
-		if model then
-			teleportToModelOrPart(model, part, 2.5)
-		else
-			teleportToPart(part, 2.5)
+		local root = getRoot()
+		local maxDistance = (prompt and prompt.MaxActivationDistance) or 16
+		if not root or (root.Position - part.Position).Magnitude > math.max(maxDistance - 2, 6) then
+			local model = target and target:IsA("Model") and target or (target and target:FindFirstAncestorWhichIsA("Model"))
+			if model then
+				teleportToModelOrPart(model, part, 2.5)
+			else
+				teleportToPart(part, 2.5)
+			end
 		end
 	elseif part and not state.collectTeleport then
 		local root = getRoot()
@@ -2008,6 +2071,7 @@ local function collectFruit()
 	local gained = math.max((afterInventoryCount or 0) - (beforeInventoryCount or 0), 0)
 	stats.fruitCollected += gained
 	stats.fruitTargetsChecked += totalCached
+	pruneFruitTargetCache()
 	refreshInventoryStats()
 	updateStatsUI()
 	if fired == 0 then
@@ -2860,11 +2924,15 @@ local function applyPerformanceGardenHiding(instance)
 end
 
 local function optimizePerformanceInstance(instance)
-	if not instance or performanceOptimized[instance] then
+	if not instance then
 		return 0
 	end
 
 	local changed = applyPerformanceGardenHiding(instance)
+	if performanceOptimized[instance] then
+		return changed
+	end
+
 	if instance:IsA("BasePart") then
 		performanceOptimized[instance] = true
 		pcall(function()
@@ -2934,7 +3002,7 @@ local function connectPerformanceWatcher()
 	end)
 end
 
-local function enablePerformanceMode()
+enablePerformanceMode = function()
 	local changed = 0
 
 	connectPerformanceWatcher()
@@ -2954,6 +3022,23 @@ local function enablePerformanceMode()
 	changed += optimizePerformanceTree(workspace, 300)
 
 	setStatus(("Performance mode: simplified %d object(s)"):format(changed))
+end
+
+local function schedulePerformanceModeRestore()
+	if not state.performanceMode then
+		return
+	end
+
+	task.spawn(function()
+		for _, delaySeconds in ipairs({ 0, 1.5, 4, 8 }) do
+			if delaySeconds > 0 then
+				task.wait(delaySeconds)
+			end
+			if state.performanceMode then
+				enablePerformanceMode()
+			end
+		end
+	end)
 end
 
 local function plantSeed()
@@ -4168,9 +4253,7 @@ end
 
 buildUI()
 
-if state.performanceMode then
-	task.spawn(enablePerformanceMode)
-end
+schedulePerformanceModeRestore()
 
 timers = {
 	fruitCollector = 0,
