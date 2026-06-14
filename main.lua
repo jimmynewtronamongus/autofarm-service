@@ -5,6 +5,7 @@ local Players = game:GetService("Players")
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
 local UserInputService = game:GetService("UserInputService")
 local virtualInputManager
 
@@ -160,6 +161,14 @@ local function getStockItemsFolder(shopName)
 	local stockValues = ReplicatedStorage:FindFirstChild("StockValues")
 	local shop = stockValues and stockValues:FindFirstChild(shopName)
 	return shop and shop:FindFirstChild("Items")
+end
+
+local function getSeedShopGui()
+	return StarterGui:FindFirstChild("SeedShop") or playerGui:FindFirstChild("SeedShop")
+end
+
+local function getRuntimeSeedShopGui()
+	return playerGui:FindFirstChild("SeedShop") or StarterGui:FindFirstChild("SeedShop")
 end
 
 local function getNumericFromInstance(instance, keys)
@@ -1322,7 +1331,7 @@ local function getSeedFrame(seedName)
 		return cache.seedFrames[seedName]
 	end
 
-	local seedShop = playerGui:FindFirstChild("SeedShop")
+	local seedShop = getRuntimeSeedShopGui()
 	if not seedShop then
 		return nil
 	end
@@ -3251,18 +3260,20 @@ local function scanSeedShopNames()
 		makeSeedButton(seedName)
 	end
 
-	local seedShop = playerGui:FindFirstChild("SeedShop")
+	local seedShop = getSeedShopGui()
 	local frame = seedShop and seedShop:FindFirstChild("Frame")
 	local normalShop = frame and frame:FindFirstChild("NormalShop")
-	if not normalShop then
-		return
-	end
+	local scrollingFrame = frame and frame:FindFirstChild("ScrollingFrame")
 
-	for _, child in ipairs(normalShop:GetChildren()) do
-		if child.Name ~= "ItemTemplate" and not string.find(string.lower(child.Name), "shelf", 1, true) then
-			if child:FindFirstChild("Main_Frame", true) or child:FindFirstChildWhichIsA("GuiButton", true) then
-				addUniqueName(seedNames, child.Name)
-				makeSeedButton(child.Name)
+	for _, container in ipairs({ normalShop, scrollingFrame }) do
+		if container then
+			for _, child in ipairs(container:GetChildren()) do
+				if child.Name ~= "ItemTemplate" and not string.find(string.lower(child.Name), "shelf", 1, true) then
+					if child:FindFirstChild("Main_Frame", true) or child:FindFirstChildWhichIsA("GuiButton", true) then
+						addUniqueName(seedNames, child.Name)
+						makeSeedButton(child.Name)
+					end
+				end
 			end
 		end
 	end
@@ -3293,6 +3304,12 @@ if seedStockItems then
 end
 
 playerGui.ChildAdded:Connect(function(child)
+	if child.Name == "SeedShop" then
+		task.wait(0.25)
+		scanSeedShopNames()
+	end
+end)
+StarterGui.ChildAdded:Connect(function(child)
 	if child.Name == "SeedShop" then
 		task.wait(0.25)
 		scanSeedShopNames()
