@@ -834,6 +834,14 @@ local function refreshBuyPetNamesFromWildSpawns()
 end
 
 local function valueMatchesLocalPlayer(value)
+	if value == localPlayer then
+		return true
+	end
+
+	if typeof(value) == "Instance" and value:IsA("Player") then
+		return value == localPlayer
+	end
+
 	local text = tostring(value or "")
 	return text == tostring(localPlayer.UserId) or string.lower(text) == string.lower(localPlayer.Name)
 end
@@ -855,7 +863,7 @@ local function plotBelongsToLocalPlayer(plot)
 			return true
 		end
 
-		local child = plot:FindFirstChild(key)
+		local child = plot:FindFirstChild(key, true)
 		if child and child:IsA("ValueBase") and valueMatchesLocalPlayer(child.Value) then
 			return true
 		end
@@ -868,6 +876,8 @@ local ownGardenCache = {
 	roots = {},
 	checkedAt = 0,
 }
+
+local watchedOwnPlots = {}
 
 local function invalidateOwnGardenCache()
 	ownGardenCache.checkedAt = 0
@@ -889,17 +899,38 @@ local function getOwnGardenRoots()
 		return roots
 	end
 
+	local function addOwnPlot(plot)
+		if not plot then
+			return
+		end
+
+		for _, existing in ipairs(roots) do
+			if existing == plot then
+				return
+			end
+		end
+
+		table.insert(roots, plot)
+		if not watchedOwnPlots[plot] then
+			watchedOwnPlots[plot] = true
+			plot.DescendantAdded:Connect(invalidateOwnGardenCache)
+			plot.DescendantRemoving:Connect(invalidateOwnGardenCache)
+		end
+	end
+
 	for _, plot in ipairs(gardens:GetChildren()) do
 		local plants = plot:FindFirstChild("Plants")
 		if plants and plotBelongsToLocalPlayer(plot) then
-			table.insert(roots, plants)
+			addOwnPlot(plot)
 		elseif plants then
 			for _, plant in ipairs(plants:GetChildren()) do
 				if string.sub(plant.Name, 1, #userId + 1) == userId .. "_" then
-					table.insert(roots, plants)
+					addOwnPlot(plot)
 					break
 				end
 			end
+		elseif plotBelongsToLocalPlayer(plot) then
+			addOwnPlot(plot)
 		end
 	end
 
@@ -1639,9 +1670,19 @@ end
 
 local function getSelectedSeedList()
 	local selected = {}
+	local seen = {}
 
 	for _, seedName in ipairs(seedNames) do
 		if selectedSeeds[seedName] and not blacklistedSeeds[seedName] then
+			seen[seedName] = true
+			table.insert(selected, seedName)
+		end
+	end
+
+	for seedName, enabled in pairs(selectedSeeds) do
+		if enabled and not blacklistedSeeds[seedName] and not seen[seedName] then
+			addUniqueName(seedNames, seedName)
+			seedPriority[seedName] = seedPriority[seedName] or getSeedMetadataValue(seedName)
 			table.insert(selected, seedName)
 		end
 	end
