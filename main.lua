@@ -253,6 +253,8 @@ local stats = {
 	inventoryFull = false,
 }
 
+local running = {}
+
 local function setStatus(message)
 	state.lastStatus = tostring(message)
 	if statusValue then
@@ -295,6 +297,10 @@ local function shortStatus(text, maxLength)
 		return text
 	end
 	return string.sub(text, 1, maxLength - 3) .. "..."
+end
+
+local function isEnabled(key)
+	return state[key] == true
 end
 
 local function addUniqueName(list, name)
@@ -1411,6 +1417,10 @@ local function activateButton(button)
 end
 
 local function collectFruit()
+	if not isEnabled("fruitCollector") then
+		return
+	end
+
 	local inventoryFull = refreshInventoryStats()
 	if inventoryFull then
 		stats.collectSkippedFull += 1
@@ -1430,8 +1440,16 @@ local function collectFruit()
 	end
 
 	for index, root in ipairs(roots) do
+		if not isEnabled("fruitCollector") then
+			return
+		end
+
 		local scanned = 0
 		for _, descendant in ipairs(getCachedDescendants("garden" .. index, root)) do
+			if not isEnabled("fruitCollector") then
+				return
+			end
+
 			if isHarvestPrompt(descendant) then
 				local target = getCollectFruitTarget(descendant) or descendant
 				if isLikelyFruitTarget(target) and not seenTargets[target] then
@@ -1472,6 +1490,10 @@ local function collectFruit()
 	end)
 
 	for index, entry in ipairs(targets) do
+		if not isEnabled("fruitCollector") then
+			return
+		end
+
 		if index > CONFIG.maxFruitCollectPerTick then
 			break
 		end
@@ -2062,6 +2084,10 @@ local function looksLikeGoldRainbowDrop(instance)
 end
 
 local function autoCollectRainbowSeeds()
+	if not isEnabled("autoCollectRainbowSeeds") then
+		return
+	end
+
 	local inventoryFull = refreshInventoryStats()
 	if inventoryFull then
 		stats.collectSkippedFull += 1
@@ -2076,7 +2102,15 @@ local function autoCollectRainbowSeeds()
 	watchDropRoots()
 
 	for rootIndex, root in ipairs(roots) do
+		if not isEnabled("autoCollectRainbowSeeds") then
+			return
+		end
+
 		for _, descendant in ipairs(getCachedDescendants("rainbow" .. rootIndex, root)) do
+			if not isEnabled("autoCollectRainbowSeeds") then
+				return
+			end
+
 			if #targets >= CONFIG.maxDropCollectPerTick then
 				break
 			end
@@ -2123,6 +2157,10 @@ local function autoCollectRainbowSeeds()
 	end)
 
 	for _, target in ipairs(targets) do
+		if not isEnabled("autoCollectRainbowSeeds") then
+			return
+		end
+
 		if checked >= CONFIG.maxDropCollectPerTick then
 			break
 		end
@@ -2193,6 +2231,10 @@ local function enablePerformanceMode()
 end
 
 local function plantSeed()
+	if not isEnabled("seedPlacer") then
+		return
+	end
+
 	local root = getRoot()
 	if not root then
 		setStatus("Seed placer: character root missing")
@@ -2205,6 +2247,10 @@ local function plantSeed()
 	local readySeeds = {}
 
 	for index, seedName in ipairs(getSelectedSeedList()) do
+		if not isEnabled("seedPlacer") then
+			return
+		end
+
 		local canPlace, reason = canPlaceSeed(seedName)
 		if not canPlace then
 			missing += 1
@@ -2230,6 +2276,10 @@ local function plantSeed()
 		return
 	end
 
+	if not isEnabled("seedPlacer") then
+		return
+	end
+
 	local gardenPosition, moveReason = moveToOwnGarden()
 	if not gardenPosition then
 		setStatus(moveReason == "garden" and "Seed placer: own garden not found" or "Seed placer: character root missing")
@@ -2237,6 +2287,10 @@ local function plantSeed()
 	end
 
 	for index, entry in ipairs(readySeeds) do
+		if not isEnabled("seedPlacer") then
+			return
+		end
+
 		local tool = entry.tool
 		if tool and tool.Parent then
 			local position = getSeedPlantPosition(index, gardenPosition)
@@ -2270,6 +2324,10 @@ local function plantSeed()
 end
 
 local function autoSell()
+	if not isEnabled("autoSell") then
+		return
+	end
+
 	local sellableTools = getSellableFruitTools()
 	if #sellableTools == 0 then
 		setStatus("Sell: nothing to sell")
@@ -2278,6 +2336,10 @@ local function autoSell()
 
 	local actions = 0
 	local stand = getPath(workspace, "Map.Stands.Sell.Part")
+	if not isEnabled("autoSell") then
+		return
+	end
+
 	if stand and stand:IsA("BasePart") and touchPart(stand) then
 		actions += 1
 		task.wait(0.15)
@@ -2290,6 +2352,10 @@ local function autoSell()
 	end
 
 	for _, packetName in ipairs({ "SellAll", "SellInventory", "PreviewSellAll" }) do
+		if not isEnabled("autoSell") then
+			return
+		end
+
 		if sendPacket(packetName) then
 			actions += 1
 			task.wait(0.05)
@@ -2297,6 +2363,10 @@ local function autoSell()
 	end
 
 	for _, tool in ipairs(sellableTools) do
+		if not isEnabled("autoSell") then
+			return
+		end
+
 		if sendPacket("SellItem", tool) then
 			actions += 1
 			task.wait(0.03)
@@ -2314,6 +2384,10 @@ local function autoSell()
 	end
 
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
+		if not isEnabled("autoSell") then
+			return
+		end
+
 		if descendant:IsA("GuiButton")
 			and descendant.Visible
 			and textMatches(descendant, { "sell all", "sell inventory", "sell" })
@@ -2368,6 +2442,10 @@ local function buyOneSeed(seedName)
 end
 
 local function buySeed()
+	if not isEnabled("autoBuySeeds") then
+		return
+	end
+
 	if not state.seedShopEnabled then
 		setStatus("Auto buy: seed shop disabled")
 		return
@@ -2377,6 +2455,10 @@ local function buySeed()
 	local lastMessage = "Auto buy: no seeds selected"
 
 	for _, seedName in ipairs(getSelectedSeedList()) do
+		if not isEnabled("autoBuySeeds") then
+			return
+		end
+
 		local ok, message = buyOneSeed(seedName)
 		lastMessage = message
 		if ok then
@@ -2435,6 +2517,10 @@ local function buyOneGear(gearName)
 end
 
 local function buyGear()
+	if not isEnabled("autoBuyGear") then
+		return
+	end
+
 	if not state.gearShopEnabled then
 		setStatus("Auto gear: gear shop disabled")
 		return
@@ -2444,6 +2530,10 @@ local function buyGear()
 	local lastMessage = "Auto gear: no gear selected"
 
 	for _, gearName in ipairs(getSelectedGearList()) do
+		if not isEnabled("autoBuyGear") then
+			return
+		end
+
 		local ok, message = buyOneGear(gearName)
 		lastMessage = message
 		if ok then
@@ -2463,10 +2553,18 @@ local function buyGear()
 end
 
 local function buyOnePet(petName)
+	if not isEnabled("autoBuyPets") then
+		return false, "Auto pets: disabled"
+	end
+
 	local wildPetSpawns = getWildPetSpawns()
 	local petTerm = string.lower(string.gsub(petName, "%s+", ""))
 
 	for _, descendant in ipairs(getCachedDescendants("wildPets", wildPetSpawns)) do
+		if not isEnabled("autoBuyPets") then
+			return false, "Auto pets: disabled"
+		end
+
 		if descendant:IsA("ProximityPrompt") then
 			local model = descendant:FindFirstAncestorWhichIsA("Model")
 			local modelName = model and string.lower(string.gsub(model.Name, "%s+", "")) or ""
@@ -2492,10 +2590,18 @@ local function buyOnePet(petName)
 end
 
 local function buyPets()
+	if not isEnabled("autoBuyPets") then
+		return
+	end
+
 	local bought = 0
 	local lastMessage = "Auto pets: no pets selected"
 
 	for _, petName in ipairs(getSelectedPetList()) do
+		if not isEnabled("autoBuyPets") then
+			return
+		end
+
 		local ok, message = buyOnePet(petName)
 		lastMessage = message
 		if ok then
@@ -3596,6 +3702,9 @@ local function makeToggle(label, key, order)
 
 	button.Activated:Connect(function()
 		state[key] = not state[key]
+		if not state[key] then
+			running[key] = false
+		end
 		button.Text = ("%s: %s"):format(label, state[key] and "ON" or "OFF")
 		button.BackgroundColor3 = state[key] and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(34, 41, 42)
 		saveConfig()
@@ -4579,8 +4688,6 @@ local timers = {
 	lastInventoryRefresh = 0,
 	lastGuiInventoryRefresh = 0,
 }
-
-local running = {}
 
 local function runGuarded(key, callback)
 	if running[key] then
