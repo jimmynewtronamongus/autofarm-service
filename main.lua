@@ -30,37 +30,11 @@ local CONFIG = {
 	maxEquippedVisualPets = 3,
 	visualPetAmount = 24,
 	visualPetVariant = "Normal",
-	selectedSeed = "Carrot",
+	selectedSeed = "",
 	plantRadius = 18,
 }
 
-local seedNames = {
-	"Carrot",
-	"Strawberry",
-	"Blueberry",
-	"Tulip",
-	"Tomato",
-	"Apple",
-	"Bamboo",
-	"Corn",
-	"Cactus",
-	"Banana",
-	"Acorn",
-	"Grape",
-	"Cherry",
-	"Dragon's Breath",
-	"Dragon Fruit",
-	"Mushroom",
-	"Sunflower",
-	"Coconut",
-	"Green Bean",
-	"Mango",
-	"Pineapple",
-	"Pomegranate",
-	"Poison Apple",
-	"Venus Fly Trap",
-	"Moon Bloom",
-}
+local seedNames = {}
 
 local seedRarity = {
 	Carrot = 1,
@@ -126,55 +100,19 @@ local state = {
 	lastStatus = "Ready",
 }
 
-local selectedSeeds = {
-	Carrot = true,
-}
+local selectedSeeds = {}
 
 local blacklistedSeeds = {}
 
-local gearNames = {
-	"Common Watering Can",
-	"Super Watering Can",
-	"Common Sprinkler",
-	"Uncommon Sprinkler",
-	"Rare Sprinkler",
-	"Super Sprinkler",
-	"Legendary Sprinkler",
-	"Trowel",
-	"Basic Pot",
-	"Wheelbarrow",
-	"Teleporter",
-	"Gnome",
-	"Sign",
-	"Lantern",
-	"Flashbang",
-	"Jump Mushroom",
-	"Speed Mushroom",
-	"Shrink Mushroom",
-	"Supersize Mushroom",
-	"Invisibility Mushroom",
-}
+local gearNames = {}
 
-local selectedGears = {
-	["Common Watering Can"] = true,
-}
+local selectedGears = {}
 
-local petNames = {
-	"Frog",
-	"Bunny",
-	"Deer",
-	"Dragonfly",
-}
+local petNames = {}
 
-local selectedPets = {
-	Frog = true,
-	Bunny = true,
-	Deer = true,
-}
+local selectedPets = {}
 
-local selectedVisualPets = {
-	Dragonfly = true,
-}
+local selectedVisualPets = {}
 
 local visualVariantWords = {
 	"Big",
@@ -270,6 +208,42 @@ local function getGearImagesFolder()
 	return sharedModules and sharedModules:FindFirstChild("GearImages")
 end
 
+local function getStockItemsFolder(shopName)
+	local stockValues = ReplicatedStorage:FindFirstChild("StockValues")
+	local shop = stockValues and stockValues:FindFirstChild(shopName)
+	return shop and shop:FindFirstChild("Items")
+end
+
+local function refreshNamesFromStock(shopName, targetList)
+	local items = getStockItemsFolder(shopName)
+	if not items then
+		return
+	end
+
+	for _, item in ipairs(items:GetChildren()) do
+		if not string.find(string.lower(item.Name), "template", 1, true) then
+			addUniqueName(targetList, item.Name)
+		end
+	end
+
+	table.sort(targetList)
+end
+
+local function refreshSeedNamesFromStockValues()
+	refreshNamesFromStock("SeedShop", seedNames)
+	if #seedNames > 0 and CONFIG.selectedSeed == "" then
+		CONFIG.selectedSeed = seedNames[1]
+		selectedSeeds[CONFIG.selectedSeed] = true
+	end
+end
+
+local function refreshGearNamesFromStockValues()
+	refreshNamesFromStock("GearShop", gearNames)
+	if #gearNames > 0 and next(selectedGears) == nil then
+		selectedGears[gearNames[1]] = true
+	end
+end
+
 local function refreshPetNamesFromAssets()
 	local assets = ReplicatedStorage:FindFirstChild("Assets")
 	local pets = assets and assets:FindFirstChild("Pets")
@@ -282,8 +256,16 @@ local function refreshPetNamesFromAssets()
 	end
 
 	table.sort(petNames)
+	if #petNames > 0 and next(selectedPets) == nil then
+		selectedPets[petNames[1]] = true
+	end
+	if #petNames > 0 and next(selectedVisualPets) == nil then
+		selectedVisualPets[petNames[1]] = true
+	end
 end
 
+refreshSeedNamesFromStockValues()
+refreshGearNamesFromStockValues()
 refreshPetNamesFromAssets()
 
 local function getCharacter()
@@ -986,6 +968,9 @@ local function getEquippedSeedTool(seedName)
 	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
 	local humanoid = getHumanoid()
 	local targetSeed = seedName or CONFIG.selectedSeed
+	if not targetSeed or targetSeed == "" then
+		return nil
+	end
 
 	for _, container in ipairs({ character, backpack }) do
 		if container then
@@ -1012,7 +997,7 @@ local function getSelectedSeedList()
 		end
 	end
 
-	if #selected == 0 and not blacklistedSeeds[CONFIG.selectedSeed] then
+	if #selected == 0 and CONFIG.selectedSeed ~= "" and not blacklistedSeeds[CONFIG.selectedSeed] then
 		table.insert(selected, CONFIG.selectedSeed)
 	end
 
@@ -3117,6 +3102,11 @@ makeAvoidSeedButton = function(seedName)
 end
 
 local function scanSeedShopNames()
+	refreshSeedNamesFromStockValues()
+	for _, seedName in ipairs(seedNames) do
+		makeSeedButton(seedName)
+	end
+
 	local seedShop = playerGui:FindFirstChild("SeedShop")
 	local frame = seedShop and seedShop:FindFirstChild("Frame")
 	local normalShop = frame and frame:FindFirstChild("NormalShop")
@@ -3147,6 +3137,15 @@ end
 refreshSeedCanvas()
 refreshAvoidSeedCanvas()
 scanSeedShopNames()
+
+local seedStockItems = getStockItemsFolder("SeedShop")
+if seedStockItems then
+	seedStockItems.ChildAdded:Connect(function(item)
+		addUniqueName(seedNames, item.Name)
+		table.sort(seedNames)
+		makeSeedButton(item.Name)
+	end)
+end
 
 playerGui.ChildAdded:Connect(function(child)
 	if child.Name == "SeedShop" then
@@ -3187,6 +3186,7 @@ make("UIGridLayout", {
 
 local gearLayout = gearRow:FindFirstChildOfClass("UIGridLayout")
 local gearButtons = {}
+local gearButtonCount = 0
 
 local function refreshGearButton(gearName)
 	local button = gearButtons[gearName]
@@ -3204,7 +3204,13 @@ local function refreshGearCanvas()
 	gearRow.CanvasSize = UDim2.fromOffset(0, rows * 34)
 end
 
-for index, gearName in ipairs(gearNames) do
+local function makeGearButton(gearName)
+	if gearButtons[gearName] then
+		return
+	end
+
+	gearButtonCount += 1
+
 	local button = make("TextButton", {
 		Name = gearName,
 		AutoButtonColor = false,
@@ -3216,7 +3222,7 @@ for index, gearName in ipairs(gearNames) do
 		TextSize = 12,
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		Size = UDim2.fromOffset(118, 28),
-		LayoutOrder = index,
+		LayoutOrder = gearButtonCount,
 	}, gearRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
 
@@ -3228,12 +3234,53 @@ for index, gearName in ipairs(gearNames) do
 		refreshGearButton(gearName)
 		setStatus((selectedGears[gearName] and "Selected " or "Unselected ") .. gearName)
 	end)
+
+	refreshGearCanvas()
+end
+
+local function scanGearShopNames()
+	refreshGearNamesFromStockValues()
+
+	local gearShop = playerGui:FindFirstChild("GearShop")
+	local frame = gearShop and gearShop:FindFirstChild("Frame")
+	local scrollingFrame = frame and frame:FindFirstChild("ScrollingFrame")
+	if scrollingFrame then
+		for _, child in ipairs(scrollingFrame:GetChildren()) do
+			if child.Name ~= "ItemTemplate" and not string.find(string.lower(child.Name), "shelf", 1, true) then
+				if child:FindFirstChild("Main_Frame", true) or child:FindFirstChildWhichIsA("GuiButton", true) then
+					addUniqueName(gearNames, child.Name)
+				end
+			end
+		end
+	end
+
+	table.sort(gearNames)
+	for _, gearName in ipairs(gearNames) do
+		makeGearButton(gearName)
+	end
 end
 
 if gearLayout then
 	gearLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshGearCanvas)
 end
 refreshGearCanvas()
+scanGearShopNames()
+
+local gearStockItems = getStockItemsFolder("GearShop")
+if gearStockItems then
+	gearStockItems.ChildAdded:Connect(function(item)
+		addUniqueName(gearNames, item.Name)
+		table.sort(gearNames)
+		makeGearButton(item.Name)
+	end)
+end
+
+playerGui.ChildAdded:Connect(function(child)
+	if child.Name == "GearShop" then
+		task.wait(0.25)
+		scanGearShopNames()
+	end
+end)
 end)()
 
 (function()
@@ -3319,6 +3366,29 @@ local function makePetButton(petName)
 	refreshPetCanvas()
 end
 
+local function scanPetBuyNames()
+	refreshPetNamesFromAssets()
+
+	local wildPetSpawns = getWildPetSpawns()
+	if wildPetSpawns then
+		for _, descendant in ipairs(wildPetSpawns:GetDescendants()) do
+			if descendant:IsA("Model") then
+				addUniqueName(petNames, stripVariantWords(descendant.Name))
+			elseif descendant:IsA("ProximityPrompt") then
+				local model = descendant:FindFirstAncestorWhichIsA("Model")
+				if model then
+					addUniqueName(petNames, stripVariantWords(model.Name))
+				end
+			end
+		end
+	end
+
+	table.sort(petNames)
+	for _, petName in ipairs(petNames) do
+		makePetButton(petName)
+	end
+end
+
 for _, petName in ipairs(petNames) do
 	makePetButton(petName)
 end
@@ -3327,6 +3397,29 @@ if petLayout then
 	petLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshPetCanvas)
 end
 refreshPetCanvas()
+scanPetBuyNames()
+
+local assetsForPetBuy = ReplicatedStorage:FindFirstChild("Assets")
+local petsFolderForBuy = assetsForPetBuy and assetsForPetBuy:FindFirstChild("Pets")
+if petsFolderForBuy then
+	petsFolderForBuy.ChildAdded:Connect(function(pet)
+		local baseName = stripVariantWords(pet.Name)
+		addUniqueName(petNames, baseName)
+		makePetButton(baseName)
+	end)
+end
+
+local wildPetSpawnsForBuy = getWildPetSpawns()
+if wildPetSpawnsForBuy then
+	wildPetSpawnsForBuy.DescendantAdded:Connect(function(descendant)
+		local model = descendant:IsA("Model") and descendant or descendant:FindFirstAncestorWhichIsA("Model")
+		if model then
+			local baseName = stripVariantWords(model.Name)
+			addUniqueName(petNames, baseName)
+			makePetButton(baseName)
+		end
+	end)
+end
 end)()
 
 (function()
