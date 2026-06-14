@@ -3444,6 +3444,41 @@ function getShovelPrompt(target)
 	return nil
 end
 
+function aimAndClickPart(part)
+	if not part or not part:IsA("BasePart") then
+		return false
+	end
+
+	local camera = workspace.CurrentCamera
+	if not camera then
+		return false
+	end
+
+	local root = getRoot()
+	if root then
+		pcall(function()
+			root.CFrame = CFrame.lookAt(root.Position, Vector3.new(part.Position.X, root.Position.Y, part.Position.Z))
+		end)
+	end
+
+	pcall(function()
+		camera.CFrame = CFrame.lookAt(camera.CFrame.Position, part.Position)
+	end)
+
+	local viewportPoint, onScreen = camera:WorldToViewportPoint(part.Position)
+	if virtualInputManager and onScreen then
+		pcall(function()
+			virtualInputManager:SendMouseMoveEvent(viewportPoint.X, viewportPoint.Y, game)
+			virtualInputManager:SendMouseButtonEvent(viewportPoint.X, viewportPoint.Y, 0, true, game, 0)
+			task.wait(0.04)
+			virtualInputManager:SendMouseButtonEvent(viewportPoint.X, viewportPoint.Y, 0, false, game, 0)
+		end)
+		return true
+	end
+
+	return false
+end
+
 function shovelPlantTarget(plant)
 	if not plant or not plant.Parent then
 		return false
@@ -3458,6 +3493,7 @@ function shovelPlantTarget(plant)
 	local root = getRoot()
 	if part and root and (root.Position - part.Position).Magnitude > 18 then
 		teleportToModelOrPart(plant:IsA("Model") and plant or nil, part, 3)
+		task.wait(0.08)
 	end
 
 	local shovelTool = getShovelTool()
@@ -3468,9 +3504,20 @@ function shovelPlantTarget(plant)
 	local plantPosition = part and part.Position
 	local identifiers = getPlantShovelIdentifiers(plant, part)
 
+	if shovelTool then
+		pcall(function()
+			shovelTool:Activate()
+		end)
+		fired = true
+	end
+
+	if part then
+		fired = aimAndClickPart(part) or fired
+	end
+
 	for _, packetName in ipairs({
-		"UseShovel",
 		"SwingShovel",
+		"UseShovel",
 	}) do
 		fired = sendPacket(packetName) or fired
 		fired = sendPacket(packetName, plant) or fired
@@ -3501,11 +3548,12 @@ function shovelPlantTarget(plant)
 	end
 
 	if part then
+		fired = aimAndClickPart(part) or fired
 		touchPart(part)
 	end
 
-	task.wait(0.08)
-	return fired and (not plant.Parent or plant.Parent ~= beforeParent or not plant:IsDescendantOf(workspace))
+	task.wait(0.18)
+	return fired or not plant.Parent or plant.Parent ~= beforeParent or not plant:IsDescendantOf(workspace)
 end
 
 function autoShovel()
@@ -3959,6 +4007,63 @@ function make(className, properties, parent)
 	return instance
 end
 
+function matchesSelectorFilter(name, query)
+	query = string.lower(tostring(query or ""))
+	if query == "" then
+		return true
+	end
+
+	local haystack = string.lower(tostring(name or ""))
+	local compactHaystack = string.gsub(haystack, "[%s_%-']", "")
+	local compactQuery = string.gsub(query, "[%s_%-']", "")
+	return string.find(haystack, query, 1, true) ~= nil
+		or string.find(compactHaystack, compactQuery, 1, true) ~= nil
+end
+
+function makeSelectorSearch(parent, order, placeholder, onChanged)
+	local box = make("TextBox", {
+		Name = string.gsub(placeholder, "%s+", "") .. "Search",
+		BackgroundColor3 = Color3.fromRGB(18, 23, 24),
+		BorderSizePixel = 0,
+		ClearTextOnFocus = false,
+		Font = Enum.Font.Gotham,
+		PlaceholderText = placeholder,
+		Text = "",
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 11,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.new(1, 0, 0, 24),
+		LayoutOrder = order,
+	}, parent)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, box)
+	make("UIPadding", {
+		PaddingLeft = UDim.new(0, 9),
+		PaddingRight = UDim.new(0, 9),
+	}, box)
+
+	box:GetPropertyChangedSignal("Text"):Connect(function()
+		onChanged(box.Text)
+	end)
+
+	return box
+end
+
+function refreshSelectorFilter(buttons, names, query, row, columns)
+	local visible = 0
+	for _, name in ipairs(names) do
+		local button = buttons[name]
+		if button then
+			local show = matchesSelectorFilter(name, query)
+			button.Visible = show
+			if show then
+				visible += 1
+			end
+		end
+	end
+
+	row.CanvasSize = UDim2.fromOffset(0, math.max(1, math.ceil(visible / (columns or 2))) * 28)
+end
+
 function buildUI()
 local existing = playerGui:FindFirstChild("GardenAutomationGui")
 if existing then
@@ -4209,7 +4314,7 @@ local seedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 20,
+	LayoutOrder = 21,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4220,6 +4325,12 @@ make("UIGridLayout", {
 local seedLayout = seedRow:FindFirstChildOfClass("UIGridLayout")
 local seedButtons = {}
 local seedButtonCount = 0
+local seedFilterText = ""
+
+makeSelectorSearch(content, 20, "Search seeds to buy", function(text)
+	seedFilterText = text
+	refreshSelectorFilter(seedButtons, seedNames, seedFilterText, seedRow, 2)
+end)
 
 local function refreshSeedButton(seedName)
 	local button = seedButtons[seedName]
@@ -4233,8 +4344,7 @@ local function refreshSeedButton(seedName)
 end
 
 local function refreshSeedCanvas()
-	local rows = math.ceil(#seedNames / 2)
-	seedRow.CanvasSize = UDim2.fromOffset(0, rows * 28)
+	refreshSelectorFilter(seedButtons, seedNames, seedFilterText, seedRow, 2)
 end
 
 local function makeSeedButton(seedName)
@@ -4261,6 +4371,7 @@ local function makeSeedButton(seedName)
 
 	seedButtons[seedName] = button
 	refreshSeedButton(seedName)
+	button.Visible = matchesSelectorFilter(seedName, seedFilterText)
 
 	button.Activated:Connect(function()
 		selectedSeeds[seedName] = not selectedSeeds[seedName]
@@ -4356,7 +4467,7 @@ local shovelSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 21,
+	LayoutOrder = 22,
 }, content)
 
 local shovelSeedRow = make("ScrollingFrame", {
@@ -4367,7 +4478,7 @@ local shovelSeedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 22,
+	LayoutOrder = 24,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4378,6 +4489,12 @@ make("UIGridLayout", {
 local shovelSeedLayout = shovelSeedRow:FindFirstChildOfClass("UIGridLayout")
 local shovelSeedButtons = {}
 local shovelSeedButtonCount = 0
+local shovelSeedFilterText = ""
+
+makeSelectorSearch(content, 23, "Search seeds to shovel", function(text)
+	shovelSeedFilterText = text
+	refreshSelectorFilter(shovelSeedButtons, seedNames, shovelSeedFilterText, shovelSeedRow, 2)
+end)
 
 local function refreshShovelSeedButton(seedName)
 	local button = shovelSeedButtons[seedName]
@@ -4391,8 +4508,7 @@ local function refreshShovelSeedButton(seedName)
 end
 
 local function refreshShovelSeedCanvas()
-	local rows = math.ceil(#seedNames / 2)
-	shovelSeedRow.CanvasSize = UDim2.fromOffset(0, rows * 28)
+	refreshSelectorFilter(shovelSeedButtons, seedNames, shovelSeedFilterText, shovelSeedRow, 2)
 end
 
 local function makeShovelSeedButton(seedName)
@@ -4418,6 +4534,7 @@ local function makeShovelSeedButton(seedName)
 
 	shovelSeedButtons[seedName] = button
 	refreshShovelSeedButton(seedName)
+	button.Visible = matchesSelectorFilter(seedName, shovelSeedFilterText)
 
 	button.Activated:Connect(function()
 		selectedShovelSeeds[seedName] = not selectedShovelSeeds[seedName]
@@ -4462,7 +4579,7 @@ local selectedGearLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 23,
+	LayoutOrder = 25,
 }, content)
 
 local gearRow = make("ScrollingFrame", {
@@ -4473,7 +4590,7 @@ local gearRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 24,
+	LayoutOrder = 27,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4484,6 +4601,12 @@ make("UIGridLayout", {
 local gearLayout = gearRow:FindFirstChildOfClass("UIGridLayout")
 local gearButtons = {}
 local gearButtonCount = 0
+local gearFilterText = ""
+
+makeSelectorSearch(content, 26, "Search gear to buy", function(text)
+	gearFilterText = text
+	refreshSelectorFilter(gearButtons, gearNames, gearFilterText, gearRow, 2)
+end)
 
 local function refreshGearButton(gearName)
 	local button = gearButtons[gearName]
@@ -4497,8 +4620,7 @@ local function refreshGearButton(gearName)
 end
 
 local function refreshGearCanvas()
-	local rows = math.ceil(#gearNames / 2)
-	gearRow.CanvasSize = UDim2.fromOffset(0, rows * 28)
+	refreshSelectorFilter(gearButtons, gearNames, gearFilterText, gearRow, 2)
 end
 
 local function makeGearButton(gearName)
@@ -4525,6 +4647,7 @@ local function makeGearButton(gearName)
 
 	gearButtons[gearName] = button
 	refreshGearButton(gearName)
+	button.Visible = matchesSelectorFilter(gearName, gearFilterText)
 
 	button.Activated:Connect(function()
 		selectedGears[gearName] = not selectedGears[gearName]
@@ -4604,7 +4727,7 @@ local selectedPetLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 25,
+	LayoutOrder = 28,
 }, content)
 
 local petRow = make("ScrollingFrame", {
@@ -4615,7 +4738,7 @@ local petRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 26,
+	LayoutOrder = 30,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4626,6 +4749,12 @@ make("UIGridLayout", {
 local petLayout = petRow:FindFirstChildOfClass("UIGridLayout")
 local petButtons = {}
 local petButtonCount = 0
+local petFilterText = ""
+
+makeSelectorSearch(content, 29, "Search pets to buy", function(text)
+	petFilterText = text
+	refreshSelectorFilter(petButtons, petNames, petFilterText, petRow, 2)
+end)
 
 local function refreshPetButton(petName)
 	local button = petButtons[petName]
@@ -4639,8 +4768,7 @@ local function refreshPetButton(petName)
 end
 
 local function refreshPetCanvas()
-	local rows = math.ceil(#petNames / 2)
-	petRow.CanvasSize = UDim2.fromOffset(0, rows * 28)
+	refreshSelectorFilter(petButtons, petNames, petFilterText, petRow, 2)
 end
 
 local function makePetButton(petName)
@@ -4667,6 +4795,7 @@ local function makePetButton(petName)
 
 	petButtons[petName] = button
 	refreshPetButton(petName)
+	button.Visible = matchesSelectorFilter(petName, petFilterText)
 
 	button.Activated:Connect(function()
 		selectedPets[petName] = not selectedPets[petName]
