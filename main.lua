@@ -39,6 +39,7 @@ local CONFIG = {
 	visualPetVariant = "Normal",
 	selectedSeed = "",
 	plantRadius = 18,
+	webhookUrl = "",
 }
 
 local seedNames = {}
@@ -77,6 +78,7 @@ local selectedPets = {}
 local selectedVisualPets = {}
 
 local saveConfig = function() end
+local setStatus = function() end
 
 local CONFIG_FOLDER = "GardenTools"
 local CONFIG_FILE = CONFIG_FOLDER .. "/config.json"
@@ -139,6 +141,7 @@ local function loadConfig()
 		"visualPetVariant",
 		"selectedSeed",
 		"plantRadius",
+		"webhookUrl",
 	})
 	copyKnownValues(decoded.state, state, {
 		"fruitCollector",
@@ -184,6 +187,7 @@ saveConfig = function()
 			visualPetVariant = CONFIG.visualPetVariant,
 			selectedSeed = CONFIG.selectedSeed,
 			plantRadius = CONFIG.plantRadius,
+			webhookUrl = CONFIG.webhookUrl,
 		},
 		state = {
 			fruitCollector = state.fruitCollector,
@@ -216,6 +220,85 @@ saveConfig = function()
 end
 
 local configLoaded = loadConfig()
+
+local webhookSentAt = {}
+
+local function getRequestFunction()
+	return (syn and syn.request)
+		or (http and http.request)
+		or http_request
+		or request
+end
+
+local function sendWebhook(title, description, key)
+	if CONFIG.webhookUrl == "" then
+		return false
+	end
+
+	local now = os.clock()
+	if key and webhookSentAt[key] and now - webhookSentAt[key] < 45 then
+		return false
+	end
+
+	local requestFunction = getRequestFunction()
+	if type(requestFunction) ~= "function" then
+		setStatus("Webhook: request function unavailable")
+		return false
+	end
+
+	local payload = {
+		username = "Garden Tools",
+		embeds = {
+			{
+				title = title,
+				description = description,
+				color = 65280,
+				timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+			},
+		},
+	}
+
+	local ok = pcall(function()
+		requestFunction({
+			Url = CONFIG.webhookUrl,
+			Method = "POST",
+			Headers = {
+				["Content-Type"] = "application/json",
+			},
+			Body = HttpService:JSONEncode(payload),
+		})
+	end)
+
+	if ok and key then
+		webhookSentAt[key] = now
+	end
+
+	return ok
+end
+
+local function shouldNotifySelected(map, name)
+	return name and name ~= "" and map[name] == true
+end
+
+local function notifyStock(shopName, itemName)
+	if shouldNotifySelected(selectedSeeds, itemName) or shouldNotifySelected(selectedGears, itemName) then
+		sendWebhook(
+			shopName .. " stock",
+			itemName .. " is now in stock.",
+			"stock:" .. shopName .. ":" .. itemName
+		)
+	end
+end
+
+local function notifyPetSpawn(petName)
+	if shouldNotifySelected(selectedPets, petName) then
+		sendWebhook(
+			"Pet spawned",
+			petName .. " spawned in WildPetSpawns.",
+			"pet:" .. petName
+		)
+	end
+end
 
 local visualVariantWords = {
 	"Big",
@@ -255,7 +338,7 @@ local stats = {
 
 local running = {}
 
-local function setStatus(message)
+setStatus = function(message)
 	state.lastStatus = tostring(message)
 	if statusValue then
 		statusValue.Value = state.lastStatus
@@ -741,7 +824,9 @@ local function refreshBuyPetNamesFromWildSpawns()
 		end
 
 		if model then
-			addUniqueName(buyPetNames, stripVariantWords(model.Name))
+			local petName = stripVariantWords(model.Name)
+			addUniqueName(buyPetNames, petName)
+			notifyPetSpawn(petName)
 		end
 	end
 
@@ -3810,6 +3895,31 @@ makeToggle("Auto Buy Gear", "autoBuyGear", 12)
 makeToggle("Use Gear Shop", "gearShopEnabled", 13)
 makeToggle("Performance Mode", "performanceMode", 14)
 
+local webhookBox = make("TextBox", {
+	Name = "WebhookUrl",
+	BackgroundColor3 = Color3.fromRGB(34, 41, 42),
+	BorderSizePixel = 0,
+	ClearTextOnFocus = false,
+	Font = Enum.Font.GothamSemibold,
+	PlaceholderText = "Webhook URL for selected stock/pets",
+	Text = CONFIG.webhookUrl,
+	TextColor3 = Color3.fromRGB(242, 247, 239),
+	TextSize = 12,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+	Size = UDim2.new(1, 0, 0, 30),
+	LayoutOrder = 15,
+}, content)
+make("UICorner", { CornerRadius = UDim.new(0, 6) }, webhookBox)
+make("UIPadding", {
+	PaddingLeft = UDim.new(0, 10),
+	PaddingRight = UDim.new(0, 10),
+}, webhookBox)
+webhookBox.FocusLost:Connect(function()
+	CONFIG.webhookUrl = tostring(webhookBox.Text or "")
+	saveConfig()
+	setStatus(CONFIG.webhookUrl ~= "" and "Webhook URL saved" or "Webhook URL cleared")
+end)
+
 local statsTitle = make("TextLabel", {
 	Name = "StatsTitle",
 	BackgroundTransparency = 1,
@@ -3819,7 +3929,7 @@ local statsTitle = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 15,
+	LayoutOrder = 16,
 }, content)
 
 local statsFrame = make("Frame", {
@@ -3827,7 +3937,7 @@ local statsFrame = make("Frame", {
 	BackgroundColor3 = Color3.fromRGB(14, 18, 19),
 	BorderSizePixel = 0,
 	Size = UDim2.new(1, 0, 0, 128),
-	LayoutOrder = 16,
+	LayoutOrder = 17,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, statsFrame)
 make("UIPadding", {
@@ -3878,7 +3988,7 @@ visualControlsToggle = make("TextButton", {
 	TextColor3 = Color3.fromRGB(235, 244, 233),
 	TextSize = 12,
 	Size = UDim2.new(1, 0, 0, 30),
-	LayoutOrder = 17,
+	LayoutOrder = 18,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, visualControlsToggle)
 visualControlsToggle.Activated:Connect(function()
@@ -3897,7 +4007,7 @@ local selectedSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 18,
+	LayoutOrder = 19,
 }, content)
 
 local seedRow = make("ScrollingFrame", {
@@ -3908,7 +4018,7 @@ local seedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 19,
+	LayoutOrder = 20,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -3930,7 +4040,7 @@ local avoidSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 20,
+	LayoutOrder = 21,
 }, content)
 
 local avoidSeedRow = make("ScrollingFrame", {
@@ -3941,7 +4051,7 @@ local avoidSeedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 21,
+	LayoutOrder = 22,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4105,6 +4215,7 @@ if seedStockItems then
 		seedPriority[item.Name] = getSeedMetadataValue(item.Name)
 		table.sort(seedNames)
 		makeSeedButton(item.Name)
+		notifyStock("Seed shop", item.Name)
 	end)
 end
 
@@ -4133,7 +4244,7 @@ local selectedGearLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 22,
+	LayoutOrder = 23,
 }, content)
 
 local gearRow = make("ScrollingFrame", {
@@ -4144,7 +4255,7 @@ local gearRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 23,
+	LayoutOrder = 24,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4241,6 +4352,7 @@ if gearStockItems then
 		addUniqueName(gearNames, item.Name)
 		table.sort(gearNames)
 		makeGearButton(item.Name)
+		notifyStock("Gear shop", item.Name)
 	end)
 end
 
@@ -4263,7 +4375,7 @@ local selectedPetLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 24,
+	LayoutOrder = 25,
 }, content)
 
 local petRow = make("ScrollingFrame", {
@@ -4274,7 +4386,7 @@ local petRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 25,
+	LayoutOrder = 26,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4383,6 +4495,7 @@ if wildPetSpawnsForBuy then
 			table.sort(buyPetNames)
 			table.sort(petNames)
 			makePetButton(baseName)
+			notifyPetSpawn(baseName)
 		end
 	end)
 end
@@ -4406,6 +4519,7 @@ if mapForPetBuy then
 					table.sort(buyPetNames)
 					table.sort(petNames)
 					makePetButton(baseName)
+					notifyPetSpawn(baseName)
 				end
 			end)
 		end
@@ -4424,7 +4538,7 @@ local selectedVisualPetLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 26,
+	LayoutOrder = 27,
 }, content)
 registerVisualControl(selectedVisualPetLabel)
 
@@ -4436,7 +4550,7 @@ local visualPetRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 27,
+	LayoutOrder = 28,
 }, content)
 registerVisualControl(visualPetRow)
 make("UIGridLayout", {
@@ -4522,7 +4636,7 @@ local selectedVisualVariantLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 28,
+	LayoutOrder = 29,
 }, content)
 registerVisualControl(selectedVisualVariantLabel)
 
@@ -4534,7 +4648,7 @@ local variantRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 58),
-	LayoutOrder = 29,
+	LayoutOrder = 30,
 }, content)
 registerVisualControl(variantRow)
 local variantLayout = make("UIGridLayout", {
@@ -4614,7 +4728,7 @@ local visualPetAmountBox = make("TextBox", {
 	TextColor3 = Color3.fromRGB(242, 247, 239),
 	TextSize = 13,
 	Size = UDim2.new(1, 0, 0, 34),
-	LayoutOrder = 30,
+	LayoutOrder = 31,
 }, content)
 registerVisualControl(visualPetAmountBox)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, visualPetAmountBox)
@@ -4661,8 +4775,8 @@ end
 end
 buildVisualPetSelector()
 
-registerVisualControl(makeActionButton("Spawn", 31, spawnVisualPets))
-registerVisualControl(makeActionButton("Clear", 32, clearVisualPets))
+registerVisualControl(makeActionButton("Spawn", 32, spawnVisualPets))
+registerVisualControl(makeActionButton("Clear", 33, clearVisualPets))
 refreshVisualControlsVisibility()
 
 local dragStart
