@@ -18,8 +18,8 @@ localPlayer = Players.LocalPlayer
 playerGui = localPlayer:WaitForChild("PlayerGui")
 
 CONFIG = {
-	collectInterval = 0.5,
-	plantInterval = 1.1,
+	collectInterval = 0.8,
+	plantInterval = 1.3,
 	sellInterval = 12.0,
 	sellWhenFullInterval = 1.5,
 	sellResumeFreeSlots = 8,
@@ -30,13 +30,13 @@ CONFIG = {
 	dropCacheRefreshInterval = 5.0,
 	inventoryRefreshInterval = 3.5,
 	guiInventoryRefreshInterval = 30.0,
-	maxFruitCollectPerTick = 42,
-	maxFruitScanPerRoot = 1400,
-	fruitCacheRefreshInterval = 3.5,
-	maxFruitTargetsCached = 220,
-	maxFruitPromptFallbackPerTick = 24,
-	maxSeedPlantPerTick = 5,
-	maxSeedPlacementsPerTool = 3,
+	maxFruitCollectPerTick = 18,
+	maxFruitScanPerRoot = 650,
+	fruitCacheRefreshInterval = 6.0,
+	maxFruitTargetsCached = 120,
+	maxFruitPromptFallbackPerTick = 12,
+	maxSeedPlantPerTick = 3,
+	maxSeedPlacementsPerTool = 2,
 	seedCountCacheRefreshInterval = 45.0,
 	maxSeedBuyPerTick = 3,
 	seedBuyRemoteRepeats = 4,
@@ -207,6 +207,7 @@ saveConfig = function()
 		config = {
 			sellInterval = CONFIG.sellInterval,
 			sellWhenFullInterval = CONFIG.sellWhenFullInterval,
+			sellResumeFreeSlots = CONFIG.sellResumeFreeSlots,
 			buyInterval = CONFIG.buyInterval,
 			shovelInterval = CONFIG.shovelInterval,
 			lowRaritySeedLimit = CONFIG.lowRaritySeedLimit,
@@ -217,6 +218,7 @@ saveConfig = function()
 			selectedSeed = CONFIG.selectedSeed,
 			plantRadius = CONFIG.plantRadius,
 			webhookUrl = CONFIG.webhookUrl,
+			statsWebhookInterval = CONFIG.statsWebhookInterval,
 		},
 		state = {
 			fruitCollector = state.fruitCollector,
@@ -494,16 +496,6 @@ setStatus = function(message)
 	end
 end
 
-function countSelected(map)
-	local count = 0
-	for _, enabled in pairs(map) do
-		if enabled then
-			count += 1
-		end
-	end
-	return count
-end
-
 function countEnabledToggles()
 	local count = 0
 	for _, key in ipairs({
@@ -523,15 +515,6 @@ function countEnabledToggles()
 		end
 	end
 	return count
-end
-
-function shortStatus(text, maxLength)
-	text = tostring(text or "")
-	maxLength = maxLength or 42
-	if #text <= maxLength then
-		return text
-	end
-	return string.sub(text, 1, maxLength - 3) .. "..."
 end
 
 function formatNumber(value)
@@ -603,21 +586,6 @@ function stripVariantWords(name)
 		result = string.gsub(result, "%s+" .. word .. "$", "")
 	end
 	return trimText(result)
-end
-
-function extractVariantLabel(assetName, petName)
-	if not assetName or assetName == petName then
-		return ""
-	end
-
-	local startAt, endAt = string.find(assetName, petName, 1, true)
-	if not startAt then
-		return ""
-	end
-
-	local before = trimText(string.sub(assetName, 1, startAt - 1))
-	local after = trimText(string.sub(assetName, endAt + 1))
-	return trimText((before .. " " .. after))
 end
 
 function getGearImagesFolder()
@@ -823,14 +791,6 @@ function getHumanoid()
 	return character:FindFirstChildOfClass("Humanoid")
 end
 
-function getPath(root, path)
-	local current = root
-	for part in string.gmatch(path, "[^%.]+") do
-		current = current and current:FindFirstChild(part)
-	end
-	return current
-end
-
 function getObjectPath(instance)
 	local parts = {}
 	local current = instance
@@ -993,14 +953,43 @@ function sendPacket(packetName, ...)
 	return firePacketRemote(packetName, ...)
 end
 
-function sendAnyPacket(packetNames, ...)
-	for _, packetName in ipairs(packetNames) do
-		if sendPacket(packetName, ...) then
-			return true, packetName
+function sendExactPacket(packetName, ...)
+	local actions = 0
+	if firePacketRemote(packetName, ...) then
+		actions += 1
+	end
+
+	local packet = getPacketModule()
+	if type(packet) == "table" then
+		local entry = packetEntryCache[packetName]
+		if entry == nil then
+			entry = findPacketEntry(packet, packetName)
+			if entry == nil then
+				entry = false
+			end
+			packetEntryCache[packetName] = entry
+		end
+		if entry ~= false and tryPacketEntry(entry, ...) then
+			actions += 1
+		end
+
+		for _, methodName in ipairs({ "Fire", "FireServer", "Send", "SendToServer" }) do
+			if type(packet[methodName]) == "function" then
+				if pcall(packet[methodName], packet, packetName, ...) then
+					actions += 1
+				end
+				if pcall(packet[methodName], packetName, ...) then
+					actions += 1
+				end
+			end
+		end
+	elseif type(packet) == "function" then
+		if pcall(packet, packetName, ...) then
+			actions += 1
 		end
 	end
 
-	return false, nil
+	return actions > 0, actions
 end
 
 local cache = {
@@ -1050,11 +1039,6 @@ function getGardens()
 end
 
 local dropCacheRoots = {}
-
-function invalidateDropCaches()
-	cache.rainbow1At = nil
-	cache.rainbow2At = nil
-end
 
 function watchDropRoot(root)
 	if not root or dropCacheRoots[root] then
@@ -1902,56 +1886,6 @@ function collectionTookEffect(target, beforeInventoryCount)
 	return beforeInventoryCount ~= nil and afterInventoryCount > beforeInventoryCount
 end
 
-function isFruitContainer(instance)
-	local current = instance
-	local checked = 0
-	while current and current ~= workspace and checked <= 5 do
-		local name = string.lower(current.Name)
-		if name == "fruits" or name == "fruit" then
-			return true
-		end
-		current = current.Parent
-		checked += 1
-	end
-	return false
-end
-
-function getFruitObjectTarget(instance)
-	local current = instance
-	while current and current ~= workspace do
-		if current.Parent and current.Parent.Name == "Fruits" then
-			return current
-		end
-		current = current.Parent
-	end
-	return instance
-end
-
-function isLikelyFruitTarget(instance)
-	if not instance or instance:IsA("ProximityPrompt") then
-		return false
-	end
-
-	if not (instance:IsA("Model") or instance:IsA("BasePart")) then
-		return false
-	end
-
-	local blob = getInstanceTextBlob(instance, 3)
-	if isFruitContainer(instance) then
-		return true
-	end
-
-	if string.find(blob, "kg", 1, true)
-		or string.find(blob, "lb", 1, true)
-		or string.find(blob, "fruit", 1, true)
-		or string.find(blob, "mutation", 1, true)
-	then
-		return true
-	end
-
-	return false
-end
-
 function getTargetPart(target)
 	if not target then
 		return nil
@@ -2024,47 +1958,6 @@ function getHarvestPromptInTarget(target)
 
 	harvestPromptCache[target] = false
 	return nil
-end
-
-function collectFruitTarget(target)
-	if not target then
-		return false
-	end
-
-	local beforeInventoryCount = countInventoryTools()
-	collectFruitPacket(target)
-
-	local part = getTargetPart(target)
-	if part and state.collectTeleport then
-		local model = target:IsA("Model") and target or target:FindFirstAncestorWhichIsA("Model")
-		if model then
-			teleportToModelOrPart(model, part, 3)
-		else
-			teleportToPart(part, 3)
-		end
-	elseif part and not state.collectTeleport then
-		local root = getRoot()
-		if root and (root.Position - part.Position).Magnitude > 16 then
-			stats.collectSkippedRange += 1
-			return false
-		end
-	end
-
-	local prompt = getHarvestPromptInTarget(target)
-	if prompt then
-		collectPrompt(prompt)
-	end
-
-	collectFruitPacket(target, true)
-	sendPacket("HarvestFruit", target)
-	sendPacket("Collect", target)
-	sendPacket("Harvest", target)
-
-	if part then
-		touchPart(part, state.collectTeleport)
-	end
-
-	return collectionTookEffect(target, beforeInventoryCount)
 end
 
 function getTargetDistance(target)
@@ -2300,21 +2193,6 @@ function collectFruitEntryFast(entry, heavy)
 	return fired
 end
 
-function collectFruitEntryRemoteOnly(entry)
-	if not isLiveFruitEntry(entry) then
-		return false
-	end
-
-	local target = entry.target
-	local prompt = entry.prompt
-	if not prompt or not isUsableHarvestPrompt(prompt) then
-		return false
-	end
-
-	target = target or getCollectFruitTarget(prompt)
-	return collectFruitPacket(target)
-end
-
 function triggerPrompt(prompt, skipTouch)
 	local part = getPromptPart and getPromptPart(prompt)
 	if part and not skipTouch then
@@ -2517,10 +2395,11 @@ function collectFruit()
 		if fallback < fallbackLimit and isLiveFruitEntry(entry) and (entry.prompt or heavyFallback) then
 			if collectFruitEntryFast(entry, heavyFallback) then
 				fallback += 1
+				fired += 1
 			end
 		end
 
-		if index % 12 == 0 then
+		if index % 8 == 0 then
 			task.wait()
 		end
 	end
@@ -3142,16 +3021,6 @@ function getPromptPart(prompt)
 	return nil
 end
 
-function triggerBuyPrompt(prompt)
-	local part = getPromptPart(prompt)
-	if part then
-		teleportToPart(part, 3)
-		task.wait(0.05)
-	end
-
-	return triggerPrompt(prompt, true)
-end
-
 function purchaseSeedRemote(seedName)
 	local variants = {
 		seedName,
@@ -3316,6 +3185,7 @@ performanceState = {
 	queue = {},
 	queueHead = 1,
 	queueRunning = false,
+	fullScanDone = false,
 	lastTreeScanAt = 0,
 	lastGardenHideAt = 0,
 }
@@ -3721,9 +3591,10 @@ enablePerformanceMode = function()
 		changed += hidePerformanceGardens()
 	end
 
-	if now - performanceState.lastTreeScanAt > 20 then
+	if not performanceState.fullScanDone and now - performanceState.lastTreeScanAt > 10 then
 		performanceState.lastTreeScanAt = now
-		changed += optimizePerformanceTree(workspace, 100)
+		performanceState.fullScanDone = true
+		changed += optimizePerformanceTree(workspace, 220)
 	end
 
 	setStatus(("Performance mode: simplified %d object(s)"):format(changed))
@@ -4292,12 +4163,14 @@ function autoSell(force)
 			return
 		end
 
-		if sendPacket("PreviewSellAll") then
-			actions += 1
+		local ok, count = sendExactPacket("PreviewSellAll")
+		if ok then
+			actions += count or 1
 		end
 		task.wait(0.05)
-		if sendPacket("SellAll") then
-			actions += 1
+		ok, count = sendExactPacket("SellAll")
+		if ok then
+			actions += count or 1
 		end
 
 		task.wait(0.35)
@@ -4315,17 +4188,21 @@ function autoSell(force)
 			if not tool or not tool.Parent then
 				continue
 			end
-			if sendPacket("SellItem", tool) then
-				actions += 1
+			ok, count = sendExactPacket("SellItem", tool)
+			if ok then
+				actions += count or 1
 			end
-			if sendPacket("SellItem", tool.Name) then
-				actions += 1
+			ok, count = sendExactPacket("SellItem", tool.Name)
+			if ok then
+				actions += count or 1
 			end
-			if sendPacket("SellFruit", tool) then
-				actions += 1
+			ok, count = sendExactPacket("SellFruit", tool)
+			if ok then
+				actions += count or 1
 			end
-			if sendPacket("SellFruit", tool.Name) then
-				actions += 1
+			ok, count = sendExactPacket("SellFruit", tool.Name)
+			if ok then
+				actions += count or 1
 			end
 		end
 
@@ -5713,16 +5590,13 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		sendStatsWebhook(false)
 	end
 
-	local shovelDue = state.autoShovel and timers.autoShovel >= CONFIG.shovelInterval
-	if shovelDue then
-		if tryRun("autoShovel", autoShovel) then
-			timers.autoShovel = 0
-		end
+	local sellNeeded = false
+	if state.sellWhenFull or state.autoSell then
+		sellNeeded = inventoryNeedsSell(false)
 	end
-
-	local sellNeeded = inventoryNeedsSell(false)
-	local sellDue = (state.sellWhenFull and timers.sellWhenFull >= CONFIG.sellWhenFullInterval and sellNeeded)
-		or (state.autoSell and (timers.autoSell >= CONFIG.sellInterval or sellNeeded))
+	local urgentSellDue = sellNeeded and (state.sellWhenFull or state.autoSell)
+	local sellDue = urgentSellDue
+		or (state.autoSell and timers.autoSell >= CONFIG.sellInterval)
 
 	if sellDue and not running.autoSell and not running.sellWhenFull then
 		if state.sellWhenFull and sellNeeded then
@@ -5739,7 +5613,16 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		end
 	end
 
-	local movementLocked = shovelDue or running.autoShovel or sellDue or running.autoSell or running.sellWhenFull
+	local shovelDue = state.autoShovel and timers.autoShovel >= CONFIG.shovelInterval
+	local movementLocked = running.autoShovel or sellDue or running.autoSell or running.sellWhenFull
+
+	if shovelDue and not movementLocked then
+		if tryRun("autoShovel", autoShovel) then
+			timers.autoShovel = 0
+		end
+	end
+
+	movementLocked = movementLocked or running.autoShovel
 
 	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval and not movementLocked then
 		if tryRun("autoBuyPets", buyPets) then
