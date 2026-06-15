@@ -1681,6 +1681,16 @@ function refreshInventoryStats(force)
 	return full, count, capacity
 end
 
+function purchaseChanged(beforeInventoryCount, beforeSheckles)
+	task.wait(0.25)
+	local afterInventoryCount = countInventoryTools()
+	local afterSheckles = refreshCurrencyStats(true)
+	return (afterInventoryCount and beforeInventoryCount and afterInventoryCount > beforeInventoryCount)
+		or (afterSheckles and beforeSheckles and afterSheckles < beforeSheckles),
+		afterInventoryCount,
+		afterSheckles
+end
+
 function shouldPauseFruitCollection()
 	if running.autoSell or running.sellWhenFull then
 		return true
@@ -2409,6 +2419,105 @@ function activateButton(button)
 	end)
 
 	return ok
+end
+
+function findSellPrompt()
+	local npcs = workspace:FindFirstChild("NPCS") or workspace:FindFirstChild("NPCs")
+	local steven = npcs and npcs:FindFirstChild("Steven")
+	local root = steven and steven:FindFirstChild("HumanoidRootPart")
+	local direct = root and root:FindFirstChildWhichIsA("ProximityPrompt")
+	if direct then
+		return direct
+	end
+
+	local map = getMap()
+	local stand = map and map:FindFirstChild("Stands") and map.Stands:FindFirstChild("Sell")
+	for _, searchRoot in ipairs({ root, steven, stand }) do
+		if searchRoot then
+			for _, descendant in ipairs(searchRoot:GetDescendants()) do
+				if descendant:IsA("ProximityPrompt") then
+					local text = string.lower((descendant.ActionText or "") .. " " .. (descendant.ObjectText or "") .. " " .. descendant.Name)
+					if string.find(text, "sell", 1, true) or string.find(text, "talk", 1, true) or string.find(text, "interact", 1, true) then
+						return descendant
+					end
+				end
+			end
+		end
+	end
+
+	return nil
+end
+
+function guiButtonText(button)
+	local parts = { safeText(button.Name) }
+	pcall(function()
+		table.insert(parts, safeText(button.Text))
+	end)
+
+	local scanned = 0
+	for _, descendant in ipairs(button:GetDescendants()) do
+		if scanned >= 20 then
+			break
+		end
+		scanned += 1
+		if descendant:IsA("TextLabel") or descendant:IsA("TextButton") or descendant:IsA("TextBox") then
+			table.insert(parts, safeText(descendant.Name))
+			table.insert(parts, safeText(descendant.Text))
+		end
+	end
+
+	return string.lower(table.concat(parts, " "))
+end
+
+function clickSellButtons()
+	local ownGui = playerGui:FindFirstChild("GardenAutomationGui")
+	local clicked = 0
+	local scanned = 0
+	for _, descendant in ipairs(playerGui:GetDescendants()) do
+		if scanned >= 160 then
+			break
+		end
+		if descendant:IsA("GuiButton") and descendant.Visible and (not ownGui or not descendant:IsDescendantOf(ownGui)) then
+			scanned += 1
+			local text = guiButtonText(descendant)
+			if string.find(text, "sell all", 1, true)
+				or string.find(text, "sell inventory", 1, true)
+				or string.find(text, "sell my", 1, true)
+				or string.find(text, "i want to sell", 1, true)
+			then
+				if activateButton(descendant) then
+					clicked += 1
+					task.wait(0.08)
+				end
+			end
+		end
+	end
+	return clicked
+end
+
+function sellThroughStevenFallback()
+	local prompt = findSellPrompt()
+	if not prompt then
+		return 0
+	end
+
+	local part = getPromptPart(prompt)
+	if part then
+		local root = getRoot()
+		local maxDistance = prompt.MaxActivationDistance or 10
+		if not root or (root.Position - part.Position).Magnitude > maxDistance + 2 then
+			teleportToPart(part, 3)
+			task.wait(0.08)
+		end
+	end
+
+	local actions = 0
+	if triggerPrompt(prompt, true) then
+		actions += 1
+	end
+	task.wait(0.2)
+	actions += clickSellButtons()
+	return actions
 end
 
 function collectFruit()
@@ -4232,12 +4341,14 @@ function autoSell(force)
 			return
 		end
 
-		local ok, count = sendExactPacket("PreviewSellAll")
-		if ok then
-			actions += count or 1
+		for _, packetName in ipairs({ "AskBidAll", "PreviewSellAll", "GetFruitBid" }) do
+			local ok, count = sendExactPacket(packetName)
+			if ok then
+				actions += count or 1
+			end
 		end
 		task.wait(0.05)
-		ok, count = sendExactPacket("SellAll")
+		local ok, count = sendExactPacket("SellAll")
 		if ok then
 			actions += count or 1
 		end
@@ -4256,6 +4367,14 @@ function autoSell(force)
 		for _, tool in ipairs(sellableTools) do
 			if not tool or not tool.Parent then
 				continue
+			end
+			ok, count = sendExactPacket("AskBid", tool)
+			if ok then
+				actions += count or 1
+			end
+			ok, count = sendExactPacket("GetFruitBid", tool)
+			if ok then
+				actions += count or 1
 			end
 			ok, count = sendExactPacket("SellItem", tool)
 			if ok then
@@ -4285,6 +4404,18 @@ function autoSell(force)
 			break
 		end
 
+		if attempt == 2 then
+			actions += sellThroughStevenFallback()
+			task.wait(0.35)
+			currentInventoryCount = countInventoryTools()
+			currentSheckles = refreshCurrencyStats(true)
+			if currentInventoryCount < beforeInventoryCount
+				or (currentSheckles and beforeSheckles and currentSheckles > beforeSheckles)
+			then
+				break
+			end
+		end
+
 		sellableTools = getSellableFruitTools()
 		if #sellableTools == 0 then
 			break
@@ -4301,9 +4432,9 @@ function autoSell(force)
 	local afterInventoryCount = countInventoryTools()
 	updateStatsUI()
 	if afterInventoryCount >= beforeInventoryCount and (not afterSheckles or not beforeSheckles or afterSheckles <= beforeSheckles) then
-		setStatus(("Sell remote: SellAll tried %d call(s), inventory unchanged (%d/%d)"):format(actions, stats.inventoryItems, stats.inventoryCapacity))
+		setStatus(("Sell failed: remote/NPC fallback made no change (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
 	else
-		setStatus(("Sell remote: sold with SellAll, inventory %d -> %d"):format(beforeInventoryCount, afterInventoryCount))
+		setStatus(("Sell: inventory %d -> %d"):format(beforeInventoryCount, afterInventoryCount))
 	end
 end
 
@@ -4369,10 +4500,17 @@ function buySeed()
 			break
 		end
 
-		local ok, message, count = buyOneSeed(seedName)
+		local beforeInventoryCount = countInventoryTools()
+		local beforeSheckles = refreshCurrencyStats(true)
+		local ok, message = buyOneSeed(seedName)
 		lastMessage = message
 		if ok then
-			bought += math.max(count or 1, 1)
+			local changed = purchaseChanged(beforeInventoryCount, beforeSheckles)
+			if changed then
+				bought += 1
+			else
+				lastMessage = "Auto buy: no verified seed purchase for " .. seedName
+			end
 		end
 		attempts += 1
 		task.wait()
@@ -4382,7 +4520,7 @@ function buySeed()
 		stats.seedsBought += bought
 		refreshInventoryStats()
 		updateStatsUI()
-		setStatus(("Auto buy: sent %d buy action(s) across %d seed(s)"):format(bought, attempts))
+		setStatus(("Auto buy: verified %d seed purchase(s) across %d attempt(s)"):format(bought, attempts))
 	else
 		setStatus(lastMessage)
 	end
@@ -4440,10 +4578,17 @@ function buyGear()
 			return
 		end
 
+		local beforeInventoryCount = countInventoryTools()
+		local beforeSheckles = refreshCurrencyStats(true)
 		local ok, message = buyOneGear(gearName)
 		lastMessage = message
 		if ok then
-			bought += 1
+			local changed = purchaseChanged(beforeInventoryCount, beforeSheckles)
+			if changed then
+				bought += 1
+			else
+				lastMessage = "Auto gear: no verified purchase for " .. gearName
+			end
 			task.wait(0.12)
 		end
 	end
@@ -4452,7 +4597,7 @@ function buyGear()
 		stats.gearBought += bought
 		refreshInventoryStats()
 		updateStatsUI()
-		setStatus(("Auto gear: tried %d selected item(s)"):format(bought))
+		setStatus(("Auto gear: verified %d purchase(s)"):format(bought))
 	else
 		setStatus(lastMessage)
 	end
@@ -4508,10 +4653,17 @@ function buyPets()
 			return
 		end
 
+		local beforeInventoryCount = countInventoryTools()
+		local beforeSheckles = refreshCurrencyStats(true)
 		local ok, message = buyOnePet(petName)
 		lastMessage = message
 		if ok then
-			bought += 1
+			local changed = purchaseChanged(beforeInventoryCount, beforeSheckles)
+			if changed then
+				bought += 1
+			else
+				lastMessage = "Auto pets: no verified purchase for " .. petName
+			end
 			task.wait(0.12)
 		end
 	end
@@ -4520,7 +4672,7 @@ function buyPets()
 		stats.petsBought += bought
 		refreshInventoryStats()
 		updateStatsUI()
-		setStatus(("Auto pets: tried %d selected pet(s)"):format(bought))
+		setStatus(("Auto pets: verified %d purchase(s)"):format(bought))
 	else
 		setStatus(lastMessage)
 	end
