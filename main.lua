@@ -2495,7 +2495,7 @@ function clickSellButtons()
 	return clicked
 end
 
-function sellThroughStevenFallback()
+function sellThroughStevenFallback(allowTeleport)
 	local prompt = findSellPrompt()
 	if not prompt then
 		return 0
@@ -2505,7 +2505,10 @@ function sellThroughStevenFallback()
 	if part then
 		local root = getRoot()
 		local maxDistance = prompt.MaxActivationDistance or 10
-		if not root or (root.Position - part.Position).Magnitude > maxDistance + 2 then
+		if root and (root.Position - part.Position).Magnitude > maxDistance + 2 and not allowTeleport then
+			return 0
+		end
+		if (not root or (root.Position - part.Position).Magnitude > maxDistance + 2) and allowTeleport then
 			teleportToPart(part, 3)
 			task.wait(0.08)
 		end
@@ -2520,25 +2523,28 @@ function sellThroughStevenFallback()
 	return actions
 end
 
-function moveToStevenForSell()
+function moveToStevenForSell(allowTeleport)
 	local prompt = findSellPrompt()
 	if not prompt then
-		return false
+		return false, nil
 	end
 
 	local part = getPromptPart(prompt)
 	if not part then
-		return false
+		return false, prompt
 	end
 
 	local root = getRoot()
 	local maxDistance = prompt.MaxActivationDistance or 10
 	if not root or (root.Position - part.Position).Magnitude > math.max(maxDistance - 2, 6) then
+		if not allowTeleport then
+			return false, prompt
+		end
 		teleportToPart(part, 3)
 		task.wait(0.15)
 	end
 
-	return true
+	return true, prompt
 end
 
 function collectFruit()
@@ -4341,7 +4347,7 @@ function autoSell(force)
 		return
 	end
 
-	refreshInventoryStats(true)
+	local inventoryFull = refreshInventoryStats(true)
 	local beforeInventoryCount = countInventoryTools()
 	local sellableTools = getSellableFruitTools()
 	if beforeInventoryCount <= 0 then
@@ -4357,14 +4363,19 @@ function autoSell(force)
 	local beforeSheckles = refreshCurrencyStats(true)
 	local farmedBeforeSell = stats.shecklesFarmed or 0
 	local actions = 0
-	local movedToSteven = moveToStevenForSell()
+	local movedToSteven, sellPrompt = moveToStevenForSell(inventoryFull == true)
 	for attempt = 1, 3 do
 		if not force and not isEnabled("autoSell") then
 			return
 		end
 
 		if attempt > 1 and not movedToSteven then
-			movedToSteven = moveToStevenForSell()
+			movedToSteven, sellPrompt = moveToStevenForSell(inventoryFull == true)
+		end
+
+		if movedToSteven and sellPrompt and triggerPrompt(sellPrompt, true) then
+			actions += 1
+			task.wait(0.12)
 		end
 
 		local ok, count = sendExactPacket("PreviewSellAll")
@@ -4421,7 +4432,7 @@ function autoSell(force)
 		end
 
 		if attempt == 2 and movedToSteven then
-			actions += sellThroughStevenFallback()
+			actions += sellThroughStevenFallback(inventoryFull == true)
 			task.wait(0.35)
 			currentInventoryCount = countInventoryTools()
 			currentSheckles = refreshCurrencyStats(true)
