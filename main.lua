@@ -29,11 +29,11 @@ CONFIG = {
 	dropCacheRefreshInterval = 5.0,
 	inventoryRefreshInterval = 3.5,
 	guiInventoryRefreshInterval = 30.0,
-	maxFruitCollectPerTick = 30,
-	maxFruitScanPerRoot = 650,
+	maxFruitCollectPerTick = 42,
+	maxFruitScanPerRoot = 1400,
 	fruitCacheRefreshInterval = 3.5,
-	maxFruitTargetsCached = 130,
-	maxFruitPromptFallbackPerTick = 10,
+	maxFruitTargetsCached = 220,
+	maxFruitPromptFallbackPerTick = 24,
 	maxSeedPlantPerTick = 5,
 	maxSeedPlacementsPerTool = 3,
 	seedCountCacheRefreshInterval = 45.0,
@@ -1006,15 +1006,6 @@ local cache = {
 	gearFrames = {},
 }
 local nextDescendantRefreshAt = 0
-
-local touchPart
-local getPromptPart
-local triggerPrompt
-local triggerPromptFast
-local teleportToPart
-local teleportToModelOrPart
-local isInventorySeedTool
-local enablePerformanceMode
 
 function getCachedDescendants(key, root, maxAge)
 	local now = os.clock()
@@ -2279,9 +2270,7 @@ function collectFruitEntryFast(entry, heavy)
 	local fired = false
 	if prompt then
 		fired = triggerPromptFast(prompt) or fired
-		if fired and not heavy then
-			return true
-		end
+		task.wait(0.03)
 	end
 
 	if target then
@@ -2291,9 +2280,10 @@ function collectFruitEntryFast(entry, heavy)
 	if heavy and target then
 		fired = collectFruitPacket(target, true) or fired
 		fired = sendPacket("HarvestFruit", target) or fired
+		fired = sendPacket("Collect", target) or fired
 	end
 
-	if part and (heavy or not prompt) then
+	if part and (heavy or not prompt or state.collectTeleport) then
 		fired = touchPart(part, state.collectTeleport) or fired
 	end
 
@@ -2510,7 +2500,7 @@ function collectFruit()
 		fallbackLimit = CONFIG.maxFruitCollectPerTick
 	end
 
-	local heavyFallback = fruitTargetCache.noGainStreak >= 2
+	local heavyFallback = fruitTargetCache.noGainStreak >= 1
 	for index, entry in ipairs(targets) do
 		if not isEnabled("fruitCollector") then
 			return
@@ -2532,7 +2522,7 @@ function collectFruit()
 			return
 		end
 
-		if not entry.prompt or fruitTargetCache.noGainStreak >= 1 then
+		if not entry.prompt and fruitTargetCache.noGainStreak >= 1 then
 			if collectFruitEntryRemoteOnly(entry) then
 				fired += 1
 			end
