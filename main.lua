@@ -22,6 +22,7 @@ CONFIG = {
 	plantInterval = 1.1,
 	sellInterval = 12.0,
 	sellWhenFullInterval = 1.5,
+	sellResumeFreeSlots = 8,
 	buyInterval = 1.5,
 	rainbowCollectInterval = 4.5,
 	petBuyInterval = 1.5,
@@ -152,6 +153,7 @@ function loadConfig()
 	copyKnownValues(decoded.config, CONFIG, {
 		"sellInterval",
 		"sellWhenFullInterval",
+		"sellResumeFreeSlots",
 		"buyInterval",
 		"shovelInterval",
 		"lowRaritySeedLimit",
@@ -1620,6 +1622,25 @@ function refreshInventoryStats(force)
 	return full, count, capacity
 end
 
+function inventoryNeedsSell(force)
+	local full, count, capacity = refreshInventoryStats(force)
+	local freeSlots = math.max((capacity or CONFIG.maxInventoryItems) - (count or 0), 0)
+	return full or freeSlots <= CONFIG.sellResumeFreeSlots, count, capacity, freeSlots
+end
+
+function shouldPauseForSell()
+	if running.autoSell or running.sellWhenFull then
+		return true
+	end
+
+	if not (state.sellWhenFull or state.autoSell) then
+		return false
+	end
+
+	local needsSell = inventoryNeedsSell(false)
+	return needsSell == true
+end
+
 function updateStatsUI()
 	local now = os.clock()
 	if now - lastStatsUIUpdateAt < 1.5 then
@@ -2448,7 +2469,7 @@ function collectFruit()
 		return
 	end
 
-	local inventoryFull = refreshInventoryStats()
+	local inventoryFull = shouldPauseForSell()
 	if inventoryFull then
 		stats.collectSkippedFull += 1
 		updateStatsUI()
@@ -2485,6 +2506,11 @@ function collectFruit()
 	local heavyFallback = fruitTargetCache.noGainStreak >= 1
 	for index, entry in ipairs(targets) do
 		if not isEnabled("fruitCollector") then
+			return
+		end
+		if shouldPauseForSell() then
+			stats.collectSkippedFull += 1
+			setStatus(("Fruit collector paused: sell needed (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
 			return
 		end
 
@@ -4245,9 +4271,15 @@ function autoSell(force)
 		return
 	end
 
+	refreshInventoryStats(true)
 	local sellableTools = getSellableFruitTools()
 	if #sellableTools == 0 then
-		setStatus("Sell: nothing to sell")
+		refreshInventoryStats(true)
+		if not force then
+			setStatus("Sell: nothing to sell")
+		else
+			setStatus(("Sell: no fruit tools found (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
+		end
 		return
 	end
 
@@ -4324,6 +4356,8 @@ function autoSell(force)
 		stats.shecklesFarmed = math.max(stats.shecklesFarmed or 0, farmedBeforeSell + (afterSheckles - beforeSheckles))
 	end
 
+	refreshInventoryStats(true)
+	updateStatsUI()
 	setStatus(("Sell: %d action(s) for %d item(s)"):format(actions, #sellableTools))
 end
 
@@ -5686,7 +5720,26 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		end
 	end
 
-	local movementLocked = shovelDue or running.autoShovel
+	local sellNeeded = inventoryNeedsSell(false)
+	local sellDue = (state.sellWhenFull and timers.sellWhenFull >= CONFIG.sellWhenFullInterval and sellNeeded)
+		or (state.autoSell and (timers.autoSell >= CONFIG.sellInterval or sellNeeded))
+
+	if sellDue and not running.autoSell and not running.sellWhenFull then
+		if state.sellWhenFull and sellNeeded then
+			if tryRun("sellWhenFull", function()
+				autoSell(true)
+			end) then
+				timers.sellWhenFull = 0
+				timers.autoSell = 0
+			end
+		elseif state.autoSell then
+			if tryRun("autoSell", autoSell) then
+				timers.autoSell = 0
+			end
+		end
+	end
+
+	local movementLocked = shovelDue or running.autoShovel or sellDue or running.autoSell or running.sellWhenFull
 
 	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval and not movementLocked then
 		if tryRun("autoBuyPets", buyPets) then
@@ -5713,21 +5766,6 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	if state.seedPlacer and timers.seedPlacer >= CONFIG.plantInterval and not movementLocked then
 		if tryRun("seedPlacer", plantSeed) then
 			timers.seedPlacer = 0
-		end
-	end
-
-	if state.sellWhenFull and timers.sellWhenFull >= CONFIG.sellWhenFullInterval and not movementLocked then
-		timers.sellWhenFull = 0
-		if refreshInventoryStats() then
-			tryRun("sellWhenFull", function()
-				autoSell(true)
-			end)
-		end
-	end
-
-	if state.autoSell and timers.autoSell >= CONFIG.sellInterval and not movementLocked then
-		if tryRun("autoSell", autoSell) then
-			timers.autoSell = 0
 		end
 	end
 
