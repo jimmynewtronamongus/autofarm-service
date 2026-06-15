@@ -69,7 +69,6 @@ local state = {
 	autoCollectRainbowSeeds = false,
 	autoBuyPets = false,
 	performanceMode = false,
-	hidePlants = false,
 	lastStatus = "Ready",
 }
 
@@ -167,8 +166,10 @@ local function loadConfig()
 		"autoCollectRainbowSeeds",
 		"autoBuyPets",
 		"performanceMode",
-		"hidePlants",
 	})
+	if decoded.state and decoded.state.hidePlants == true then
+		state.performanceMode = true
+	end
 
 	selectedSeeds = copyMap(decoded.selectedSeeds)
 	selectedShovelSeeds = copyMap(decoded.selectedShovelSeeds)
@@ -215,7 +216,6 @@ saveConfig = function()
 			autoCollectRainbowSeeds = state.autoCollectRainbowSeeds,
 			autoBuyPets = state.autoBuyPets,
 			performanceMode = state.performanceMode,
-			hidePlants = state.hidePlants,
 		},
 		selectedSeeds = selectedSeeds,
 		selectedShovelSeeds = selectedShovelSeeds,
@@ -323,17 +323,52 @@ local function getStockFolderName(shopName)
 	return shopName
 end
 
+local function getShopGuiRoot(shopName)
+	local guiName = getStockFolderName(shopName)
+	return playerGui:FindFirstChild(guiName) or StarterGui:FindFirstChild(guiName)
+end
+
+local function shopGuiShowsItem(shopName, itemName)
+	local shopGui = getShopGuiRoot(shopName)
+	if not shopGui then
+		return false
+	end
+
+	for _, descendant in ipairs(shopGui:GetDescendants()) do
+		if descendant.Name == itemName and descendant.Name ~= "ItemTemplate" then
+			if descendant:FindFirstChild("Main_Frame", true) or descendant:FindFirstChildWhichIsA("GuiButton", true) then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
 local function itemIsInStock(shopName, itemName)
-	return (getShopStockAmount and getShopStockAmount(getStockFolderName(shopName), itemName) or 0) > 0
+	local stockFolderName = getStockFolderName(shopName)
+	local stockAmount = getShopStockAmount and getShopStockAmount(stockFolderName, itemName) or 0
+	if stockAmount > 0 then
+		return true
+	end
+
+	local items = getStockItemsFolder and getStockItemsFolder(stockFolderName)
+	if items and items:FindFirstChild(itemName) and stockAmount >= 0 then
+		return true
+	end
+
+	return shopGuiShowsItem(shopName, itemName)
 end
 
 local function notifyStock(shopName, itemName)
 	if itemIsInStock(shopName, itemName)
 		and (shouldNotifySelected(selectedSeeds, itemName) or shouldNotifySelected(selectedGears, itemName))
 	then
+		local stockAmount = getShopStockAmount(getStockFolderName(shopName), itemName)
 		sendWebhook(
 			shopName .. " stock",
-			("%s is now in stock (%d available)."):format(itemName, getShopStockAmount(getStockFolderName(shopName), itemName)),
+			stockAmount > 0 and ("%s is now in stock (%d available)."):format(itemName, stockAmount)
+				or (itemName .. " is now in stock."),
 			"stock:" .. shopName .. ":" .. itemName
 		)
 	end
@@ -452,7 +487,6 @@ local function countEnabledToggles()
 		"autoCollectRainbowSeeds",
 		"autoBuyPets",
 		"performanceMode",
-		"hidePlants",
 	}) do
 		if state[key] then
 			count += 1
@@ -901,7 +935,6 @@ local teleportToPart
 local teleportToModelOrPart
 local isInventorySeedTool
 local enablePerformanceMode
-local enableHidePlants
 
 local function getCachedDescendants(key, root, maxAge)
 	local now = os.clock()
@@ -1208,21 +1241,17 @@ workspace.ChildAdded:Connect(function(child)
 		invalidateOwnGardenCache()
 		child.ChildAdded:Connect(invalidateOwnGardenCache)
 		child.ChildRemoved:Connect(invalidateOwnGardenCache)
-		if state.performanceMode or state.hidePlants then
+		if state.performanceMode then
 			task.defer(function()
-				if state.performanceMode and enablePerformanceMode then
+				if enablePerformanceMode then
 					enablePerformanceMode()
-				elseif enableHidePlants then
-					enableHidePlants()
 				end
 			end)
 		end
-	elseif child.Name == "Map" and (state.performanceMode or state.hidePlants) then
+	elseif child.Name == "Map" and state.performanceMode then
 		task.defer(function()
-			if state.performanceMode and enablePerformanceMode then
+			if enablePerformanceMode then
 				enablePerformanceMode()
-			elseif enableHidePlants then
-				enableHidePlants()
 			end
 		end)
 	end
@@ -3103,7 +3132,7 @@ function optimizePerformanceInstance(instance)
 	end
 
 	local changed = 0
-	if state.performanceMode or state.hidePlants then
+	if state.performanceMode then
 		changed = applyPerformanceGardenHiding(instance)
 	end
 	if not state.performanceMode then
@@ -3177,20 +3206,10 @@ function connectPerformanceWatcher()
 
 	performanceWatcherConnected = true
 	workspace.DescendantAdded:Connect(function(descendant)
-		if state.performanceMode or state.hidePlants then
+		if state.performanceMode then
 			optimizePerformanceInstance(descendant)
 		end
 	end)
-end
-
-enableHidePlants = function()
-	connectPerformanceWatcher()
-	local changed = 0
-	local gardens = getGardens()
-	if gardens then
-		changed += optimizePerformanceTree(gardens, 250)
-	end
-	setStatus(("Hide plants: hidden %d garden object(s)"):format(changed))
 end
 
 enablePerformanceMode = function()
@@ -3216,7 +3235,7 @@ enablePerformanceMode = function()
 end
 
 function schedulePerformanceModeRestore()
-	if not state.performanceMode and not state.hidePlants then
+	if not state.performanceMode then
 		return
 	end
 
@@ -3227,8 +3246,6 @@ function schedulePerformanceModeRestore()
 			end
 			if state.performanceMode then
 				enablePerformanceMode()
-			elseif state.hidePlants then
-				enableHidePlants()
 			end
 		end
 	end)
@@ -4275,8 +4292,6 @@ local function makeToggle(label, key, order)
 
 		if key == "performanceMode" and state[key] then
 			task.spawn(enablePerformanceMode)
-		elseif key == "hidePlants" and state[key] then
-			task.spawn(enableHidePlants)
 		end
 	end)
 end
@@ -4305,13 +4320,12 @@ makeToggle("Seed Placer", "seedPlacer", 7)
 makeToggle("Auto Shovel Plants", "autoShovel", 8)
 makeToggle("Auto Sell Inventory", "autoSell", 9)
 makeToggle("Sell When Backpack Full", "sellWhenFull", 10)
-makeSectionLabel("Shops", 10)
-makeToggle("Auto Buy Seeds", "autoBuySeeds", 11)
-makeToggle("Use Seed Shop", "seedShopEnabled", 12)
-makeToggle("Auto Buy Gear", "autoBuyGear", 13)
-makeToggle("Use Gear Shop", "gearShopEnabled", 14)
-makeToggle("Performance Mode", "performanceMode", 15)
-makeToggle("Hide Plants", "hidePlants", 16)
+makeSectionLabel("Shops", 11)
+makeToggle("Auto Buy Seeds", "autoBuySeeds", 12)
+makeToggle("Use Seed Shop", "seedShopEnabled", 13)
+makeToggle("Auto Buy Gear", "autoBuyGear", 14)
+makeToggle("Use Gear Shop", "gearShopEnabled", 15)
+makeToggle("Performance Mode", "performanceMode", 16)
 
 local webhookBox = make("TextBox", {
 	Name = "WebhookUrl",
@@ -4333,7 +4347,8 @@ make("UIPadding", {
 	PaddingRight = UDim.new(0, 10),
 }, webhookBox)
 webhookBox.FocusLost:Connect(function()
-	CONFIG.webhookUrl = tostring(webhookBox.Text or "")
+	CONFIG.webhookUrl = string.gsub(tostring(webhookBox.Text or ""), "^%s*(.-)%s*$", "%1")
+	webhookBox.Text = CONFIG.webhookUrl
 	saveConfig()
 	setStatus(CONFIG.webhookUrl ~= "" and "Webhook URL saved" or "Webhook URL cleared")
 end)
