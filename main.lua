@@ -1,23 +1,23 @@
 -- Garden automation GUI for private testing in a Grow-a-Garden-style place.
 -- Drop this LocalScript in StarterPlayerScripts, or run it from a local test client.
 
-local Players = game:GetService("Players")
-local CollectionService = game:GetService("CollectionService")
-local HttpService = game:GetService("HttpService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local StarterGui = game:GetService("StarterGui")
-local UserInputService = game:GetService("UserInputService")
-local virtualInputManager
+Players = game:GetService("Players")
+CollectionService = game:GetService("CollectionService")
+HttpService = game:GetService("HttpService")
+ReplicatedStorage = game:GetService("ReplicatedStorage")
+RunService = game:GetService("RunService")
+StarterGui = game:GetService("StarterGui")
+UserInputService = game:GetService("UserInputService")
+virtualInputManager = nil
 
 pcall(function()
 	virtualInputManager = game:GetService("VirtualInputManager")
 end)
 
-local localPlayer = Players.LocalPlayer
-local playerGui = localPlayer:WaitForChild("PlayerGui")
+localPlayer = Players.LocalPlayer
+playerGui = localPlayer:WaitForChild("PlayerGui")
 
-local CONFIG = {
+CONFIG = {
 	collectInterval = 0.5,
 	plantInterval = 1.1,
 	sellInterval = 12.0,
@@ -56,11 +56,11 @@ local CONFIG = {
 	statsWebhookInterval = 180.0,
 }
 
-local seedNames = {}
+seedNames = {}
 
-local seedPriority = {}
+seedPriority = {}
 
-local state = {
+state = {
 	fruitCollector = false,
 	collectTeleport = true,
 	seedPlacer = false,
@@ -75,37 +75,37 @@ local state = {
 	lastStatus = "Ready",
 }
 
-local selectedSeeds = {}
+selectedSeeds = {}
 
-local selectedShovelSeeds = {}
+selectedShovelSeeds = {}
 
-local gearNames = {}
+gearNames = {}
 
-local selectedGears = {}
+selectedGears = {}
 
-local petNames = {}
+petNames = {}
 
-local buyPetNames = {}
+buyPetNames = {}
 
-local selectedPets = {}
+selectedPets = {}
 
-local plantPromptTextCache = setmetatable({}, { __mode = "k" })
-local shovelPromptCache = setmetatable({}, { __mode = "k" })
-local harvestPromptCache = setmetatable({}, { __mode = "k" })
+plantPromptTextCache = setmetatable({}, { __mode = "k" })
+shovelPromptCache = setmetatable({}, { __mode = "k" })
+harvestPromptCache = setmetatable({}, { __mode = "k" })
 
-local saveConfig = function() end
-local setStatus = function() end
+saveConfig = function() end
+setStatus = function() end
 
-local CONFIG_FOLDER = "GardenTools"
-local CONFIG_FILE = CONFIG_FOLDER .. "/config.json"
+CONFIG_FOLDER = "GardenTools"
+CONFIG_FILE = CONFIG_FOLDER .. "/config.json"
 
-local function canUseFileConfig()
+function canUseFileConfig()
 	return typeof(readfile) == "function"
 		and typeof(writefile) == "function"
 		and typeof(isfile) == "function"
 end
 
-local function copyMap(source)
+function copyMap(source)
 	local target = {}
 	if type(source) ~= "table" then
 		return target
@@ -120,7 +120,7 @@ local function copyMap(source)
 	return target
 end
 
-local function copyKnownValues(source, destination, keys)
+function copyKnownValues(source, destination, keys)
 	if type(source) ~= "table" then
 		return
 	end
@@ -132,7 +132,7 @@ local function copyKnownValues(source, destination, keys)
 	end
 end
 
-local function loadConfig()
+function loadConfig()
 	if not canUseFileConfig() then
 		return false
 	end
@@ -252,14 +252,14 @@ local getStockItemsFolder
 local getShopStockAmount
 local getShopPriceAmount
 
-local function getRequestFunction()
+function getRequestFunction()
 	return (syn and syn.request)
 		or (http and http.request)
 		or http_request
 		or request
 end
 
-local function sendWebhook(title, description, key)
+function sendWebhook(title, description, key)
 	if CONFIG.webhookUrl == "" then
 		return false
 	end
@@ -313,11 +313,11 @@ local function sendWebhook(title, description, key)
 	return sent
 end
 
-local function shouldNotifySelected(map, name)
+function shouldNotifySelected(map, name)
 	return name and name ~= "" and map[name] == true
 end
 
-local function listHasName(list, name)
+function listHasName(list, name)
 	for _, value in ipairs(list) do
 		if value == name then
 			return true
@@ -326,7 +326,7 @@ local function listHasName(list, name)
 	return false
 end
 
-local function getStockFolderName(shopName)
+function getStockFolderName(shopName)
 	if shopName == "Seed shop" then
 		return "SeedShop"
 	elseif shopName == "Gear shop" then
@@ -335,12 +335,12 @@ local function getStockFolderName(shopName)
 	return shopName
 end
 
-local function getShopGuiRoot(shopName)
+function getShopGuiRoot(shopName)
 	local guiName = getStockFolderName(shopName)
 	return playerGui:FindFirstChild(guiName) or StarterGui:FindFirstChild(guiName)
 end
 
-local function shopGuiShowsItem(shopName, itemName)
+function shopGuiShowsItem(shopName, itemName)
 	local shopGui = getShopGuiRoot(shopName)
 	if not shopGui then
 		return false
@@ -357,7 +357,7 @@ local function shopGuiShowsItem(shopName, itemName)
 	return false
 end
 
-local function itemIsInStock(shopName, itemName)
+function itemIsInStock(shopName, itemName)
 	local stockFolderName = getStockFolderName(shopName)
 	local stockAmount = getShopStockAmount and getShopStockAmount(stockFolderName, itemName) or 0
 	if stockAmount > 0 then
@@ -372,7 +372,7 @@ local function itemIsInStock(shopName, itemName)
 	return shopGuiShowsItem(shopName, itemName)
 end
 
-local function notifyStock(shopName, itemName)
+function notifyStock(shopName, itemName)
 	if itemIsInStock(shopName, itemName)
 		and (shouldNotifySelected(selectedSeeds, itemName) or shouldNotifySelected(selectedGears, itemName))
 	then
@@ -388,7 +388,7 @@ end
 
 local watchedStockItems = {}
 
-local function watchStockItem(shopName, item)
+function watchStockItem(shopName, item)
 	if not item then
 		return
 	end
@@ -425,7 +425,7 @@ local function watchStockItem(shopName, item)
 	item.ChildRemoved:Connect(changed)
 end
 
-local function notifyPetSpawn(petName)
+function notifyPetSpawn(petName)
 	if shouldNotifySelected(selectedPets, petName) then
 		sendWebhook(
 			"Pet spawned",
@@ -492,7 +492,7 @@ setStatus = function(message)
 	end
 end
 
-local function countSelected(map)
+function countSelected(map)
 	local count = 0
 	for _, enabled in pairs(map) do
 		if enabled then
@@ -502,7 +502,7 @@ local function countSelected(map)
 	return count
 end
 
-local function countEnabledToggles()
+function countEnabledToggles()
 	local count = 0
 	for _, key in ipairs({
 		"fruitCollector",
@@ -523,7 +523,7 @@ local function countEnabledToggles()
 	return count
 end
 
-local function shortStatus(text, maxLength)
+function shortStatus(text, maxLength)
 	text = tostring(text or "")
 	maxLength = maxLength or 42
 	if #text <= maxLength then
@@ -532,7 +532,7 @@ local function shortStatus(text, maxLength)
 	return string.sub(text, 1, maxLength - 3) .. "..."
 end
 
-local function formatNumber(value)
+function formatNumber(value)
 	value = tonumber(value) or 0
 	local sign = value < 0 and "-" or ""
 	value = math.abs(math.floor(value + 0.5))
@@ -547,7 +547,7 @@ local function formatNumber(value)
 	return sign .. text
 end
 
-local function parseAmountText(text)
+function parseAmountText(text)
 	text = tostring(text or "")
 	local lowered = string.lower(text)
 	local multiplier = 1
@@ -572,11 +572,11 @@ local function parseAmountText(text)
 	return math.floor(amount * multiplier + 0.5)
 end
 
-local function isEnabled(key)
+function isEnabled(key)
 	return state[key] == true
 end
 
-local function addUniqueName(list, name)
+function addUniqueName(list, name)
 	if not name or name == "" then
 		return
 	end
@@ -590,11 +590,11 @@ local function addUniqueName(list, name)
 	table.insert(list, name)
 end
 
-local function trimText(value)
+function trimText(value)
 	return string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
 end
 
-local function stripVariantWords(name)
+function stripVariantWords(name)
 	local result = tostring(name or "")
 	for _, word in ipairs(petVariantWords) do
 		result = string.gsub(result, "^" .. word .. "%s+", "")
@@ -603,7 +603,7 @@ local function stripVariantWords(name)
 	return trimText(result)
 end
 
-local function extractVariantLabel(assetName, petName)
+function extractVariantLabel(assetName, petName)
 	if not assetName or assetName == petName then
 		return ""
 	end
@@ -618,7 +618,7 @@ local function extractVariantLabel(assetName, petName)
 	return trimText((before .. " " .. after))
 end
 
-local function getGearImagesFolder()
+function getGearImagesFolder()
 	local sharedModules = ReplicatedStorage:FindFirstChild("SharedModules")
 	return sharedModules and sharedModules:FindFirstChild("GearImages")
 end
@@ -629,15 +629,15 @@ getStockItemsFolder = function(shopName)
 	return shop and shop:FindFirstChild("Items")
 end
 
-local function getSeedShopGui()
+function getSeedShopGui()
 	return StarterGui:FindFirstChild("SeedShop") or playerGui:FindFirstChild("SeedShop")
 end
 
-local function getRuntimeSeedShopGui()
+function getRuntimeSeedShopGui()
 	return playerGui:FindFirstChild("SeedShop") or StarterGui:FindFirstChild("SeedShop")
 end
 
-local function getNumericFromInstance(instance, keys)
+function getNumericFromInstance(instance, keys)
 	if not instance then
 		return nil
 	end
@@ -720,7 +720,7 @@ getShopPriceAmount = function(shopName, itemName)
 	})
 end
 
-local function getSeedMetadataValue(seedName)
+function getSeedMetadataValue(seedName)
 	local keys = { "Rarity", "RarityValue", "Tier", "TierValue", "Priority", "PriorityValue", "Price", "Cost", "Worth" }
 	local items = getStockItemsFolder("SeedShop")
 	local stockItem = items and items:FindFirstChild(seedName)
@@ -763,7 +763,7 @@ local function getSeedMetadataValue(seedName)
 	return 0
 end
 
-local function refreshNamesFromStock(shopName, targetList)
+function refreshNamesFromStock(shopName, targetList)
 	local items = getStockItemsFolder(shopName)
 	if not items then
 		return
@@ -781,15 +781,15 @@ local function refreshNamesFromStock(shopName, targetList)
 	table.sort(targetList)
 end
 
-local function refreshSeedNamesFromStockValues()
+function refreshSeedNamesFromStockValues()
 	refreshNamesFromStock("SeedShop", seedNames)
 end
 
-local function refreshGearNamesFromStockValues()
+function refreshGearNamesFromStockValues()
 	refreshNamesFromStock("GearShop", gearNames)
 end
 
-local function refreshPetNamesFromAssets()
+function refreshPetNamesFromAssets()
 	local assets = ReplicatedStorage:FindFirstChild("Assets")
 	local pets = assets and assets:FindFirstChild("Pets")
 	if not pets then
@@ -807,21 +807,21 @@ refreshSeedNamesFromStockValues()
 refreshGearNamesFromStockValues()
 refreshPetNamesFromAssets()
 
-local function getCharacter()
+function getCharacter()
 	return localPlayer.Character or localPlayer.CharacterAdded:Wait()
 end
 
-local function getRoot()
+function getRoot()
 	local character = getCharacter()
 	return character:FindFirstChild("HumanoidRootPart")
 end
 
-local function getHumanoid()
+function getHumanoid()
 	local character = getCharacter()
 	return character:FindFirstChildOfClass("Humanoid")
 end
 
-local function getPath(root, path)
+function getPath(root, path)
 	local current = root
 	for part in string.gmatch(path, "[^%.]+") do
 		current = current and current:FindFirstChild(part)
@@ -829,7 +829,7 @@ local function getPath(root, path)
 	return current
 end
 
-local function getObjectPath(instance)
+function getObjectPath(instance)
 	local parts = {}
 	local current = instance
 	while current and current ~= game do
@@ -839,7 +839,7 @@ local function getObjectPath(instance)
 	return table.concat(parts, ".")
 end
 
-local function safeText(value)
+function safeText(value)
 	if value == nil then
 		return ""
 	end
@@ -849,7 +849,7 @@ end
 
 local packetModule
 
-local function getPacketModule()
+function getPacketModule()
 	if packetModule ~= nil then
 		return packetModule
 	end
@@ -869,7 +869,7 @@ end
 local packetRemote
 local packetEntryCache = {}
 
-local function getPacketRemote()
+function getPacketRemote()
 	if packetRemote and packetRemote.Parent then
 		return packetRemote
 	end
@@ -890,7 +890,7 @@ local function getPacketRemote()
 	return nil
 end
 
-local function firePacketRemote(packetName, ...)
+function firePacketRemote(packetName, ...)
 	local remote = getPacketRemote()
 	if not remote then
 		return false
@@ -911,7 +911,7 @@ local function firePacketRemote(packetName, ...)
 	return false
 end
 
-local function tryPacketEntry(entry, ...)
+function tryPacketEntry(entry, ...)
 	if type(entry) == "table" then
 		for _, methodName in ipairs({ "Fire", "FireServer", "Send", "SendToServer" }) do
 			if type(entry[methodName]) == "function" then
@@ -929,7 +929,7 @@ local function tryPacketEntry(entry, ...)
 	return false
 end
 
-local function findPacketEntry(root, packetName, seen)
+function findPacketEntry(root, packetName, seen)
 	if type(root) ~= "table" then
 		return nil
 	end
@@ -956,7 +956,7 @@ local function findPacketEntry(root, packetName, seen)
 	return nil
 end
 
-local function sendPacket(packetName, ...)
+function sendPacket(packetName, ...)
 	local packet = getPacketModule()
 	if type(packet) == "table" then
 		local entry = packetEntryCache[packetName]
@@ -991,7 +991,7 @@ local function sendPacket(packetName, ...)
 	return firePacketRemote(packetName, ...)
 end
 
-local function sendAnyPacket(packetNames, ...)
+function sendAnyPacket(packetNames, ...)
 	for _, packetName in ipairs(packetNames) do
 		if sendPacket(packetName, ...) then
 			return true, packetName
@@ -1016,7 +1016,7 @@ local teleportToModelOrPart
 local isInventorySeedTool
 local enablePerformanceMode
 
-local function getCachedDescendants(key, root, maxAge)
+function getCachedDescendants(key, root, maxAge)
 	local now = os.clock()
 	local atKey = key .. "At"
 	local listKey = key .. "Descendants"
@@ -1040,7 +1040,7 @@ local function getCachedDescendants(key, root, maxAge)
 	return cache[listKey]
 end
 
-local function maybeYieldScan(startedAt, budgetSeconds)
+function maybeYieldScan(startedAt, budgetSeconds)
 	if os.clock() - startedAt >= (budgetSeconds or 0.012) then
 		task.wait()
 		return os.clock()
@@ -1048,22 +1048,22 @@ local function maybeYieldScan(startedAt, budgetSeconds)
 	return startedAt
 end
 
-local function getMap()
+function getMap()
 	return workspace:FindFirstChild("Map")
 end
 
-local function getGardens()
+function getGardens()
 	return workspace:FindFirstChild("Gardens")
 end
 
 local dropCacheRoots = {}
 
-local function invalidateDropCaches()
+function invalidateDropCaches()
 	cache.rainbow1At = nil
 	cache.rainbow2At = nil
 end
 
-local function watchDropRoot(root)
+function watchDropRoot(root)
 	if not root or dropCacheRoots[root] then
 		return
 	end
@@ -1071,17 +1071,17 @@ local function watchDropRoot(root)
 	dropCacheRoots[root] = true
 end
 
-local function watchDropRoots()
+function watchDropRoots()
 	watchDropRoot(getMap())
 	watchDropRoot(getGardens())
 end
 
-local function getWildPetSpawns()
+function getWildPetSpawns()
 	local map = getMap()
 	return map and map:FindFirstChild("WildPetSpawns")
 end
 
-local function refreshBuyPetNamesFromWildSpawns()
+function refreshBuyPetNamesFromWildSpawns()
 	local wildPetSpawns = getWildPetSpawns()
 	if not wildPetSpawns then
 		return
@@ -1105,7 +1105,7 @@ local function refreshBuyPetNamesFromWildSpawns()
 	table.sort(buyPetNames)
 end
 
-local function valueMatchesLocalPlayer(value)
+function valueMatchesLocalPlayer(value)
 	if value == localPlayer then
 		return true
 	end
@@ -1118,7 +1118,7 @@ local function valueMatchesLocalPlayer(value)
 	return text == tostring(localPlayer.UserId) or string.lower(text) == string.lower(localPlayer.Name)
 end
 
-local function plotBelongsToLocalPlayer(plot)
+function plotBelongsToLocalPlayer(plot)
 	if not plot then
 		return false
 	end
@@ -1157,7 +1157,7 @@ local fruitTargetCache = {
 	noGainStreak = 0,
 }
 
-local function invalidateOwnGardenCache()
+function invalidateOwnGardenCache()
 	ownGardenCache.checkedAt = 0
 	cache.ownGardenDescendants = nil
 	cache.ownGardenAt = nil
@@ -1167,7 +1167,7 @@ local function invalidateOwnGardenCache()
 	fruitTargetCache.noGainStreak = 0
 end
 
-local function addUniqueInstance(list, instance)
+function addUniqueInstance(list, instance)
 	if not instance then
 		return false
 	end
@@ -1182,7 +1182,7 @@ local function addUniqueInstance(list, instance)
 	return true
 end
 
-local function collectNamedDescendantRoots(root, names, results, limit)
+function collectNamedDescendantRoots(root, names, results, limit)
 	if not root then
 		return
 	end
@@ -1202,7 +1202,7 @@ local function collectNamedDescendantRoots(root, names, results, limit)
 	end
 end
 
-local function getOwnGardenRoots()
+function getOwnGardenRoots()
 	local now = os.clock()
 	if now - ownGardenCache.checkedAt < 5 and #ownGardenCache.roots > 0 then
 		return ownGardenCache.roots
@@ -1262,7 +1262,7 @@ local function getOwnGardenRoots()
 	return roots
 end
 
-local function getGardenAnchorPart(root)
+function getGardenAnchorPart(root)
 	if not root then
 		return nil
 	end
@@ -1313,7 +1313,7 @@ local function getGardenAnchorPart(root)
 	return nil
 end
 
-local function getOwnGardenAnchor()
+function getOwnGardenAnchor()
 	for _, root in ipairs(getOwnGardenRoots()) do
 		local part = getGardenAnchorPart(root)
 		if part then
@@ -1351,7 +1351,7 @@ workspace.ChildAdded:Connect(function(child)
 	end
 end)
 
-local function textMatches(instance, terms)
+function textMatches(instance, terms)
 	local instanceText = ""
 	pcall(function()
 		instanceText = safeText(instance.Text)
@@ -1395,7 +1395,7 @@ local function textMatches(instance, terms)
 	return false
 end
 
-local function treeTextMatches(instance, terms, maxAncestors)
+function treeTextMatches(instance, terms, maxAncestors)
 	local current = instance
 	local checked = 0
 
@@ -1410,14 +1410,14 @@ local function treeTextMatches(instance, terms, maxAncestors)
 	return false
 end
 
-local function getToolContainers()
+function getToolContainers()
 	return {
 		getCharacter(),
 		localPlayer:FindFirstChildOfClass("Backpack"),
 	}
 end
 
-local function countInventoryTools()
+function countInventoryTools()
 	local count = 0
 	for _, container in ipairs(getToolContainers()) do
 		if container then
@@ -1431,7 +1431,7 @@ local function countInventoryTools()
 	return count
 end
 
-local function guiShowsInventoryFull()
+function guiShowsInventoryFull()
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
 		if descendant:IsA("TextLabel") or descendant:IsA("TextButton") or descendant:IsA("TextBox") then
 			local ok, visible = pcall(function()
@@ -1459,7 +1459,7 @@ local currencyCache = {
 	checkedAt = 0,
 }
 
-local function nameLooksLikeCurrency(name)
+function nameLooksLikeCurrency(name)
 	local lowered = string.lower(tostring(name or ""))
 	return string.find(lowered, "sheck", 1, true)
 		or string.find(lowered, "money", 1, true)
@@ -1468,7 +1468,7 @@ local function nameLooksLikeCurrency(name)
 		or string.find(lowered, "currency", 1, true)
 end
 
-local function readCurrencyValueObject(root)
+function readCurrencyValueObject(root)
 	if not root then
 		return nil
 	end
@@ -1485,7 +1485,7 @@ local function readCurrencyValueObject(root)
 	return nil
 end
 
-local function readCurrencyFromGui()
+function readCurrencyFromGui()
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
 		if descendant:IsA("TextLabel") or descendant:IsA("TextButton") or descendant:IsA("TextBox") then
 			local ok, visible = pcall(function()
@@ -1510,7 +1510,7 @@ local function readCurrencyFromGui()
 	return nil
 end
 
-local function refreshCurrencyStats(force)
+function refreshCurrencyStats(force)
 	local now = os.clock()
 	if not force and now - currencyCache.checkedAt < 5 then
 		return stats.sheckles
@@ -1533,7 +1533,7 @@ local function refreshCurrencyStats(force)
 	return stats.sheckles
 end
 
-local function getRuntimeText()
+function getRuntimeText()
 	local elapsed = math.floor(os.clock() - sessionStartedAt)
 	local hours = math.floor(elapsed / 3600)
 	local minutes = math.floor((elapsed % 3600) / 60)
@@ -1544,7 +1544,7 @@ local function getRuntimeText()
 	return ("%dm %ds"):format(minutes, seconds)
 end
 
-local function buildStatsSnapshot()
+function buildStatsSnapshot()
 	refreshCurrencyStats()
 	local elapsedMinutes = math.max((os.clock() - sessionStartedAt) / 60, 0.01)
 	local fruitRate = math.floor((stats.fruitCollected / elapsedMinutes) + 0.5)
@@ -1569,7 +1569,7 @@ local function buildStatsSnapshot()
 	}
 end
 
-local function buildStatsWebhookDescription(snapshot)
+function buildStatsWebhookDescription(snapshot)
 	return table.concat({
 		("Runtime: `%s`"):format(snapshot.runtime),
 		("Sheckles: `%s`"):format(formatNumber(snapshot.sheckles)),
@@ -1582,7 +1582,7 @@ local function buildStatsWebhookDescription(snapshot)
 	}, "\n")
 end
 
-local function sendStatsWebhook(force)
+function sendStatsWebhook(force)
 	if CONFIG.webhookUrl == "" then
 		return false
 	end
@@ -1600,7 +1600,7 @@ local function sendStatsWebhook(force)
 	return sent
 end
 
-local function refreshInventoryStats(force)
+function refreshInventoryStats(force)
 	local now = os.clock()
 	if not force and now - inventoryCache.checkedAt < CONFIG.inventoryRefreshInterval then
 		stats.inventoryItems = inventoryCache.items
@@ -1629,7 +1629,7 @@ local function refreshInventoryStats(force)
 	return full, count, capacity
 end
 
-local function updateStatsUI()
+function updateStatsUI()
 	local now = os.clock()
 	if now - lastStatsUIUpdateAt < 1.5 then
 		return
@@ -1664,11 +1664,11 @@ local function updateStatsUI()
 	end
 end
 
-local function getSeedRarity(seedName)
+function getSeedRarity(seedName)
 	return seedPriority[seedName] or 0
 end
 
-local function readNumericMetadata(instance, keys, maxAncestors)
+function readNumericMetadata(instance, keys, maxAncestors)
 	local best = 0
 	local current = instance
 	local checked = 0
@@ -1699,7 +1699,7 @@ local function readNumericMetadata(instance, keys, maxAncestors)
 	return best
 end
 
-local function getSortedSeedList(list)
+function getSortedSeedList(list)
 	table.sort(list, function(left, right)
 		local leftRarity = getSeedRarity(left)
 		local rightRarity = getSeedRarity(right)
@@ -1711,7 +1711,7 @@ local function getSortedSeedList(list)
 	return list
 end
 
-local function getInstanceTextBlob(instance, maxAncestors)
+function getInstanceTextBlob(instance, maxAncestors)
 	local parts = {}
 	local current = instance
 	local checked = 0
@@ -1742,7 +1742,7 @@ local function getInstanceTextBlob(instance, maxAncestors)
 	return string.lower(table.concat(parts, " "))
 end
 
-local function getFruitWeight(instance)
+function getFruitWeight(instance)
 	local blob = getInstanceTextBlob(instance, 5)
 	local weight = tonumber(string.match(blob, "([%d%.]+)%s*kg"))
 		or tonumber(string.match(blob, "([%d%.]+)%s*g"))
@@ -1758,15 +1758,15 @@ local function getFruitWeight(instance)
 	return weight
 end
 
-local function getFruitRarity(instance)
+function getFruitRarity(instance)
 	return readNumericMetadata(instance, { "Rarity", "RarityValue", "Tier", "TierValue", "Priority", "Value" }, 5)
 end
 
-local function getFruitMutationValue(instance)
+function getFruitMutationValue(instance)
 	return readNumericMetadata(instance, { "MutationValue", "MutationMultiplier", "MutationPrice", "MutationWorth", "VariantValue", "VariantMultiplier" }, 5)
 end
 
-local function getPromptDistance(prompt)
+function getPromptDistance(prompt)
 	local root = getRoot()
 	local part = getPromptPart and getPromptPart(prompt)
 	if not root or not part then
@@ -1775,7 +1775,7 @@ local function getPromptDistance(prompt)
 	return (root.Position - part.Position).Magnitude
 end
 
-local function isHarvestPrompt(prompt)
+function isHarvestPrompt(prompt)
 	if not prompt or not prompt:IsA("ProximityPrompt") then
 		return false
 	end
@@ -1788,7 +1788,7 @@ local function isHarvestPrompt(prompt)
 		or treeTextMatches(prompt, { "harvestprompt", "collect", "harvest", "pick", "fruit" }, 3)
 end
 
-local function isUsableHarvestPrompt(prompt)
+function isUsableHarvestPrompt(prompt)
 	if not isHarvestPrompt(prompt) then
 		return false
 	end
@@ -1800,7 +1800,7 @@ local function isUsableHarvestPrompt(prompt)
 	return not ok or enabled
 end
 
-local function getCollectFruitTarget(prompt)
+function getCollectFruitTarget(prompt)
 	local current = prompt and prompt.Parent
 
 	while current and current ~= workspace do
@@ -1813,7 +1813,7 @@ local function getCollectFruitTarget(prompt)
 	return prompt and prompt.Parent
 end
 
-local function getFruitPlantTarget(fruit)
+function getFruitPlantTarget(fruit)
 	local current = fruit
 	while current and current ~= workspace do
 		if current.Parent and current.Parent.Name == "Fruits" then
@@ -1824,7 +1824,7 @@ local function getFruitPlantTarget(fruit)
 	return nil
 end
 
-local function collectFruitPacket(target, heavy)
+function collectFruitPacket(target, heavy)
 	if not target then
 		return false
 	end
@@ -1875,7 +1875,7 @@ local function collectFruitPacket(target, heavy)
 	return false
 end
 
-local function collectionTookEffect(target, beforeInventoryCount)
+function collectionTookEffect(target, beforeInventoryCount)
 	task.wait(0.12)
 
 	if target and not target.Parent then
@@ -1890,7 +1890,7 @@ local function collectionTookEffect(target, beforeInventoryCount)
 	return beforeInventoryCount ~= nil and afterInventoryCount > beforeInventoryCount
 end
 
-local function isFruitContainer(instance)
+function isFruitContainer(instance)
 	local current = instance
 	local checked = 0
 	while current and current ~= workspace and checked <= 5 do
@@ -1904,7 +1904,7 @@ local function isFruitContainer(instance)
 	return false
 end
 
-local function getFruitObjectTarget(instance)
+function getFruitObjectTarget(instance)
 	local current = instance
 	while current and current ~= workspace do
 		if current.Parent and current.Parent.Name == "Fruits" then
@@ -1915,7 +1915,7 @@ local function getFruitObjectTarget(instance)
 	return instance
 end
 
-local function isLikelyFruitTarget(instance)
+function isLikelyFruitTarget(instance)
 	if not instance or instance:IsA("ProximityPrompt") then
 		return false
 	end
@@ -1940,7 +1940,7 @@ local function isLikelyFruitTarget(instance)
 	return false
 end
 
-local function getTargetPart(target)
+function getTargetPart(target)
 	if not target then
 		return nil
 	end
@@ -1958,7 +1958,7 @@ local function getTargetPart(target)
 	return nil
 end
 
-local function collectPrompt(prompt)
+function collectPrompt(prompt)
 	local part = getPromptPart and getPromptPart(prompt)
 	if part and not state.collectTeleport and getPromptDistance(prompt) > (prompt.MaxActivationDistance or 10) then
 		stats.collectSkippedRange += 1
@@ -1983,7 +1983,7 @@ local function collectPrompt(prompt)
 	return collectionTookEffect(target or prompt, beforeInventoryCount)
 end
 
-local function getHarvestPromptInTarget(target)
+function getHarvestPromptInTarget(target)
 	if not target then
 		return nil
 	end
@@ -2014,7 +2014,7 @@ local function getHarvestPromptInTarget(target)
 	return nil
 end
 
-local function collectFruitTarget(target)
+function collectFruitTarget(target)
 	if not target then
 		return false
 	end
@@ -2055,7 +2055,7 @@ local function collectFruitTarget(target)
 	return collectionTookEffect(target, beforeInventoryCount)
 end
 
-local function getTargetDistance(target)
+function getTargetDistance(target)
 	local root = getRoot()
 	local part = target and getTargetPart(target)
 	if not root or not part then
@@ -2064,7 +2064,7 @@ local function getTargetDistance(target)
 	return (root.Position - part.Position).Magnitude
 end
 
-local function getFruitPriority(instance)
+function getFruitPriority(instance)
 	local weight = getFruitWeight(instance)
 	local rarity = getFruitRarity(instance)
 	local mutation = getFruitMutationValue(instance)
@@ -2088,7 +2088,7 @@ local function getFruitPriority(instance)
 	return priority
 end
 
-local function isLiveFruitEntry(entry)
+function isLiveFruitEntry(entry)
 	if not entry then
 		return false
 	end
@@ -2109,7 +2109,7 @@ local function isLiveFruitEntry(entry)
 	return true
 end
 
-local function addFruitTarget(targets, seenTargets, prompt, target)
+function addFruitTarget(targets, seenTargets, prompt, target)
 	target = target or prompt
 	if not target or seenTargets[target] then
 		return
@@ -2123,7 +2123,7 @@ local function addFruitTarget(targets, seenTargets, prompt, target)
 	})
 end
 
-local function rebuildFruitTargetCache(roots)
+function rebuildFruitTargetCache(roots)
 	local targets = {}
 	local seenTargets = {}
 
@@ -2193,7 +2193,7 @@ local function rebuildFruitTargetCache(roots)
 	return targets
 end
 
-local function getFruitTargetBatch(roots)
+function getFruitTargetBatch(roots)
 	local now = os.clock()
 	local targets = fruitTargetCache.targets
 	if #targets == 0
@@ -2234,7 +2234,7 @@ local function getFruitTargetBatch(roots)
 	return batch, #targets
 end
 
-local function pruneFruitTargetCache()
+function pruneFruitTargetCache()
 	local live = {}
 	for _, entry in ipairs(fruitTargetCache.targets) do
 		if isLiveFruitEntry(entry) then
@@ -2248,7 +2248,7 @@ local function pruneFruitTargetCache()
 	end
 end
 
-local function collectFruitEntryFast(entry, heavy)
+function collectFruitEntryFast(entry, heavy)
 	if not isLiveFruitEntry(entry) then
 		return false
 	end
@@ -2304,7 +2304,7 @@ local function collectFruitEntryFast(entry, heavy)
 	return fired
 end
 
-local function collectFruitEntryRemoteOnly(entry)
+function collectFruitEntryRemoteOnly(entry)
 	if not isLiveFruitEntry(entry) then
 		return false
 	end
@@ -2429,7 +2429,7 @@ triggerPromptFast = function(prompt)
 	return fired
 end
 
-local function activateButton(button)
+function activateButton(button)
 	local fired = false
 
 	if typeof(getconnections) == "function" then
@@ -2471,7 +2471,7 @@ local function activateButton(button)
 	return ok
 end
 
-local function collectFruit()
+function collectFruit()
 	if not isEnabled("fruitCollector") then
 		return
 	end
@@ -2564,7 +2564,7 @@ local function collectFruit()
 	end
 end
 
-local function findSeedTool(seedName, shouldEquip)
+function findSeedTool(seedName, shouldEquip)
 	local character = getCharacter()
 	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
 	local humanoid = getHumanoid()
@@ -2593,11 +2593,11 @@ local function findSeedTool(seedName, shouldEquip)
 	return nil
 end
 
-local function getEquippedSeedTool(seedName)
+function getEquippedSeedTool(seedName)
 	return findSeedTool(seedName, true)
 end
 
-local function getSeedToolAmount(tool)
+function getSeedToolAmount(tool)
 	if not tool then
 		return 1
 	end
@@ -2631,7 +2631,7 @@ local function getSeedToolAmount(tool)
 	return 1
 end
 
-local function getSelectedSeedList()
+function getSelectedSeedList()
 	local selected = {}
 	local seen = {}
 
@@ -2653,7 +2653,7 @@ local function getSelectedSeedList()
 	return getSortedSeedList(selected)
 end
 
-local function countPlacedSeed(seedName)
+function countPlacedSeed(seedName)
 	local count = 0
 	local needle = string.lower(seedName)
 
@@ -2668,7 +2668,7 @@ local function countPlacedSeed(seedName)
 	return count
 end
 
-local function countGardenPlants()
+function countGardenPlants()
 	local count = 0
 	for _, root in ipairs(getOwnGardenRoots()) do
 		local plants = root:FindFirstChild("Plants") or root:FindFirstChild("Crops")
@@ -2683,7 +2683,7 @@ local function countGardenPlants()
 	return count
 end
 
-local function canPlaceSeed(seedName)
+function canPlaceSeed(seedName)
 	if selectedSeeds[seedName] then
 		return true
 	end
@@ -2697,7 +2697,7 @@ local function canPlaceSeed(seedName)
 	return true
 end
 
-local function getSeedPlantPosition(index, center)
+function getSeedPlantPosition(index, center)
 	local root = getRoot()
 	if not root then
 		return nil
@@ -2745,7 +2745,7 @@ local function getSeedPlantPosition(index, center)
 	return basePosition + offset
 end
 
-local function tryPlantSeedRemote(seedName, position)
+function tryPlantSeedRemote(seedName, position)
 	local attempts = 0
 	local cframe = CFrame.new(position)
 	local packets = { "PlantSeed", "PlaceSeed", "Plant", "GrowPlant" }
@@ -2765,7 +2765,7 @@ local function tryPlantSeedRemote(seedName, position)
 	return attempts
 end
 
-local function moveToOwnGarden()
+function moveToOwnGarden()
 	local root = getRoot()
 	if not root then
 		return nil, "character"
@@ -2810,7 +2810,7 @@ isInventorySeedTool = function(item)
 	return false
 end
 
-local function toolHasValue(item, keys)
+function toolHasValue(item, keys)
 	if not item then
 		return false
 	end
@@ -2832,7 +2832,7 @@ local function toolHasValue(item, keys)
 	return false
 end
 
-local function toolNameMatchesList(item, list)
+function toolNameMatchesList(item, list)
 	local name = string.lower(item and item.Name or "")
 	if name == "" then
 		return false
@@ -2848,7 +2848,7 @@ local function toolNameMatchesList(item, list)
 	return false
 end
 
-local function isKnownGearTool(item)
+function isKnownGearTool(item)
 	if not item or not item:IsA("Tool") then
 		return false
 	end
@@ -2880,7 +2880,7 @@ local function isKnownGearTool(item)
 	return false
 end
 
-local function isKnownPetTool(item)
+function isKnownPetTool(item)
 	if not item or not item:IsA("Tool") then
 		return false
 	end
@@ -2898,7 +2898,7 @@ local function isKnownPetTool(item)
 		or string.find(name, "egg", 1, true) ~= nil
 end
 
-local function isLikelyFruitTool(item)
+function isLikelyFruitTool(item)
 	if not item
 		or not item:IsA("Tool")
 		or isInventorySeedTool(item)
@@ -2941,7 +2941,7 @@ local function isLikelyFruitTool(item)
 	return false
 end
 
-local function getSellableFruitTools()
+function getSellableFruitTools()
 	local tools = {}
 	local character = getCharacter()
 	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
@@ -2978,7 +2978,7 @@ local function getSellableFruitTools()
 	return tools
 end
 
-local function getSelectedGearList()
+function getSelectedGearList()
 	local selected = {}
 
 	for _, gearName in ipairs(gearNames) do
@@ -2990,7 +2990,7 @@ local function getSelectedGearList()
 	return selected
 end
 
-local function getSeedFrame(seedName)
+function getSeedFrame(seedName)
 	if cache.seedFrames[seedName] and cache.seedFrames[seedName].Parent then
 		return cache.seedFrames[seedName]
 	end
@@ -3027,7 +3027,7 @@ local function getSeedFrame(seedName)
 	return nil
 end
 
-local function getGearFrame(gearName)
+function getGearFrame(gearName)
 	if cache.gearFrames[gearName] and cache.gearFrames[gearName].Parent then
 		return cache.gearFrames[gearName]
 	end
@@ -3055,7 +3055,7 @@ local function getGearFrame(gearName)
 	return nil
 end
 
-local function getSelectedPetList()
+function getSelectedPetList()
 	local selected = {}
 
 	for _, petName in ipairs(petNames) do
@@ -3160,7 +3160,7 @@ function getPromptPart(prompt)
 	return nil
 end
 
-local function triggerBuyPrompt(prompt)
+function triggerBuyPrompt(prompt)
 	local part = getPromptPart(prompt)
 	if part then
 		teleportToPart(part, 3)
@@ -3170,7 +3170,7 @@ local function triggerBuyPrompt(prompt)
 	return triggerPrompt(prompt, true)
 end
 
-local function purchaseSeedRemote(seedName)
+function purchaseSeedRemote(seedName)
 	local variants = {
 		seedName,
 		string.gsub(seedName, "%s+", "_"),
@@ -3327,7 +3327,7 @@ function autoCollectRainbowSeeds()
 	setStatus(("Gold/rainbow drops: collected %d/%d target(s)"):format(checked, #targets))
 end
 
-local performanceState = {
+performanceState = {
 	optimized = setmetatable({}, { __mode = "k" }),
 	hidden = setmetatable({}, { __mode = "k" }),
 	watcherConnected = false,
@@ -4805,7 +4805,7 @@ statusValue.Changed:Connect(function(value)
 	statusLabel.Text = value
 end)
 
-local function makeToggle(label, key, order)
+function makeToggle(label, key, order)
 	local enabled = state[key] == true
 	local button = make("TextButton", {
 		Name = key,
@@ -4838,7 +4838,7 @@ local function makeToggle(label, key, order)
 	end)
 end
 
-local function makeSectionLabel(text, order)
+function makeSectionLabel(text, order)
 	return make("TextLabel", {
 		Name = string.gsub(text, "%s+", "") .. "Section",
 		BackgroundTransparency = 1,
@@ -4852,7 +4852,7 @@ local function makeSectionLabel(text, order)
 	}, content)
 end
 
-local function makeCommandButton(label, order, onClick)
+function makeCommandButton(label, order, onClick)
 	local button = make("TextButton", {
 		Name = string.gsub(label, "%s+", "") .. "Button",
 		AutoButtonColor = false,
@@ -4986,7 +4986,7 @@ make("UIListLayout", {
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, statsFrame)
 
-local function makeStatsLabel(key, order)
+function makeStatsLabel(key, order)
 	local label = make("TextLabel", {
 		Name = key,
 		BackgroundTransparency = 1,
@@ -5013,7 +5013,7 @@ makeStatsLabel("limits", 7)
 refreshInventoryStats()
 updateStatsUI()
 
-local function buildSeedSelector()
+function buildSeedSelector()
 local selectedSeedLabel = make("TextLabel", {
 	Name = "SelectedSeedLabel",
 	BackgroundTransparency = 1,
@@ -5052,7 +5052,7 @@ makeSelectorSearch(content, 25, "Search seeds to buy", function(text)
 	refreshSelectorFilter(seedButtons, seedNames, seedFilterText, seedRow, 2)
 end)
 
-local function refreshSeedButton(seedName)
+function refreshSeedButton(seedName)
 	local button = seedButtons[seedName]
 	if not button then
 		return
@@ -5063,11 +5063,11 @@ local function refreshSeedButton(seedName)
 	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
 end
 
-local function refreshSeedCanvas()
+function refreshSeedCanvas()
 	refreshSelectorFilter(seedButtons, seedNames, seedFilterText, seedRow, 2)
 end
 
-local function makeSeedButton(seedName)
+function makeSeedButton(seedName)
 	if seedButtons[seedName] then
 		return
 	end
@@ -5107,7 +5107,7 @@ local function makeSeedButton(seedName)
 	refreshSeedCanvas()
 end
 
-local function scanSeedShopNames()
+function scanSeedShopNames()
 	refreshSeedNamesFromStockValues()
 	for _, seedName in ipairs(seedNames) do
 		makeSeedButton(seedName)
@@ -5177,7 +5177,7 @@ end)
 end
 buildSeedSelector()
 
-local function buildShovelSeedSelector()
+function buildShovelSeedSelector()
 local shovelSeedLabel = make("TextLabel", {
 	Name = "ShovelSeedLabel",
 	BackgroundTransparency = 1,
@@ -5216,7 +5216,7 @@ makeSelectorSearch(content, 29, "Search seeds to shovel", function(text)
 	refreshSelectorFilter(shovelSeedButtons, seedNames, shovelSeedFilterText, shovelSeedRow, 2)
 end)
 
-local function refreshShovelSeedButton(seedName)
+function refreshShovelSeedButton(seedName)
 	local button = shovelSeedButtons[seedName]
 	if not button then
 		return
@@ -5227,11 +5227,11 @@ local function refreshShovelSeedButton(seedName)
 	button.BackgroundColor3 = enabled and Color3.fromRGB(122, 65, 50) or Color3.fromRGB(52, 60, 54)
 end
 
-local function refreshShovelSeedCanvas()
+function refreshShovelSeedCanvas()
 	refreshSelectorFilter(shovelSeedButtons, seedNames, shovelSeedFilterText, shovelSeedRow, 2)
 end
 
-local function makeShovelSeedButton(seedName)
+function makeShovelSeedButton(seedName)
 	if shovelSeedButtons[seedName] then
 		return
 	end
@@ -5289,7 +5289,7 @@ end
 end
 buildShovelSeedSelector()
 
-local function buildGearSelector()
+function buildGearSelector()
 local selectedGearLabel = make("TextLabel", {
 	Name = "SelectedGearLabel",
 	BackgroundTransparency = 1,
@@ -5328,7 +5328,7 @@ makeSelectorSearch(content, 31, "Search gear to buy", function(text)
 	refreshSelectorFilter(gearButtons, gearNames, gearFilterText, gearRow, 2)
 end)
 
-local function refreshGearButton(gearName)
+function refreshGearButton(gearName)
 	local button = gearButtons[gearName]
 	if not button then
 		return
@@ -5348,11 +5348,11 @@ local function refreshGearButton(gearName)
 	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
 end
 
-local function refreshGearCanvas()
+function refreshGearCanvas()
 	refreshSelectorFilter(gearButtons, gearNames, gearFilterText, gearRow, 2)
 end
 
-local function makeGearButton(gearName)
+function makeGearButton(gearName)
 	if gearButtons[gearName] then
 		return
 	end
@@ -5391,7 +5391,7 @@ local function makeGearButton(gearName)
 	refreshGearCanvas()
 end
 
-local function scanGearShopNames()
+function scanGearShopNames()
 	refreshGearNamesFromStockValues()
 
 	local gearShop = playerGui:FindFirstChild("GearShop")
@@ -5446,7 +5446,7 @@ end)
 end
 buildGearSelector()
 
-local function buildPetSelector()
+function buildPetSelector()
 local selectedPetLabel = make("TextLabel", {
 	Name = "SelectedPetLabel",
 	BackgroundTransparency = 1,
@@ -5485,7 +5485,7 @@ makeSelectorSearch(content, 34, "Search pets to buy", function(text)
 	refreshSelectorFilter(petButtons, petNames, petFilterText, petRow, 2)
 end)
 
-local function refreshPetButton(petName)
+function refreshPetButton(petName)
 	local button = petButtons[petName]
 	if not button then
 		return
@@ -5496,11 +5496,11 @@ local function refreshPetButton(petName)
 	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
 end
 
-local function refreshPetCanvas()
+function refreshPetCanvas()
 	refreshSelectorFilter(petButtons, petNames, petFilterText, petRow, 2)
 end
 
-local function makePetButton(petName)
+function makePetButton(petName)
 	if petButtons[petName] then
 		return
 	end
@@ -5539,7 +5539,7 @@ local function makePetButton(petName)
 	refreshPetCanvas()
 end
 
-local function scanPetBuyNames()
+function scanPetBuyNames()
 	refreshPetNamesFromAssets()
 	refreshBuyPetNamesFromWildSpawns()
 
