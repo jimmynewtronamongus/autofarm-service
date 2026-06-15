@@ -18,32 +18,32 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 local CONFIG = {
-	collectInterval = 0.22,
-	plantInterval = 0.45,
+	collectInterval = 0.45,
+	plantInterval = 0.9,
 	sellInterval = 12.0,
 	sellWhenFullInterval = 1.5,
-	buyInterval = 1.0,
-	rainbowCollectInterval = 2.5,
-	petBuyInterval = 0.75,
-	cacheRefreshInterval = 12.0,
-	dropCacheRefreshInterval = 2.5,
-	inventoryRefreshInterval = 1.5,
-	guiInventoryRefreshInterval = 5.0,
-	maxFruitCollectPerTick = 90,
-	maxFruitScanPerRoot = 2500,
-	fruitCacheRefreshInterval = 1.15,
-	maxFruitTargetsCached = 320,
-	maxFruitPromptFallbackPerTick = 18,
-	maxSeedPlantPerTick = 22,
-	maxSeedPlacementsPerTool = 8,
-	seedCountCacheRefreshInterval = 20.0,
-	maxSeedBuyPerTick = 6,
+	buyInterval = 1.5,
+	rainbowCollectInterval = 3.5,
+	petBuyInterval = 1.25,
+	cacheRefreshInterval = 25.0,
+	dropCacheRefreshInterval = 5.0,
+	inventoryRefreshInterval = 2.5,
+	guiInventoryRefreshInterval = 8.0,
+	maxFruitCollectPerTick = 35,
+	maxFruitScanPerRoot = 900,
+	fruitCacheRefreshInterval = 3.0,
+	maxFruitTargetsCached = 140,
+	maxFruitPromptFallbackPerTick = 5,
+	maxSeedPlantPerTick = 8,
+	maxSeedPlacementsPerTool = 4,
+	seedCountCacheRefreshInterval = 45.0,
+	maxSeedBuyPerTick = 3,
 	seedBuyRemoteRepeats = 4,
 	shovelInterval = 0.35,
 	shovelHoldDuration = 3.1,
 	maxShovelPerTick = 1,
-	maxDropCollectPerTick = 8,
-	maxDropScanPerRoot = 2500,
+	maxDropCollectPerTick = 4,
+	maxDropScanPerRoot = 800,
 	maxInventoryItems = 200,
 	lowRaritySeedLimit = 10,
 	maxGardenPlants = 500,
@@ -938,6 +938,7 @@ local cache = {
 	seedFrames = {},
 	gearFrames = {},
 }
+local nextDescendantRefreshAt = 0
 
 local touchPart
 local getPromptPart
@@ -961,6 +962,10 @@ local function getCachedDescendants(key, root, maxAge)
 	end
 
 	if not cache[atKey] or now - cache[atKey] > maxAge then
+		if cache[listKey] and now < nextDescendantRefreshAt then
+			return cache[listKey]
+		end
+		nextDescendantRefreshAt = now + 0.35
 		cache[atKey] = now
 		cache[listKey] = root:GetDescendants()
 	end
@@ -3053,6 +3058,8 @@ end
 local performanceOptimized = setmetatable({}, { __mode = "k" })
 local performanceHidden = setmetatable({}, { __mode = "k" })
 local performanceWatcherConnected = false
+local performanceQueue = {}
+local performanceQueueRunning = false
 
 function getGardenPlotForInstance(instance)
 	local gardens = getGardens()
@@ -3258,7 +3265,23 @@ function connectPerformanceWatcher()
 	performanceWatcherConnected = true
 	workspace.DescendantAdded:Connect(function(descendant)
 		if state.performanceMode then
-			optimizePerformanceInstance(descendant)
+			table.insert(performanceQueue, descendant)
+			if not performanceQueueRunning then
+				performanceQueueRunning = true
+				task.spawn(function()
+					while state.performanceMode and #performanceQueue > 0 do
+						for _ = 1, 25 do
+							local item = table.remove(performanceQueue, 1)
+							if not item then
+								break
+							end
+							optimizePerformanceInstance(item)
+						end
+						task.wait(0.15)
+					end
+					performanceQueueRunning = false
+				end)
+			end
 		end
 	end)
 end
@@ -3280,7 +3303,7 @@ enablePerformanceMode = function()
 		workspace.Terrain.Decoration = false
 	end)
 
-	changed += optimizePerformanceTree(workspace, 300)
+	changed += optimizePerformanceTree(workspace, 100)
 
 	setStatus(("Performance mode: simplified %d object(s)"):format(changed))
 end
@@ -5197,7 +5220,7 @@ end
 
 RunService.Heartbeat:Connect(function(deltaTime)
 	local jobsStarted = 0
-	local maxJobsThisFrame = 2
+	local maxJobsThisFrame = 1
 	local function tryRun(key, callback)
 		if jobsStarted >= maxJobsThisFrame or running[key] then
 			return false
