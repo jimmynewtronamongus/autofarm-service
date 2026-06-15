@@ -4419,30 +4419,19 @@ function autoSell(force)
 			return
 		end
 
-		actions += triggerSellPrompts()
-		task.wait(0.25)
-
-		for _ = 1, 8 do
-			actions += clickSellGuiButtons()
-			task.wait(0.15)
-			local currentInventoryCount = countInventoryTools()
-			local currentSheckles = refreshCurrencyStats(true)
-			if currentInventoryCount < beforeInventoryCount
-				or (currentSheckles and beforeSheckles and currentSheckles > beforeSheckles)
-			then
-				break
-			end
-		end
-
 		for _, packetName in ipairs({
-			"SellAll",
 			"SellInventory",
+			"SellMyInventory",
+			"SellEntireInventory",
+			"SellAllInventory",
+			"SellAll",
 			"SellAllFruits",
 			"SellAllFruit",
-			"SellItems",
-			"Sell",
 		}) do
 			if sendPacket(packetName) then
+				actions += 1
+			end
+			if sendPacket(packetName, true) then
 				actions += 1
 			end
 		end
@@ -4451,21 +4440,18 @@ function autoSell(force)
 			if not tool or not tool.Parent then
 				continue
 			end
-			if sendPacket("SellItem", tool) then
+			if sendPacket("SellInventory", tool) then
+				actions += 1
+			end
+			if sendPacket("SellInventory", tool.Name) then
 				actions += 1
 			end
 			if sendPacket("SellFruit", tool) then
 				actions += 1
 			end
-			if sendPacket("SellItem", tool.Name) then
-				actions += 1
-			end
-			if sendPacket("SellFruit", tool.Name) then
-				actions += 1
-			end
 		end
 
-		task.wait(0.25)
+		task.wait(0.35)
 
 		local currentInventoryCount = countInventoryTools()
 		local currentSheckles = refreshCurrencyStats(true)
@@ -4491,9 +4477,9 @@ function autoSell(force)
 	local afterInventoryCount = countInventoryTools()
 	updateStatsUI()
 	if afterInventoryCount >= beforeInventoryCount and (not afterSheckles or not beforeSheckles or afterSheckles <= beforeSheckles) then
-		setStatus(("Sell: tried %d action(s), inventory unchanged (%d/%d)"):format(actions, stats.inventoryItems, stats.inventoryCapacity))
+		setStatus(("Sell remote: tried %d call(s), inventory unchanged (%d/%d)"):format(actions, stats.inventoryItems, stats.inventoryCapacity))
 	else
-		setStatus(("Sell: %d action(s), inventory %d -> %d"):format(actions, beforeInventoryCount, afterInventoryCount))
+		setStatus(("Sell remote: %d call(s), inventory %d -> %d"):format(actions, beforeInventoryCount, afterInventoryCount))
 	end
 end
 
