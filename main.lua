@@ -830,6 +830,7 @@ end
 
 local packetRemote
 local packetEntryCache = {}
+local packetObjectCache = {}
 
 function getPacketRemote()
 	if packetRemote and packetRemote.Parent then
@@ -889,6 +890,73 @@ function tryPacketEntry(entry, ...)
 	end
 
 	return false
+end
+
+function buildPacketObject(packetName)
+	local packet = getPacketModule()
+	if not packet then
+		return nil
+	end
+
+	local constructors = {}
+	if type(packet) == "function" then
+		table.insert(constructors, packet)
+	elseif type(packet) == "table" then
+		for _, key in ipairs({ "new", "New", "Create", "Packet" }) do
+			if type(packet[key]) == "function" then
+				table.insert(constructors, function(name)
+					return packet[key](packet, name)
+				end)
+				table.insert(constructors, packet[key])
+			end
+		end
+	end
+
+	for _, constructor in ipairs(constructors) do
+		local ok, object = pcall(constructor, packetName)
+		if ok and (type(object) == "table" or typeof(object) == "Instance") then
+			return object
+		end
+	end
+
+	return nil
+end
+
+function getPacketObject(packetName)
+	local cached = packetObjectCache[packetName]
+	if cached ~= nil then
+		return cached ~= false and cached or nil
+	end
+
+	local object = buildPacketObject(packetName)
+	if object then
+		packetObjectCache[packetName] = object
+		return object
+	end
+
+	packetObjectCache[packetName] = false
+	return nil
+end
+
+function firePacketObject(packetName, ...)
+	local object = getPacketObject(packetName)
+	if not object then
+		return false, 0
+	end
+
+	local actions = 0
+	for _, methodName in ipairs({ "Fire", "FireServer", "Send", "SendToServer" }) do
+		if type(object[methodName]) == "function" then
+			if pcall(object[methodName], object, ...) then
+				actions += 1
+			end
+			if pcall(object[methodName], ...) then
+				actions += 1
+			end
+		end
+	end
+
+	return actions > 0, actions
 end
 
 function findPacketEntry(root, packetName, seen)
@@ -955,8 +1023,9 @@ end
 
 function sendExactPacket(packetName, ...)
 	local actions = 0
-	if firePacketRemote(packetName, ...) then
-		actions += 1
+	local ok, count = firePacketObject(packetName, ...)
+	if ok then
+		actions += count or 1
 	end
 
 	local packet = getPacketModule()
@@ -987,6 +1056,10 @@ function sendExactPacket(packetName, ...)
 		if pcall(packet, packetName, ...) then
 			actions += 1
 		end
+	end
+
+	if firePacketRemote(packetName, ...) then
+		actions += 1
 	end
 
 	return actions > 0, actions
@@ -1589,7 +1662,9 @@ function refreshInventoryStats(force)
 	local count = countInventoryTools()
 	local capacity = CONFIG.maxInventoryItems
 	local nearCapacity = count >= math.max(capacity - 15, 1)
-	if (force or nearCapacity) and now - inventoryCache.guiCheckedAt >= CONFIG.guiInventoryRefreshInterval then
+	if count < math.max(capacity - 20, 1) then
+		inventoryCache.guiFull = false
+	elseif (force or nearCapacity or inventoryCache.guiFull) and (force or now - inventoryCache.guiCheckedAt >= CONFIG.guiInventoryRefreshInterval) then
 		inventoryCache.guiCheckedAt = now
 		inventoryCache.guiFull = guiShowsInventoryFull()
 	end
@@ -1606,13 +1681,7 @@ function refreshInventoryStats(force)
 	return full, count, capacity
 end
 
-function inventoryNeedsSell(force)
-	local full, count, capacity = refreshInventoryStats(force)
-	local freeSlots = math.max((capacity or CONFIG.maxInventoryItems) - (count or 0), 0)
-	return full or freeSlots <= CONFIG.sellResumeFreeSlots, count, capacity, freeSlots
-end
-
-function shouldPauseForSell()
+function shouldPauseFruitCollection()
 	if running.autoSell or running.sellWhenFull then
 		return true
 	end
@@ -1621,8 +1690,8 @@ function shouldPauseForSell()
 		return false
 	end
 
-	local needsSell = inventoryNeedsSell(false)
-	return needsSell == true
+	local full = refreshInventoryStats(false)
+	return full == true
 end
 
 function updateStatsUI()
@@ -2347,7 +2416,7 @@ function collectFruit()
 		return
 	end
 
-	local inventoryFull = shouldPauseForSell()
+	local inventoryFull = shouldPauseFruitCollection()
 	if inventoryFull then
 		stats.collectSkippedFull += 1
 		updateStatsUI()
@@ -2386,7 +2455,7 @@ function collectFruit()
 		if not isEnabled("fruitCollector") then
 			return
 		end
-		if shouldPauseForSell() then
+		if shouldPauseFruitCollection() then
 			stats.collectSkippedFull += 1
 			setStatus(("Fruit collector paused: sell needed (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
 			return
@@ -4145,12 +4214,12 @@ function autoSell(force)
 	refreshInventoryStats(true)
 	local beforeInventoryCount = countInventoryTools()
 	local sellableTools = getSellableFruitTools()
-	if #sellableTools == 0 then
+	if beforeInventoryCount <= 0 then
 		refreshInventoryStats(true)
 		if not force then
 			setStatus("Sell: nothing to sell")
 		else
-			setStatus(("Sell: no fruit tools found (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
+			setStatus(("Sell: inventory empty (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
 		end
 		return
 	end
@@ -5590,11 +5659,13 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		sendStatsWebhook(false)
 	end
 
+	local inventoryFull = false
 	local sellNeeded = false
 	if state.sellWhenFull or state.autoSell then
-		sellNeeded = inventoryNeedsSell(false)
+		inventoryFull = refreshInventoryStats(false)
+		sellNeeded = inventoryFull
 	end
-	local urgentSellDue = sellNeeded and (state.sellWhenFull or state.autoSell)
+	local urgentSellDue = inventoryFull and (state.sellWhenFull or state.autoSell)
 	local sellDue = urgentSellDue
 		or (state.autoSell and timers.autoSell >= CONFIG.sellInterval)
 
