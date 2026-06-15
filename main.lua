@@ -2097,16 +2097,24 @@ function isLiveFruitEntry(entry)
 		return false
 	end
 
+	if not entry.prompt then
+		return false
+	end
+
 	return true
 end
 
 function addFruitTarget(targets, seenTargets, prompt, target)
-	target = target or prompt
-	if not target or seenTargets[target] then
+	if not prompt or not isUsableHarvestPrompt(prompt) then
 		return
 	end
 
-	seenTargets[target] = true
+	target = target or getCollectFruitTarget(prompt)
+	if not target or seenTargets[prompt] then
+		return
+	end
+
+	seenTargets[prompt] = true
 	table.insert(targets, {
 		prompt = prompt,
 		target = target,
@@ -2139,33 +2147,6 @@ function rebuildFruitTargetCache(roots)
 
 			if isUsableHarvestPrompt(descendant) then
 				addFruitTarget(targets, seenTargets, descendant, getCollectFruitTarget(descendant))
-			end
-		end
-	end
-
-	if #targets == 0 then
-		for index, root in ipairs(roots) do
-			if not root then
-				continue
-			end
-
-			local scanned = 0
-			local scanStartedAt = os.clock()
-			local descendants = getCachedDescendants("fruitFallback" .. index, root, CONFIG.fruitCacheRefreshInterval)
-			for _, descendant in ipairs(descendants) do
-				scanStartedAt = maybeYieldScan(scanStartedAt, 0.01)
-				if #targets >= CONFIG.maxFruitTargetsCached then
-					break
-				end
-
-				scanned += 1
-				if scanned > math.floor(CONFIG.maxFruitScanPerRoot / 3) then
-					break
-				end
-
-				if isLikelyFruitTarget(descendant) then
-					addFruitTarget(targets, seenTargets, nil, getFruitObjectTarget(descendant))
-				end
 			end
 		end
 	end
@@ -2245,8 +2226,12 @@ function collectFruitEntryFast(entry, heavy)
 	end
 
 	local target = entry.target
-	local prompt = entry.prompt or getHarvestPromptInTarget(target)
-	local part = prompt and getPromptPart(prompt) or getTargetPart(target)
+	local prompt = entry.prompt
+	if not prompt or not isUsableHarvestPrompt(prompt) then
+		return false
+	end
+
+	local part = getPromptPart(prompt)
 
 	if part and state.collectTeleport then
 		local root = getRoot()
@@ -2283,7 +2268,7 @@ function collectFruitEntryFast(entry, heavy)
 		fired = sendPacket("Collect", target) or fired
 	end
 
-	if part and (heavy or not prompt or state.collectTeleport) then
+	if part and (heavy or state.collectTeleport) then
 		fired = touchPart(part, state.collectTeleport) or fired
 	end
 
@@ -2301,14 +2286,11 @@ function collectFruitEntryRemoteOnly(entry)
 
 	local target = entry.target
 	local prompt = entry.prompt
-	if not target and prompt then
-		target = getCollectFruitTarget(prompt)
-	end
-
-	if not target then
+	if not prompt or not isUsableHarvestPrompt(prompt) then
 		return false
 	end
 
+	target = target or getCollectFruitTarget(prompt)
 	return collectFruitPacket(target)
 end
 
@@ -2517,22 +2499,6 @@ function collectFruit()
 		end
 	end
 
-	for index, entry in ipairs(targets) do
-		if not isEnabled("fruitCollector") then
-			return
-		end
-
-		if not entry.prompt and fruitTargetCache.noGainStreak >= 1 then
-			if collectFruitEntryRemoteOnly(entry) then
-				fired += 1
-			end
-		end
-
-		if index % 18 == 0 then
-			task.wait()
-		end
-	end
-
 	task.wait(0.08)
 	local afterInventoryCount = countInventoryTools()
 	local gained = math.max((afterInventoryCount or 0) - (beforeInventoryCount or 0), 0)
@@ -2550,7 +2516,7 @@ function collectFruit()
 		fruitTargetCache.refreshedAt = 0
 		setStatus(("Fruit collector: found %d cached target(s), failed to trigger"):format(totalCached))
 	else
-		setStatus(("Fruit collector: prompt %d, remote %d/%d, inventory +%d"):format(fallback, fired, #targets, gained))
+		setStatus(("Fruit collector: prompt-only %d/%d, inventory +%d"):format(fallback, #targets, gained))
 	end
 end
 
