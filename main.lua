@@ -3061,6 +3061,71 @@ local performanceWatcherConnected = false
 local performanceQueue = {}
 local performanceQueueRunning = false
 
+function isLaggyEffectInstance(instance)
+	return instance:IsA("ParticleEmitter")
+		or instance:IsA("Trail")
+		or instance:IsA("Beam")
+		or instance:IsA("Smoke")
+		or instance:IsA("Fire")
+		or instance:IsA("Sparkles")
+		or instance:IsA("PointLight")
+		or instance:IsA("SpotLight")
+		or instance:IsA("SurfaceLight")
+		or instance:IsA("Highlight")
+		or instance:IsA("Explosion")
+		or instance:IsA("ForceField")
+		or instance:IsA("Sound")
+		or instance:IsA("ReverbSoundEffect")
+		or instance:IsA("ChorusSoundEffect")
+		or instance:IsA("DistortionSoundEffect")
+		or instance:IsA("EchoSoundEffect")
+		or instance:IsA("FlangeSoundEffect")
+		or instance:IsA("EqualizerSoundEffect")
+		or instance:IsA("PitchShiftSoundEffect")
+		or instance:IsA("CompressorSoundEffect")
+end
+
+function disableLaggyEffect(instance)
+	local changed = 0
+	if not instance or performanceOptimized[instance] then
+		return changed
+	end
+
+	if isLaggyEffectInstance(instance) then
+		performanceOptimized[instance] = true
+		pcall(function()
+			if instance:IsA("Sound") then
+				instance.Volume = 0
+				instance.Playing = false
+			elseif instance:IsA("Explosion") then
+				instance.BlastPressure = 0
+				instance.BlastRadius = 0
+			end
+		end)
+		pcall(function()
+			instance.Enabled = false
+		end)
+		pcall(function()
+			instance.Visible = false
+		end)
+		changed = 1
+	elseif instance:IsA("PostEffect")
+		or instance:IsA("BloomEffect")
+		or instance:IsA("BlurEffect")
+		or instance:IsA("ColorCorrectionEffect")
+		or instance:IsA("DepthOfFieldEffect")
+		or instance:IsA("SunRaysEffect")
+	then
+		performanceOptimized[instance] = true
+		pcall(function()
+			instance.Enabled = false
+		end)
+		changed = 1
+	end
+
+	return changed
+end
+
 function getGardenPlotForInstance(instance)
 	local gardens = getGardens()
 	local current = instance
@@ -3120,6 +3185,7 @@ function hidePerformanceVisual(instance, hidePrompts)
 	end
 
 	local changed = 0
+	changed += disableLaggyEffect(instance)
 	if instance:IsA("BasePart") then
 		performanceHidden[instance] = true
 		pcall(function()
@@ -3133,24 +3199,13 @@ function hidePerformanceVisual(instance, hidePrompts)
 			instance.Transparency = 1
 		end)
 		changed = 1
-	elseif instance:IsA("ParticleEmitter")
-		or instance:IsA("Trail")
-		or instance:IsA("Beam")
-		or instance:IsA("Smoke")
-		or instance:IsA("Fire")
-		or instance:IsA("Sparkles")
-		or instance:IsA("PointLight")
-		or instance:IsA("SpotLight")
-		or instance:IsA("SurfaceLight")
-	then
-		performanceHidden[instance] = true
-		pcall(function()
-			instance.Enabled = false
-		end)
-		changed = 1
 	elseif instance:IsA("BillboardGui")
 		or instance:IsA("SurfaceGui")
 		or instance:IsA("Highlight")
+		or instance:IsA("SelectionBox")
+		or instance:IsA("SelectionSphere")
+		or instance:IsA("Handles")
+		or instance:IsA("ArcHandles")
 	then
 		performanceHidden[instance] = true
 		pcall(function()
@@ -3201,6 +3256,11 @@ function optimizePerformanceInstance(instance)
 		return changed
 	end
 
+	changed += disableLaggyEffect(instance)
+	if performanceOptimized[instance] then
+		return changed
+	end
+
 	if instance:IsA("BasePart") then
 		performanceOptimized[instance] = true
 		pcall(function()
@@ -3218,25 +3278,25 @@ function optimizePerformanceInstance(instance)
 			instance.Transparency = 1
 		end)
 		changed = 1
-	elseif instance:IsA("ParticleEmitter")
-		or instance:IsA("Trail")
-		or instance:IsA("Beam")
-		or instance:IsA("Smoke")
-		or instance:IsA("Fire")
-		or instance:IsA("Sparkles")
+	elseif instance:IsA("BillboardGui")
+		or instance:IsA("SurfaceGui")
+		or instance:IsA("Highlight")
+		or instance:IsA("SelectionBox")
+		or instance:IsA("SelectionSphere")
+		or instance:IsA("Handles")
+		or instance:IsA("ArcHandles")
 	then
 		performanceOptimized[instance] = true
 		pcall(function()
 			instance.Enabled = false
 		end)
 		changed = 1
-	elseif instance:IsA("PointLight")
-		or instance:IsA("SpotLight")
-		or instance:IsA("SurfaceLight")
-	then
+	elseif instance:IsA("Animator") then
 		performanceOptimized[instance] = true
 		pcall(function()
-			instance.Enabled = false
+			for _, track in ipairs(instance:GetPlayingAnimationTracks()) do
+				track:Stop(0)
+			end
 		end)
 		changed = 1
 	end
@@ -3293,6 +3353,24 @@ enablePerformanceMode = function()
 
 	pcall(function()
 		settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+	end)
+
+	pcall(function()
+		local lighting = game:GetService("Lighting")
+		lighting.GlobalShadows = false
+		lighting.EnvironmentDiffuseScale = 0
+		lighting.EnvironmentSpecularScale = 0
+		lighting.Brightness = math.min(lighting.Brightness, 1)
+		for _, descendant in ipairs(lighting:GetDescendants()) do
+			changed += optimizePerformanceInstance(descendant)
+		end
+	end)
+
+	pcall(function()
+		local soundService = game:GetService("SoundService")
+		for _, descendant in ipairs(soundService:GetDescendants()) do
+			changed += optimizePerformanceInstance(descendant)
+		end
 	end)
 
 	pcall(function()
