@@ -2999,16 +2999,56 @@ function triggerSellPrompts()
 	return actions
 end
 
+function guiObjectTextMatches(instance, terms)
+	local parts = {
+		safeText(instance.Name),
+	}
+	pcall(function()
+		table.insert(parts, safeText(instance.Text))
+	end)
+
+	local scanned = 0
+	for _, descendant in ipairs(instance:GetDescendants()) do
+		scanned += 1
+		if scanned > 40 then
+			break
+		end
+		if descendant:IsA("TextLabel") or descendant:IsA("TextButton") or descendant:IsA("TextBox") then
+			table.insert(parts, safeText(descendant.Name))
+			table.insert(parts, safeText(descendant.Text))
+		end
+	end
+
+	local haystack = string.lower(table.concat(parts, " "))
+	for _, term in ipairs(terms) do
+		if string.find(haystack, string.lower(term), 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
 function clickSellGuiButtons()
 	local actions = 0
+	local ownGui = playerGui:FindFirstChild("GardenAutomationGui")
+	local terms = {
+		"sell all",
+		"sell inventory",
+		"sell my inventory",
+		"sell all fruits",
+		"sell all my fruits",
+		"i want to sell",
+		"sell this",
+	}
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
 		if descendant:IsA("GuiButton")
 			and descendant.Visible
-			and textMatches(descendant, { "sell all", "sell inventory", "sell fruit", "sell" })
+			and (not ownGui or not descendant:IsDescendantOf(ownGui))
+			and guiObjectTextMatches(descendant, terms)
 		then
 			if activateButton(descendant) then
 				actions += 1
-				task.wait(0.04)
+				task.wait(0.08)
 			end
 		end
 	end
@@ -4359,10 +4399,13 @@ function autoSell(force)
 		local stevenPrompt = getPath(workspace, "NPCS.Steven.HumanoidRootPart.ProximityPrompt")
 		if stevenPrompt and stevenPrompt:IsA("ProximityPrompt") and triggerBuyPrompt(stevenPrompt) then
 			actions += 1
-			task.wait(0.12)
+			task.wait(0.25)
+			actions += clickSellGuiButtons()
 		end
 
 		actions += triggerSellPrompts()
+		task.wait(0.12)
+		actions += clickSellGuiButtons()
 
 		for _, packetName in ipairs({
 			"SellAll",
@@ -4395,7 +4438,10 @@ function autoSell(force)
 			end
 		end
 
-		actions += clickSellGuiButtons()
+		for _ = 1, 3 do
+			actions += clickSellGuiButtons()
+			task.wait(0.1)
+		end
 		task.wait(0.25)
 
 		local currentInventoryCount = countInventoryTools()
