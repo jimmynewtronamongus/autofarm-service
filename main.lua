@@ -2960,133 +2960,6 @@ function getSellableFruitTools()
 	return tools
 end
 
-function getSellPromptRoots()
-	local roots = {}
-	for _, root in ipairs({
-		getPath(workspace, "NPCS.Steven"),
-		getPath(workspace, "NPCS.Steven.HumanoidRootPart"),
-		getPath(workspace, "Map.Stands.Sell"),
-	}) do
-		if root then
-			table.insert(roots, root)
-		end
-	end
-	return roots
-end
-
-function findSellPrompt()
-	local direct = getPath(workspace, "NPCS.Steven.HumanoidRootPart.ProximityPrompt")
-	if direct and direct:IsA("ProximityPrompt") then
-		return direct
-	end
-
-	local bestPrompt
-	local root = getRoot()
-	local rootPosition = root and root.Position
-	for _, searchRoot in ipairs(getSellPromptRoots()) do
-		if searchRoot:IsA("ProximityPrompt") then
-			return searchRoot
-		end
-
-		for _, descendant in ipairs(searchRoot:GetDescendants()) do
-			if descendant:IsA("ProximityPrompt") and descendant.Name ~= "StealPrompt" then
-				local pathText = string.lower(getObjectPath(descendant))
-				local promptText = string.lower((descendant.ActionText or "") .. " " .. (descendant.ObjectText or "") .. " " .. descendant.Name)
-				if string.find(pathText, "steven", 1, true)
-					or string.find(pathText, "sell", 1, true)
-					or string.find(promptText, "sell", 1, true)
-					or string.find(promptText, "talk", 1, true)
-				then
-					if not bestPrompt then
-						bestPrompt = descendant
-					elseif rootPosition then
-						local bestPart = getPromptPart(bestPrompt)
-						local part = getPromptPart(descendant)
-						local bestDistance = bestPart and (rootPosition - bestPart.Position).Magnitude or math.huge
-						local distance = part and (rootPosition - part.Position).Magnitude or math.huge
-						if distance < bestDistance then
-							bestPrompt = descendant
-						end
-					end
-				end
-			end
-		end
-	end
-
-	return bestPrompt
-end
-
-function triggerSellPrompts()
-	local actions = 0
-	local prompt = findSellPrompt()
-	if prompt and triggerBuyPrompt(prompt) then
-		actions += 1
-	end
-	return actions
-end
-
-function guiObjectTextMatches(instance, terms)
-	local parts = {
-		safeText(instance.Name),
-	}
-	pcall(function()
-		table.insert(parts, safeText(instance.Text))
-	end)
-
-	local scanned = 0
-	for _, descendant in ipairs(instance:GetDescendants()) do
-		scanned += 1
-		if scanned > 40 then
-			break
-		end
-		if descendant:IsA("TextLabel") or descendant:IsA("TextButton") or descendant:IsA("TextBox") then
-			table.insert(parts, safeText(descendant.Name))
-			table.insert(parts, safeText(descendant.Text))
-		end
-	end
-
-	local haystack = string.lower(table.concat(parts, " "))
-	for _, term in ipairs(terms) do
-		if string.find(haystack, string.lower(term), 1, true) then
-			return true
-		end
-	end
-	return false
-end
-
-function clickSellGuiButtons()
-	local actions = 0
-	local ownGui = playerGui:FindFirstChild("GardenAutomationGui")
-	local terms = {
-		"sell all",
-		"sell inventory",
-		"sell my inventory",
-		"sell your inventory",
-		"sell entire inventory",
-		"sell all fruits",
-		"sell all my fruits",
-		"sell all fruit",
-		"i want to sell",
-		"i want to sell my inventory",
-		"i'd like to sell",
-		"sell my fruits",
-		"sell this",
-	}
-	for _, descendant in ipairs(playerGui:GetDescendants()) do
-		if descendant:IsA("GuiButton")
-			and descendant.Visible
-			and (not ownGui or not descendant:IsDescendantOf(ownGui))
-			and guiObjectTextMatches(descendant, terms)
-		then
-			if activateButton(descendant) then
-				actions += 1
-				task.wait(0.08)
-			end
-		end
-	end
-	return actions
-end
-
 function getSelectedGearList()
 	local selected = {}
 
@@ -4419,42 +4292,47 @@ function autoSell(force)
 			return
 		end
 
-		for _, packetName in ipairs({
-			"SellInventory",
-			"SellMyInventory",
-			"SellEntireInventory",
-			"SellAllInventory",
-			"SellAll",
-			"SellAllFruits",
-			"SellAllFruit",
-		}) do
-			if sendPacket(packetName) then
-				actions += 1
-			end
-			if sendPacket(packetName, true) then
-				actions += 1
-			end
+		if sendPacket("PreviewSellAll") then
+			actions += 1
 		end
-
-		for _, tool in ipairs(sellableTools) do
-			if not tool or not tool.Parent then
-				continue
-			end
-			if sendPacket("SellInventory", tool) then
-				actions += 1
-			end
-			if sendPacket("SellInventory", tool.Name) then
-				actions += 1
-			end
-			if sendPacket("SellFruit", tool) then
-				actions += 1
-			end
+		task.wait(0.05)
+		if sendPacket("SellAll") then
+			actions += 1
 		end
 
 		task.wait(0.35)
 
 		local currentInventoryCount = countInventoryTools()
 		local currentSheckles = refreshCurrencyStats(true)
+		if currentInventoryCount < beforeInventoryCount
+			or (currentSheckles and beforeSheckles and currentSheckles > beforeSheckles)
+		then
+			break
+		end
+
+		sellableTools = getSellableFruitTools()
+		for _, tool in ipairs(sellableTools) do
+			if not tool or not tool.Parent then
+				continue
+			end
+			if sendPacket("SellItem", tool) then
+				actions += 1
+			end
+			if sendPacket("SellItem", tool.Name) then
+				actions += 1
+			end
+			if sendPacket("SellFruit", tool) then
+				actions += 1
+			end
+			if sendPacket("SellFruit", tool.Name) then
+				actions += 1
+			end
+		end
+
+		task.wait(0.35)
+
+		currentInventoryCount = countInventoryTools()
+		currentSheckles = refreshCurrencyStats(true)
 		if currentInventoryCount < beforeInventoryCount
 			or (currentSheckles and beforeSheckles and currentSheckles > beforeSheckles)
 		then
@@ -4477,9 +4355,9 @@ function autoSell(force)
 	local afterInventoryCount = countInventoryTools()
 	updateStatsUI()
 	if afterInventoryCount >= beforeInventoryCount and (not afterSheckles or not beforeSheckles or afterSheckles <= beforeSheckles) then
-		setStatus(("Sell remote: tried %d call(s), inventory unchanged (%d/%d)"):format(actions, stats.inventoryItems, stats.inventoryCapacity))
+		setStatus(("Sell remote: SellAll tried %d call(s), inventory unchanged (%d/%d)"):format(actions, stats.inventoryItems, stats.inventoryCapacity))
 	else
-		setStatus(("Sell remote: %d call(s), inventory %d -> %d"):format(actions, beforeInventoryCount, afterInventoryCount))
+		setStatus(("Sell remote: sold with SellAll, inventory %d -> %d"):format(beforeInventoryCount, afterInventoryCount))
 	end
 end
 
