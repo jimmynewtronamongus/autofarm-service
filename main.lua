@@ -2920,7 +2920,7 @@ function isLikelyFruitTool(item)
 		end
 	end
 
-	return false
+	return true
 end
 
 function getSellableFruitTools()
@@ -2958,6 +2958,61 @@ function getSellableFruitTools()
 	end)
 
 	return tools
+end
+
+function getSellPromptRoots()
+	local roots = {}
+	for _, root in ipairs({
+		getPath(workspace, "Map.Stands.Sell"),
+		getPath(workspace, "Map.Stands.Sell.Part"),
+		getPath(workspace, "NPCS.Steven"),
+		getPath(workspace, "NPCS.Steven.HumanoidRootPart"),
+	}) do
+		if root then
+			table.insert(roots, root)
+		end
+	end
+	return roots
+end
+
+function triggerSellPrompts()
+	local actions = 0
+	for _, root in ipairs(getSellPromptRoots()) do
+		if root:IsA("ProximityPrompt") then
+			if textMatches(root, { "sell", "inventory", "fruit" }) and triggerBuyPrompt(root) then
+				actions += 1
+			end
+		else
+			for _, descendant in ipairs(root:GetDescendants()) do
+				if descendant:IsA("ProximityPrompt")
+					and descendant.Name ~= "StealPrompt"
+					and textMatches(descendant, { "sell", "inventory", "fruit" })
+				then
+					if triggerBuyPrompt(descendant) then
+						actions += 1
+						task.wait(0.08)
+					end
+				end
+			end
+		end
+	end
+	return actions
+end
+
+function clickSellGuiButtons()
+	local actions = 0
+	for _, descendant in ipairs(playerGui:GetDescendants()) do
+		if descendant:IsA("GuiButton")
+			and descendant.Visible
+			and textMatches(descendant, { "sell all", "sell inventory", "sell fruit", "sell" })
+		then
+			if activateButton(descendant) then
+				actions += 1
+				task.wait(0.04)
+			end
+		end
+	end
+	return actions
 end
 
 function getSelectedGearList()
@@ -4272,6 +4327,7 @@ function autoSell(force)
 	end
 
 	refreshInventoryStats(true)
+	local beforeInventoryCount = countInventoryTools()
 	local sellableTools = getSellableFruitTools()
 	if #sellableTools == 0 then
 		refreshInventoryStats(true)
@@ -4287,66 +4343,72 @@ function autoSell(force)
 	local farmedBeforeSell = stats.shecklesFarmed or 0
 	local actions = 0
 	local stand = getPath(workspace, "Map.Stands.Sell.Part")
-	if not force and not isEnabled("autoSell") then
-		return
-	end
-
-	if stand and stand:IsA("BasePart") and touchPart(stand) then
-		actions += 1
-		task.wait(0.15)
-	end
-
-	local stevenPrompt = getPath(workspace, "NPCS.Steven.HumanoidRootPart.ProximityPrompt")
-	if stevenPrompt and stevenPrompt:IsA("ProximityPrompt") and triggerBuyPrompt(stevenPrompt) then
-		actions += 1
-		task.wait(0.15)
-	end
-
-	for _, packetName in ipairs({ "SellAll", "SellInventory", "PreviewSellAll" }) do
+	for attempt = 1, 3 do
 		if not force and not isEnabled("autoSell") then
 			return
 		end
 
-		if sendPacket(packetName) then
-			actions += 1
-			task.wait(0.05)
-		end
-	end
-
-	for _, tool in ipairs(sellableTools) do
-		if not force and not isEnabled("autoSell") then
-			return
-		end
-
-		if sendPacket("SellItem", tool) then
-			actions += 1
-			task.wait(0.03)
-		end
-
-		if sendPacket("SellFruit", tool) then
-			actions += 1
-			task.wait(0.03)
-		end
-
-		if sendPacket("SellItem", tool.Name) then
-			actions += 1
-			task.wait(0.03)
-		end
-	end
-
-	for _, descendant in ipairs(playerGui:GetDescendants()) do
-		if not force and not isEnabled("autoSell") then
-			return
-		end
-
-		if descendant:IsA("GuiButton")
-			and descendant.Visible
-			and textMatches(descendant, { "sell all", "sell inventory", "sell" })
-		then
-			if activateButton(descendant) then
+		if stand and stand:IsA("BasePart") then
+			teleportToPart(stand, 3)
+			task.wait(0.12)
+			if touchPart(stand, true) then
 				actions += 1
-				task.wait(0.05)
 			end
+		end
+
+		local stevenPrompt = getPath(workspace, "NPCS.Steven.HumanoidRootPart.ProximityPrompt")
+		if stevenPrompt and stevenPrompt:IsA("ProximityPrompt") and triggerBuyPrompt(stevenPrompt) then
+			actions += 1
+			task.wait(0.12)
+		end
+
+		actions += triggerSellPrompts()
+
+		for _, packetName in ipairs({
+			"SellAll",
+			"SellInventory",
+			"SellAllFruits",
+			"SellAllFruit",
+			"SellItems",
+			"Sell",
+		}) do
+			if sendPacket(packetName) then
+				actions += 1
+			end
+		end
+
+		for _, tool in ipairs(sellableTools) do
+			if not tool or not tool.Parent then
+				continue
+			end
+			if sendPacket("SellItem", tool) then
+				actions += 1
+			end
+			if sendPacket("SellFruit", tool) then
+				actions += 1
+			end
+			if sendPacket("SellItem", tool.Name) then
+				actions += 1
+			end
+			if sendPacket("SellFruit", tool.Name) then
+				actions += 1
+			end
+		end
+
+		actions += clickSellGuiButtons()
+		task.wait(0.25)
+
+		local currentInventoryCount = countInventoryTools()
+		local currentSheckles = refreshCurrencyStats(true)
+		if currentInventoryCount < beforeInventoryCount
+			or (currentSheckles and beforeSheckles and currentSheckles > beforeSheckles)
+		then
+			break
+		end
+
+		sellableTools = getSellableFruitTools()
+		if #sellableTools == 0 then
+			break
 		end
 	end
 
@@ -4357,8 +4419,13 @@ function autoSell(force)
 	end
 
 	refreshInventoryStats(true)
+	local afterInventoryCount = countInventoryTools()
 	updateStatsUI()
-	setStatus(("Sell: %d action(s) for %d item(s)"):format(actions, #sellableTools))
+	if afterInventoryCount >= beforeInventoryCount and (not afterSheckles or not beforeSheckles or afterSheckles <= beforeSheckles) then
+		setStatus(("Sell: tried %d action(s), inventory unchanged (%d/%d)"):format(actions, stats.inventoryItems, stats.inventoryCapacity))
+	else
+		setStatus(("Sell: %d action(s), inventory %d -> %d"):format(actions, beforeInventoryCount, afterInventoryCount))
+	end
 end
 
 function buyOneSeed(seedName)
