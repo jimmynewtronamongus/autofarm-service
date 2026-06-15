@@ -53,6 +53,7 @@ local CONFIG = {
 	selectedSeed = "",
 	plantRadius = 18,
 	webhookUrl = "",
+	statsWebhookInterval = 180.0,
 }
 
 local seedNames = {}
@@ -161,6 +162,7 @@ local function loadConfig()
 		"selectedSeed",
 		"plantRadius",
 		"webhookUrl",
+		"statsWebhookInterval",
 	})
 	copyKnownValues(decoded.state, state, {
 		"fruitCollector",
@@ -451,6 +453,7 @@ local lastStatusSetAt = 0
 local pendingStatusMessage
 local lastStatsUIUpdateAt = 0
 local schedulerAccumulator = 0
+local lastStatsWebhookAt = 0
 
 local stats = {
 	fruitTargetsChecked = 0,
@@ -464,6 +467,9 @@ local stats = {
 	seedsBought = 0,
 	gearBought = 0,
 	petsBought = 0,
+	sheckles = 0,
+	startSheckles = nil,
+	shecklesFarmed = 0,
 	inventoryItems = 0,
 	inventoryCapacity = CONFIG.maxInventoryItems,
 	inventoryFull = false,
@@ -524,6 +530,46 @@ local function shortStatus(text, maxLength)
 		return text
 	end
 	return string.sub(text, 1, maxLength - 3) .. "..."
+end
+
+local function formatNumber(value)
+	value = tonumber(value) or 0
+	local sign = value < 0 and "-" or ""
+	value = math.abs(math.floor(value + 0.5))
+	local text = tostring(value)
+	while true do
+		local replaced
+		text, replaced = string.gsub(text, "^(%d+)(%d%d%d)", "%1,%2")
+		if replaced == 0 then
+			break
+		end
+	end
+	return sign .. text
+end
+
+local function parseAmountText(text)
+	text = tostring(text or "")
+	local lowered = string.lower(text)
+	local multiplier = 1
+	if string.find(lowered, "b", 1, true) then
+		multiplier = 1000000000
+	elseif string.find(lowered, "m", 1, true) then
+		multiplier = 1000000
+	elseif string.find(lowered, "k", 1, true) then
+		multiplier = 1000
+	end
+
+	local raw = string.match(text, "[-]?[%d,]+%.?%d*")
+	if not raw then
+		return nil
+	end
+
+	raw = string.gsub(raw, ",", "")
+	local amount = tonumber(raw)
+	if not amount then
+		return nil
+	end
+	return math.floor(amount * multiplier + 0.5)
 end
 
 local function isEnabled(key)
@@ -1408,6 +1454,152 @@ local inventoryCache = {
 	guiCheckedAt = 0,
 }
 
+local currencyCache = {
+	value = 0,
+	checkedAt = 0,
+}
+
+local function nameLooksLikeCurrency(name)
+	local lowered = string.lower(tostring(name or ""))
+	return string.find(lowered, "sheck", 1, true)
+		or string.find(lowered, "money", 1, true)
+		or string.find(lowered, "cash", 1, true)
+		or string.find(lowered, "coin", 1, true)
+		or string.find(lowered, "currency", 1, true)
+end
+
+local function readCurrencyValueObject(root)
+	if not root then
+		return nil
+	end
+
+	for _, child in ipairs(root:GetChildren()) do
+		if child:IsA("ValueBase") and nameLooksLikeCurrency(child.Name) then
+			local amount = tonumber(child.Value)
+			if amount then
+				return amount
+			end
+		end
+	end
+
+	return nil
+end
+
+local function readCurrencyFromGui()
+	for _, descendant in ipairs(playerGui:GetDescendants()) do
+		if descendant:IsA("TextLabel") or descendant:IsA("TextButton") or descendant:IsA("TextBox") then
+			local ok, visible = pcall(function()
+				return descendant.Visible
+			end)
+			if ok and visible then
+				local text = tostring(descendant.Text or "")
+				local lowered = string.lower(text .. " " .. descendant.Name)
+				if string.find(lowered, "sheck", 1, true)
+					or string.find(lowered, "$", 1, true)
+					or string.find(lowered, "cash", 1, true)
+					or string.find(lowered, "money", 1, true)
+				then
+					local amount = parseAmountText(text)
+					if amount then
+						return amount
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+local function refreshCurrencyStats(force)
+	local now = os.clock()
+	if not force and now - currencyCache.checkedAt < 5 then
+		return stats.sheckles
+	end
+
+	local amount = readCurrencyValueObject(localPlayer:FindFirstChild("leaderstats"))
+		or readCurrencyValueObject(localPlayer)
+		or readCurrencyFromGui()
+
+	if amount then
+		stats.sheckles = amount
+		if stats.startSheckles == nil then
+			stats.startSheckles = amount
+		end
+		stats.shecklesFarmed = math.max(stats.shecklesFarmed or 0, amount - (stats.startSheckles or amount), 0)
+		currencyCache.value = amount
+	end
+
+	currencyCache.checkedAt = now
+	return stats.sheckles
+end
+
+local function getRuntimeText()
+	local elapsed = math.floor(os.clock() - sessionStartedAt)
+	local hours = math.floor(elapsed / 3600)
+	local minutes = math.floor((elapsed % 3600) / 60)
+	local seconds = elapsed % 60
+	if hours > 0 then
+		return ("%dh %dm %ds"):format(hours, minutes, seconds)
+	end
+	return ("%dm %ds"):format(minutes, seconds)
+end
+
+local function buildStatsSnapshot()
+	refreshCurrencyStats()
+	local elapsedMinutes = math.max((os.clock() - sessionStartedAt) / 60, 0.01)
+	local fruitRate = math.floor((stats.fruitCollected / elapsedMinutes) + 0.5)
+	local freeSlots = math.max((stats.inventoryCapacity or CONFIG.maxInventoryItems) - (stats.inventoryItems or 0), 0)
+
+	return {
+		runtime = getRuntimeText(),
+		enabled = countEnabledToggles(),
+		sheckles = stats.sheckles or 0,
+		shecklesFarmed = stats.shecklesFarmed or 0,
+		fruitCollected = stats.fruitCollected,
+		fruitRate = fruitRate,
+		seedsBought = stats.seedsBought,
+		gearBought = stats.gearBought,
+		petsBought = stats.petsBought,
+		seedsPlanted = stats.seedsPlanted,
+		seedsShoveled = stats.seedsShoveled,
+		inventoryItems = stats.inventoryItems,
+		inventoryCapacity = stats.inventoryCapacity,
+		freeSlots = freeSlots,
+		inventoryFull = stats.inventoryFull,
+	}
+end
+
+local function buildStatsWebhookDescription(snapshot)
+	return table.concat({
+		("Runtime: `%s`"):format(snapshot.runtime),
+		("Sheckles: `%s`"):format(formatNumber(snapshot.sheckles)),
+		("Sheckles farmed since start: `+%s`"):format(formatNumber(snapshot.shecklesFarmed)),
+		("Fruit collected: `%s` (`%s/min`)"):format(formatNumber(snapshot.fruitCollected), formatNumber(snapshot.fruitRate)),
+		("Bought: `%s` seeds | `%s` gear | `%s` pets"):format(formatNumber(snapshot.seedsBought), formatNumber(snapshot.gearBought), formatNumber(snapshot.petsBought)),
+		("Plants: `%s` placed | `%s` shoveled"):format(formatNumber(snapshot.seedsPlanted), formatNumber(snapshot.seedsShoveled)),
+		("Inventory: `%s/%s` (`%s` free)%s"):format(formatNumber(snapshot.inventoryItems), formatNumber(snapshot.inventoryCapacity), formatNumber(snapshot.freeSlots), snapshot.inventoryFull and " FULL" or ""),
+		("Enabled systems: `%d`"):format(snapshot.enabled),
+	}, "\n")
+end
+
+local function sendStatsWebhook(force)
+	if CONFIG.webhookUrl == "" then
+		return false
+	end
+
+	local now = os.clock()
+	if not force and now - lastStatsWebhookAt < CONFIG.statsWebhookInterval then
+		return false
+	end
+
+	local snapshot = buildStatsSnapshot()
+	local sent = sendWebhook("Garden Tools Stats", buildStatsWebhookDescription(snapshot), force and "stats:manual" or "stats:auto")
+	if sent then
+		lastStatsWebhookAt = now
+	end
+	return sent
+end
+
 local function refreshInventoryStats(force)
 	local now = os.clock()
 	if not force and now - inventoryCache.checkedAt < CONFIG.inventoryRefreshInterval then
@@ -1449,26 +1641,24 @@ local function updateStatsUI()
 		lastStatusSetAt = now
 	end
 
-	local elapsedMinutes = math.max((os.clock() - sessionStartedAt) / 60, 0.01)
-	local fruitRate = math.floor((stats.fruitCollected / elapsedMinutes) + 0.5)
-	local freeSlots = math.max((stats.inventoryCapacity or CONFIG.maxInventoryItems) - (stats.inventoryItems or 0), 0)
+	local snapshot = buildStatsSnapshot()
 
 	for key, label in pairs(statsLabels) do
 		if label and label.Parent then
 			if key == "status" then
-				label.Text = ("Status: %s"):format(shortStatus(state.lastStatus, 46))
+				label.Text = ("Run: %s | Enabled: %d | TP %s"):format(snapshot.runtime, snapshot.enabled, state.collectTeleport and "ON" or "OFF")
 			elseif key == "systems" then
-				label.Text = ("Enabled: %d systems | Teleport %s"):format(countEnabledToggles(), state.collectTeleport and "ON" or "OFF")
+				label.Text = ("Sheckles: %s"):format(formatNumber(snapshot.sheckles))
 			elseif key == "inventory" then
-				label.Text = ("Inventory: %d/%d (%d free)%s"):format(stats.inventoryItems, stats.inventoryCapacity, freeSlots, stats.inventoryFull and " FULL" or "")
+				label.Text = ("Farmed this run: +%s sheckles"):format(formatNumber(snapshot.shecklesFarmed))
 			elseif key == "collect" then
-				label.Text = ("Fruit: %d total | %d/min | %d targets scanned"):format(stats.fruitCollected, fruitRate, stats.fruitTargetsChecked)
+				label.Text = ("Fruit: %s total | %s/min"):format(formatNumber(snapshot.fruitCollected), formatNumber(snapshot.fruitRate))
 			elseif key == "planting" then
-				label.Text = ("Planting: %d placed | %d shoveled | %d seed(s) selected"):format(stats.seedsPlanted, stats.seedsShoveled, countSelected(selectedSeeds))
+				label.Text = ("Plants: %s placed | %s shoveled"):format(formatNumber(snapshot.seedsPlanted), formatNumber(snapshot.seedsShoveled))
 			elseif key == "shops" then
-				label.Text = ("Bought: %d seeds | %d gear | %d pets"):format(stats.seedsBought, stats.gearBought, stats.petsBought)
+				label.Text = ("Bought: %s seeds | %s gear | %s pets"):format(formatNumber(snapshot.seedsBought), formatNumber(snapshot.gearBought), formatNumber(snapshot.petsBought))
 			elseif key == "limits" then
-				label.Text = ("Blocked: %d full | %d range | %d seed limit"):format(stats.collectSkippedFull, stats.collectSkippedRange, stats.seedsSkippedLimit)
+				label.Text = ("Inventory: %s/%s (%s free)%s"):format(formatNumber(snapshot.inventoryItems), formatNumber(snapshot.inventoryCapacity), formatNumber(snapshot.freeSlots), snapshot.inventoryFull and " FULL" or "")
 			end
 		end
 	end
@@ -4103,6 +4293,8 @@ function autoSell(force)
 		return
 	end
 
+	local beforeSheckles = refreshCurrencyStats(true)
+	local farmedBeforeSell = stats.shecklesFarmed or 0
 	local actions = 0
 	local stand = getPath(workspace, "Map.Stands.Sell.Part")
 	if not force and not isEnabled("autoSell") then
@@ -4166,6 +4358,12 @@ function autoSell(force)
 				task.wait(0.05)
 			end
 		end
+	end
+
+	task.wait(0.15)
+	local afterSheckles = refreshCurrencyStats(true)
+	if afterSheckles and beforeSheckles and afterSheckles > beforeSheckles then
+		stats.shecklesFarmed = math.max(stats.shecklesFarmed or 0, farmedBeforeSell + (afterSheckles - beforeSheckles))
 	end
 
 	setStatus(("Sell: %d action(s) for %d item(s)"):format(actions, #sellableTools))
@@ -4750,13 +4948,16 @@ webhookBox.FocusLost:Connect(function()
 	webhookBox.Text = CONFIG.webhookUrl
 	saveConfig()
 	setStatus(CONFIG.webhookUrl ~= "" and "Webhook URL saved" or "Webhook URL cleared")
+	if CONFIG.webhookUrl ~= "" then
+		sendStatsWebhook(true)
+	end
 end)
 
 local statsTitle = make("TextLabel", {
 	Name = "StatsTitle",
 	BackgroundTransparency = 1,
 	Font = Enum.Font.GothamSemibold,
-	Text = "Stats",
+	Text = "Session Stats",
 	TextColor3 = Color3.fromRGB(221, 236, 216),
 	TextSize = 11,
 	TextXAlignment = Enum.TextXAlignment.Left,
@@ -5456,6 +5657,7 @@ timers = {
 	autoCollectRainbowSeeds = 0,
 	autoBuyPets = 0,
 	stats = 0,
+	statsWebhook = 0,
 	guiInventoryFull = false,
 	lastInventoryRefresh = 0,
 	lastGuiInventoryRefresh = 0,
@@ -5506,11 +5708,17 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	timers.autoCollectRainbowSeeds = state.autoCollectRainbowSeeds and (timers.autoCollectRainbowSeeds + deltaTime) or 0
 	timers.autoBuyPets = state.autoBuyPets and (timers.autoBuyPets + deltaTime) or 0
 	timers.stats += deltaTime
+	timers.statsWebhook += deltaTime
 
 	if timers.stats >= 5.0 then
 		timers.stats = 0
 		refreshInventoryStats()
 		updateStatsUI()
+	end
+
+	if timers.statsWebhook >= CONFIG.statsWebhookInterval then
+		timers.statsWebhook = 0
+		sendStatsWebhook(false)
 	end
 
 	local shovelDue = state.autoShovel and timers.autoShovel >= CONFIG.shovelInterval
