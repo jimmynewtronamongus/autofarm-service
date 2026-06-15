@@ -18,7 +18,7 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 local CONFIG = {
-	collectInterval = 0.65,
+	collectInterval = 0.5,
 	plantInterval = 1.1,
 	sellInterval = 12.0,
 	sellWhenFullInterval = 1.5,
@@ -29,11 +29,11 @@ local CONFIG = {
 	dropCacheRefreshInterval = 5.0,
 	inventoryRefreshInterval = 2.5,
 	guiInventoryRefreshInterval = 20.0,
-	maxFruitCollectPerTick = 24,
-	maxFruitScanPerRoot = 550,
-	fruitCacheRefreshInterval = 4.0,
-	maxFruitTargetsCached = 90,
-	maxFruitPromptFallbackPerTick = 3,
+	maxFruitCollectPerTick = 38,
+	maxFruitScanPerRoot = 650,
+	fruitCacheRefreshInterval = 3.5,
+	maxFruitTargetsCached = 130,
+	maxFruitPromptFallbackPerTick = 8,
 	maxSeedPlantPerTick = 5,
 	maxSeedPlacementsPerTool = 3,
 	seedCountCacheRefreshInterval = 45.0,
@@ -1107,6 +1107,7 @@ local fruitTargetCache = {
 	refreshedAt = 0,
 	cursor = 1,
 	rootCount = 0,
+	noGainStreak = 0,
 }
 
 local function invalidateOwnGardenCache()
@@ -1116,6 +1117,7 @@ local function invalidateOwnGardenCache()
 	fruitTargetCache.refreshedAt = 0
 	fruitTargetCache.targets = {}
 	fruitTargetCache.cursor = 1
+	fruitTargetCache.noGainStreak = 0
 end
 
 local function addUniqueInstance(list, instance)
@@ -2304,6 +2306,14 @@ local function collectFruit()
 	local beforeInventoryCount = countInventoryTools()
 	local fired = 0
 	local fallback = 0
+	local fallbackLimit = CONFIG.maxFruitPromptFallbackPerTick
+	if fruitTargetCache.noGainStreak >= 1 then
+		fallbackLimit = math.min(math.ceil(CONFIG.maxFruitCollectPerTick / 2), fallbackLimit + 10)
+	end
+	if fruitTargetCache.noGainStreak >= 2 then
+		fallbackLimit = CONFIG.maxFruitCollectPerTick
+	end
+
 	for index, entry in ipairs(targets) do
 		if not isEnabled("fruitCollector") then
 			return
@@ -2324,7 +2334,7 @@ local function collectFruit()
 			return
 		end
 
-		if fallback >= CONFIG.maxFruitPromptFallbackPerTick then
+		if fallback >= fallbackLimit then
 			break
 		end
 
@@ -2342,6 +2352,11 @@ local function collectFruit()
 	local gained = math.max((afterInventoryCount or 0) - (beforeInventoryCount or 0), 0)
 	stats.fruitCollected += gained
 	stats.fruitTargetsChecked += totalCached
+	if gained > 0 then
+		fruitTargetCache.noGainStreak = 0
+	else
+		fruitTargetCache.noGainStreak = math.min(fruitTargetCache.noGainStreak + 1, 3)
+	end
 	pruneFruitTargetCache()
 	refreshInventoryStats()
 	updateStatsUI()
@@ -3122,6 +3137,7 @@ local performanceWatcherConnected = false
 local performanceQueue = {}
 local performanceQueueHead = 1
 local performanceQueueRunning = false
+local lastPerformanceTreeScanAt = 0
 
 function isLaggyEffectInstance(instance)
 	return instance:IsA("ParticleEmitter")
@@ -3433,6 +3449,7 @@ end
 
 enablePerformanceMode = function()
 	local changed = 0
+	local now = os.clock()
 
 	connectPerformanceWatcher()
 
@@ -3466,7 +3483,10 @@ enablePerformanceMode = function()
 		workspace.Terrain.Decoration = false
 	end)
 
-	changed += optimizePerformanceTree(workspace, 100)
+	if now - lastPerformanceTreeScanAt > 20 then
+		lastPerformanceTreeScanAt = now
+		changed += optimizePerformanceTree(workspace, 100)
+	end
 
 	setStatus(("Performance mode: simplified %d object(s)"):format(changed))
 end
