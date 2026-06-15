@@ -2963,10 +2963,9 @@ end
 function getSellPromptRoots()
 	local roots = {}
 	for _, root in ipairs({
-		getPath(workspace, "Map.Stands.Sell"),
-		getPath(workspace, "Map.Stands.Sell.Part"),
 		getPath(workspace, "NPCS.Steven"),
 		getPath(workspace, "NPCS.Steven.HumanoidRootPart"),
+		getPath(workspace, "Map.Stands.Sell"),
 	}) do
 		if root then
 			table.insert(roots, root)
@@ -2975,26 +2974,53 @@ function getSellPromptRoots()
 	return roots
 end
 
-function triggerSellPrompts()
-	local actions = 0
-	for _, root in ipairs(getSellPromptRoots()) do
-		if root:IsA("ProximityPrompt") then
-			if textMatches(root, { "sell", "inventory", "fruit" }) and triggerBuyPrompt(root) then
-				actions += 1
-			end
-		else
-			for _, descendant in ipairs(root:GetDescendants()) do
-				if descendant:IsA("ProximityPrompt")
-					and descendant.Name ~= "StealPrompt"
-					and textMatches(descendant, { "sell", "inventory", "fruit" })
+function findSellPrompt()
+	local direct = getPath(workspace, "NPCS.Steven.HumanoidRootPart.ProximityPrompt")
+	if direct and direct:IsA("ProximityPrompt") then
+		return direct
+	end
+
+	local bestPrompt
+	local root = getRoot()
+	local rootPosition = root and root.Position
+	for _, searchRoot in ipairs(getSellPromptRoots()) do
+		if searchRoot:IsA("ProximityPrompt") then
+			return searchRoot
+		end
+
+		for _, descendant in ipairs(searchRoot:GetDescendants()) do
+			if descendant:IsA("ProximityPrompt") and descendant.Name ~= "StealPrompt" then
+				local pathText = string.lower(getObjectPath(descendant))
+				local promptText = string.lower((descendant.ActionText or "") .. " " .. (descendant.ObjectText or "") .. " " .. descendant.Name)
+				if string.find(pathText, "steven", 1, true)
+					or string.find(pathText, "sell", 1, true)
+					or string.find(promptText, "sell", 1, true)
+					or string.find(promptText, "talk", 1, true)
 				then
-					if triggerBuyPrompt(descendant) then
-						actions += 1
-						task.wait(0.08)
+					if not bestPrompt then
+						bestPrompt = descendant
+					elseif rootPosition then
+						local bestPart = getPromptPart(bestPrompt)
+						local part = getPromptPart(descendant)
+						local bestDistance = bestPart and (rootPosition - bestPart.Position).Magnitude or math.huge
+						local distance = part and (rootPosition - part.Position).Magnitude or math.huge
+						if distance < bestDistance then
+							bestPrompt = descendant
+						end
 					end
 				end
 			end
 		end
+	end
+
+	return bestPrompt
+end
+
+function triggerSellPrompts()
+	local actions = 0
+	local prompt = findSellPrompt()
+	if prompt and triggerBuyPrompt(prompt) then
+		actions += 1
 	end
 	return actions
 end
@@ -3035,9 +3061,15 @@ function clickSellGuiButtons()
 		"sell all",
 		"sell inventory",
 		"sell my inventory",
+		"sell your inventory",
+		"sell entire inventory",
 		"sell all fruits",
 		"sell all my fruits",
+		"sell all fruit",
 		"i want to sell",
+		"i want to sell my inventory",
+		"i'd like to sell",
+		"sell my fruits",
 		"sell this",
 	}
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
@@ -4382,30 +4414,25 @@ function autoSell(force)
 	local beforeSheckles = refreshCurrencyStats(true)
 	local farmedBeforeSell = stats.shecklesFarmed or 0
 	local actions = 0
-	local stand = getPath(workspace, "Map.Stands.Sell.Part")
 	for attempt = 1, 3 do
 		if not force and not isEnabled("autoSell") then
 			return
 		end
 
-		if stand and stand:IsA("BasePart") then
-			teleportToPart(stand, 3)
-			task.wait(0.12)
-			if touchPart(stand, true) then
-				actions += 1
+		actions += triggerSellPrompts()
+		task.wait(0.25)
+
+		for _ = 1, 8 do
+			actions += clickSellGuiButtons()
+			task.wait(0.15)
+			local currentInventoryCount = countInventoryTools()
+			local currentSheckles = refreshCurrencyStats(true)
+			if currentInventoryCount < beforeInventoryCount
+				or (currentSheckles and beforeSheckles and currentSheckles > beforeSheckles)
+			then
+				break
 			end
 		end
-
-		local stevenPrompt = getPath(workspace, "NPCS.Steven.HumanoidRootPart.ProximityPrompt")
-		if stevenPrompt and stevenPrompt:IsA("ProximityPrompt") and triggerBuyPrompt(stevenPrompt) then
-			actions += 1
-			task.wait(0.25)
-			actions += clickSellGuiButtons()
-		end
-
-		actions += triggerSellPrompts()
-		task.wait(0.12)
-		actions += clickSellGuiButtons()
 
 		for _, packetName in ipairs({
 			"SellAll",
@@ -4438,10 +4465,6 @@ function autoSell(force)
 			end
 		end
 
-		for _ = 1, 3 do
-			actions += clickSellGuiButtons()
-			task.wait(0.1)
-		end
 		task.wait(0.25)
 
 		local currentInventoryCount = countInventoryTools()
