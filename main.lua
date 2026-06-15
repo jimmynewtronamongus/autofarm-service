@@ -18,7 +18,7 @@ localPlayer = Players.LocalPlayer
 playerGui = localPlayer:WaitForChild("PlayerGui")
 
 CONFIG = {
-	collectInterval = 0.8,
+	collectInterval = 0.25,
 	plantInterval = 1.3,
 	sellInterval = 12.0,
 	sellWhenFullInterval = 1.5,
@@ -30,11 +30,11 @@ CONFIG = {
 	dropCacheRefreshInterval = 5.0,
 	inventoryRefreshInterval = 3.5,
 	guiInventoryRefreshInterval = 30.0,
-	maxFruitCollectPerTick = 18,
-	maxFruitScanPerRoot = 650,
-	fruitCacheRefreshInterval = 6.0,
-	maxFruitTargetsCached = 120,
-	maxFruitPromptFallbackPerTick = 12,
+	maxFruitCollectPerTick = 28,
+	maxFruitScanPerRoot = 1600,
+	fruitCacheRefreshInterval = 2.0,
+	maxFruitTargetsCached = 260,
+	maxFruitPromptFallbackPerTick = 28,
 	maxSeedPlantPerTick = 3,
 	maxSeedPlacementsPerTool = 2,
 	seedCountCacheRefreshInterval = 45.0,
@@ -1692,10 +1692,6 @@ function purchaseChanged(beforeInventoryCount, beforeSheckles)
 end
 
 function shouldPauseFruitCollection()
-	if running.autoSell or running.sellWhenFull then
-		return true
-	end
-
 	if not (state.sellWhenFull or state.autoSell) then
 		return false
 	end
@@ -2115,7 +2111,7 @@ function addFruitTarget(targets, seenTargets, prompt, target)
 	})
 end
 
-function rebuildFruitTargetCache(roots)
+function rebuildFruitTargetCache(roots, forceDescendantRefresh)
 	local targets = {}
 	local seenTargets = {}
 
@@ -2126,6 +2122,9 @@ function rebuildFruitTargetCache(roots)
 
 		local scanned = 0
 		local scanStartedAt = os.clock()
+		if forceDescendantRefresh then
+			cache["fruitFast" .. index .. "At"] = nil
+		end
 		local descendants = getCachedDescendants("fruitFast" .. index, root, CONFIG.fruitCacheRefreshInterval)
 		for _, descendant in ipairs(descendants) do
 			scanStartedAt = maybeYieldScan(scanStartedAt, 0.01)
@@ -2185,7 +2184,7 @@ function getFruitTargetBatch(roots)
 	end
 
 	if #batch == 0 and #targets > 0 then
-		targets = rebuildFruitTargetCache(roots)
+		targets = rebuildFruitTargetCache(roots, true)
 		for index, entry in ipairs(targets) do
 			if index > CONFIG.maxFruitCollectPerTick then
 				break
@@ -2572,6 +2571,12 @@ function collectFruit()
 	end
 
 	local targets, totalCached = getFruitTargetBatch(roots)
+
+	if #targets == 0 then
+		fruitTargetCache.refreshedAt = 0
+		targets = rebuildFruitTargetCache(roots, true)
+		totalCached = #targets
+	end
 
 	if #targets == 0 then
 		updateStatsUI()
@@ -5879,6 +5884,8 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	end
 
 	movementLocked = movementLocked or running.autoShovel
+	local fruitMovementLocked = running.autoShovel
+		or (inventoryFull and (sellDue or running.autoSell or running.sellWhenFull))
 
 	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval and not movementLocked then
 		if tryRun("autoBuyPets", buyPets) then
@@ -5893,7 +5900,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	end
 
 	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
-		if movementLocked then
+		if fruitMovementLocked then
 			timers.fruitCollector = CONFIG.collectInterval
 		else
 			if tryRun("fruitCollector", collectFruit) then
