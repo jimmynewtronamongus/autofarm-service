@@ -3324,6 +3324,58 @@ function applyPerformanceGardenHiding(instance)
 	return hidePerformanceTree(instance, true)
 end
 
+function hidePerformanceGardenPlot(plot)
+	if not plot then
+		return 0
+	end
+
+	local changed = 0
+	local ownPlot = gardenPlotIsOwn(plot)
+	if ownPlot then
+		for _, name in ipairs({ "Plants", "Fruits", "Fruit", "Crops", "Harvest", "Harvests" }) do
+			local folder = plot:FindFirstChild(name, true)
+			if folder then
+				changed += hidePerformanceTree(folder, false)
+				local processed = 0
+				for _, descendant in ipairs(folder:GetDescendants()) do
+					changed += hidePerformanceTree(descendant, false)
+					processed += 1
+					if processed % 120 == 0 then
+						task.wait()
+					end
+				end
+			end
+		end
+		return changed
+	end
+
+	changed += hidePerformanceTree(plot, true)
+	local processed = 0
+	for _, descendant in ipairs(plot:GetDescendants()) do
+		changed += hidePerformanceTree(descendant, true)
+		processed += 1
+		if processed % 120 == 0 then
+			task.wait()
+		end
+	end
+
+	return changed
+end
+
+function hidePerformanceGardens()
+	local gardens = getGardens()
+	if not gardens then
+		return 0
+	end
+
+	local changed = 0
+	for _, plot in ipairs(gardens:GetChildren()) do
+		changed += hidePerformanceGardenPlot(plot)
+		task.wait()
+	end
+	return changed
+end
+
 function optimizePerformanceInstance(instance)
 	if not instance then
 		return 0
@@ -3482,6 +3534,8 @@ enablePerformanceMode = function()
 		workspace.Terrain.WaterTransparency = 1
 		workspace.Terrain.Decoration = false
 	end)
+
+	changed += hidePerformanceGardens()
 
 	if now - lastPerformanceTreeScanAt > 20 then
 		lastPerformanceTreeScanAt = now
