@@ -46,6 +46,10 @@ local CONFIG = {
 	maxDropScanPerRoot = 2500,
 	maxInventoryItems = 200,
 	lowRaritySeedLimit = 10,
+	maxGardenPlants = 500,
+	seedPlacementMode = "Farm Corner",
+	undergroundStacking = false,
+	savedPlantPosition = nil,
 	selectedSeed = "",
 	plantRadius = 18,
 	webhookUrl = "",
@@ -148,6 +152,10 @@ local function loadConfig()
 		"buyInterval",
 		"shovelInterval",
 		"lowRaritySeedLimit",
+		"maxGardenPlants",
+		"seedPlacementMode",
+		"undergroundStacking",
+		"savedPlantPosition",
 		"selectedSeed",
 		"plantRadius",
 		"webhookUrl",
@@ -198,6 +206,10 @@ saveConfig = function()
 			buyInterval = CONFIG.buyInterval,
 			shovelInterval = CONFIG.shovelInterval,
 			lowRaritySeedLimit = CONFIG.lowRaritySeedLimit,
+			maxGardenPlants = CONFIG.maxGardenPlants,
+			seedPlacementMode = CONFIG.seedPlacementMode,
+			undergroundStacking = CONFIG.undergroundStacking,
+			savedPlantPosition = CONFIG.savedPlantPosition,
 			selectedSeed = CONFIG.selectedSeed,
 			plantRadius = CONFIG.plantRadius,
 			webhookUrl = CONFIG.webhookUrl,
@@ -2381,6 +2393,21 @@ local function countPlacedSeed(seedName)
 	return count
 end
 
+local function countGardenPlants()
+	local count = 0
+	for _, root in ipairs(getOwnGardenRoots()) do
+		local plants = root:FindFirstChild("Plants") or root:FindFirstChild("Crops")
+		if plants then
+			for _, child in ipairs(plants:GetChildren()) do
+				if child:IsA("Model") or child:IsA("Folder") or child:IsA("BasePart") then
+					count += 1
+				end
+			end
+		end
+	end
+	return count
+end
+
 local function canPlaceSeed(seedName)
 	if selectedSeeds[seedName] then
 		return true
@@ -2402,10 +2429,30 @@ local function getSeedPlantPosition(index, center)
 	end
 
 	local step = math.max(index or 1, 1)
-	local angle = step * 2.399963229728653
-	local radius = math.min(CONFIG.plantRadius, 2.75 + math.sqrt(step) * 2.15)
-	local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * radius
 	local basePosition = center or root.Position
+	local offset
+
+	if CONFIG.seedPlacementMode == "Saved Position" and type(CONFIG.savedPlantPosition) == "table" then
+		basePosition = Vector3.new(
+			tonumber(CONFIG.savedPlantPosition.x) or basePosition.X,
+			tonumber(CONFIG.savedPlantPosition.y) or basePosition.Y,
+			tonumber(CONFIG.savedPlantPosition.z) or basePosition.Z
+		)
+		offset = Vector3.new(0, CONFIG.undergroundStacking and (-0.05 * (step - 1)) or (0.03 * (step - 1)), 0)
+	elseif CONFIG.seedPlacementMode == "Farm Corner" then
+		local direction = Vector3.new((step % 2 == 0) and 1 or -1, 0, (math.floor(step / 2) % 2 == 0) and 1 or -1)
+		local ring = math.ceil(math.sqrt(step))
+		local row = (step - 1) % ring
+		local column = math.floor((step - 1) / ring)
+		local corner = Vector3.new(direction.X * CONFIG.plantRadius, 0, direction.Z * CONFIG.plantRadius)
+		offset = corner - Vector3.new(direction.X * row * 3.2, 0, direction.Z * column * 3.2)
+	else
+		local rng = Random.new()
+		local angle = rng:NextNumber(0, math.pi * 2)
+		local radius = math.sqrt(rng:NextNumber()) * CONFIG.plantRadius
+		offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * radius
+	end
+
 	local origin = basePosition + offset + Vector3.new(0, 12, 0)
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
@@ -2413,7 +2460,11 @@ local function getSeedPlantPosition(index, center)
 
 	local result = workspace:Raycast(origin, Vector3.new(0, -80, 0), params)
 	if result then
-		return result.Position
+		local position = result.Position
+		if CONFIG.seedPlacementMode == "Saved Position" and CONFIG.undergroundStacking then
+			position += Vector3.new(0, -0.35 - (step * 0.03), 0)
+		end
+		return position
 	end
 
 	return basePosition + offset
@@ -3267,6 +3318,14 @@ function plantSeed()
 	local missing = 0
 	local readySeeds = {}
 	local selectedList = getSelectedSeedList()
+	local gardenPlantCount = countGardenPlants()
+
+	if gardenPlantCount >= CONFIG.maxGardenPlants then
+		stats.seedsSkippedLimit += 1
+		updateStatsUI()
+		setStatus(("Seed placer: garden plant limit reached (%d/%d)"):format(gardenPlantCount, CONFIG.maxGardenPlants))
+		return
+	end
 
 	for _, seedName in ipairs(selectedList) do
 		if not isEnabled("seedPlacer") then
@@ -3334,7 +3393,7 @@ function plantSeed()
 				end)
 
 				planted += 1
-				if planted >= CONFIG.maxSeedPlantPerTick then
+				if planted >= CONFIG.maxSeedPlantPerTick or gardenPlantCount + planted >= CONFIG.maxGardenPlants then
 					break
 				end
 				task.wait()
@@ -4310,6 +4369,25 @@ local function makeSectionLabel(text, order)
 	}, content)
 end
 
+local function makeCommandButton(label, order, onClick)
+	local button = make("TextButton", {
+		Name = string.gsub(label, "%s+", "") .. "Button",
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(34, 41, 42),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = label,
+		TextColor3 = Color3.fromRGB(235, 244, 233),
+		TextSize = 12,
+		TextWrapped = true,
+		Size = UDim2.new(1, 0, 0, 28),
+		LayoutOrder = order,
+	}, content)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
+	button.Activated:Connect(onClick)
+	return button
+end
+
 makeSectionLabel("Priority", 1)
 makeToggle("Auto Buy Pets", "autoBuyPets", 2)
 makeToggle("Collect Gold/Rainbow Drops", "autoCollectRainbowSeeds", 3)
@@ -4318,14 +4396,54 @@ makeToggle("Fruit Collector", "fruitCollector", 5)
 makeToggle("Teleport To Fruit", "collectTeleport", 6)
 makeToggle("Seed Placer", "seedPlacer", 7)
 makeToggle("Auto Shovel Plants", "autoShovel", 8)
-makeToggle("Auto Sell Inventory", "autoSell", 9)
-makeToggle("Sell When Backpack Full", "sellWhenFull", 10)
-makeSectionLabel("Shops", 11)
-makeToggle("Auto Buy Seeds", "autoBuySeeds", 12)
-makeToggle("Use Seed Shop", "seedShopEnabled", 13)
-makeToggle("Auto Buy Gear", "autoBuyGear", 14)
-makeToggle("Use Gear Shop", "gearShopEnabled", 15)
-makeToggle("Performance Mode", "performanceMode", 16)
+local placementModes = { "Farm Corner", "Random", "Saved Position" }
+local placementButton
+placementButton = makeCommandButton("Placement Mode: " .. CONFIG.seedPlacementMode, 9, function()
+	local currentIndex = 1
+	for index, mode in ipairs(placementModes) do
+		if mode == CONFIG.seedPlacementMode then
+			currentIndex = index
+			break
+		end
+	end
+	CONFIG.seedPlacementMode = placementModes[(currentIndex % #placementModes) + 1]
+	placementButton.Text = "Placement Mode: " .. CONFIG.seedPlacementMode
+	saveConfig()
+	setStatus("Seed placement mode: " .. CONFIG.seedPlacementMode)
+end)
+makeCommandButton("Save Plant Position", 10, function()
+	local root = getRoot()
+	if root then
+		CONFIG.savedPlantPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
+		CONFIG.seedPlacementMode = "Saved Position"
+		placementButton.Text = "Placement Mode: " .. CONFIG.seedPlacementMode
+		saveConfig()
+		setStatus("Saved current position for seed placement")
+	end
+end)
+makeCommandButton("Underground Stacking: " .. (CONFIG.undergroundStacking and "ON" or "OFF"), 11, function()
+	CONFIG.undergroundStacking = not CONFIG.undergroundStacking
+	saveConfig()
+	setStatus("Underground stacking " .. (CONFIG.undergroundStacking and "enabled" or "disabled"))
+	buildUI()
+end)
+makeCommandButton(("Max Garden Plants: %d"):format(CONFIG.maxGardenPlants), 12, function()
+	CONFIG.maxGardenPlants += 50
+	if CONFIG.maxGardenPlants > 1000 then
+		CONFIG.maxGardenPlants = 100
+	end
+	saveConfig()
+	setStatus(("Max garden plants set to %d"):format(CONFIG.maxGardenPlants))
+	buildUI()
+end)
+makeToggle("Auto Sell Inventory", "autoSell", 13)
+makeToggle("Sell When Backpack Full", "sellWhenFull", 14)
+makeSectionLabel("Shops", 15)
+makeToggle("Auto Buy Seeds", "autoBuySeeds", 16)
+makeToggle("Use Seed Shop", "seedShopEnabled", 17)
+makeToggle("Auto Buy Gear", "autoBuyGear", 18)
+makeToggle("Use Gear Shop", "gearShopEnabled", 19)
+makeToggle("Performance Mode", "performanceMode", 20)
 
 local webhookBox = make("TextBox", {
 	Name = "WebhookUrl",
@@ -4339,7 +4457,7 @@ local webhookBox = make("TextBox", {
 	TextSize = 12,
 	TextTruncate = Enum.TextTruncate.AtEnd,
 	Size = UDim2.new(1, 0, 0, 30),
-	LayoutOrder = 17,
+	LayoutOrder = 21,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, webhookBox)
 make("UIPadding", {
@@ -4362,7 +4480,7 @@ local statsTitle = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 18,
+	LayoutOrder = 22,
 }, content)
 
 local statsFrame = make("Frame", {
@@ -4370,7 +4488,7 @@ local statsFrame = make("Frame", {
 	BackgroundColor3 = Color3.fromRGB(14, 18, 19),
 	BorderSizePixel = 0,
 	Size = UDim2.new(1, 0, 0, 128),
-	LayoutOrder = 19,
+	LayoutOrder = 23,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, statsFrame)
 make("UIPadding", {
@@ -4421,7 +4539,7 @@ local selectedSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 20,
+	LayoutOrder = 24,
 }, content)
 
 local seedRow = make("ScrollingFrame", {
@@ -4432,7 +4550,7 @@ local seedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 22,
+	LayoutOrder = 26,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4445,7 +4563,7 @@ local seedButtons = {}
 local seedButtonCount = 0
 local seedFilterText = ""
 
-makeSelectorSearch(content, 21, "Search seeds to buy", function(text)
+makeSelectorSearch(content, 25, "Search seeds to buy", function(text)
 	seedFilterText = text
 	refreshSelectorFilter(seedButtons, seedNames, seedFilterText, seedRow, 2)
 end)
@@ -4585,7 +4703,7 @@ local shovelSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 23,
+	LayoutOrder = 27,
 }, content)
 
 local shovelSeedRow = make("ScrollingFrame", {
@@ -4596,7 +4714,7 @@ local shovelSeedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 25,
+	LayoutOrder = 28,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4609,7 +4727,7 @@ local shovelSeedButtons = {}
 local shovelSeedButtonCount = 0
 local shovelSeedFilterText = ""
 
-makeSelectorSearch(content, 24, "Search seeds to shovel", function(text)
+makeSelectorSearch(content, 29, "Search seeds to shovel", function(text)
 	shovelSeedFilterText = text
 	refreshSelectorFilter(shovelSeedButtons, seedNames, shovelSeedFilterText, shovelSeedRow, 2)
 end)
@@ -4697,7 +4815,7 @@ local selectedGearLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 26,
+	LayoutOrder = 30,
 }, content)
 
 local gearRow = make("ScrollingFrame", {
@@ -4708,7 +4826,7 @@ local gearRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 28,
+	LayoutOrder = 32,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4721,7 +4839,7 @@ local gearButtons = {}
 local gearButtonCount = 0
 local gearFilterText = ""
 
-makeSelectorSearch(content, 27, "Search gear to buy", function(text)
+makeSelectorSearch(content, 31, "Search gear to buy", function(text)
 	gearFilterText = text
 	refreshSelectorFilter(gearButtons, gearNames, gearFilterText, gearRow, 2)
 end)
@@ -4854,7 +4972,7 @@ local selectedPetLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 29,
+	LayoutOrder = 33,
 }, content)
 
 local petRow = make("ScrollingFrame", {
@@ -4865,7 +4983,7 @@ local petRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 31,
+	LayoutOrder = 35,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4878,7 +4996,7 @@ local petButtons = {}
 local petButtonCount = 0
 local petFilterText = ""
 
-makeSelectorSearch(content, 30, "Search pets to buy", function(text)
+makeSelectorSearch(content, 34, "Search pets to buy", function(text)
 	petFilterText = text
 	refreshSelectorFilter(petButtons, petNames, petFilterText, petRow, 2)
 end)
