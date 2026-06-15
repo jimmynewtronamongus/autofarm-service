@@ -3327,14 +3327,16 @@ function autoCollectRainbowSeeds()
 	setStatus(("Gold/rainbow drops: collected %d/%d target(s)"):format(checked, #targets))
 end
 
-local performanceOptimized = setmetatable({}, { __mode = "k" })
-local performanceHidden = setmetatable({}, { __mode = "k" })
-local performanceWatcherConnected = false
-local performanceQueue = {}
-local performanceQueueHead = 1
-local performanceQueueRunning = false
-local lastPerformanceTreeScanAt = 0
-local lastPerformanceGardenHideAt = 0
+local performanceState = {
+	optimized = setmetatable({}, { __mode = "k" }),
+	hidden = setmetatable({}, { __mode = "k" }),
+	watcherConnected = false,
+	queue = {},
+	queueHead = 1,
+	queueRunning = false,
+	lastTreeScanAt = 0,
+	lastGardenHideAt = 0,
+}
 
 function isLaggyEffectInstance(instance)
 	return instance:IsA("ParticleEmitter")
@@ -3362,12 +3364,12 @@ end
 
 function disableLaggyEffect(instance)
 	local changed = 0
-	if not instance or performanceOptimized[instance] then
+	if not instance or performanceState.optimized[instance] then
 		return changed
 	end
 
 	if isLaggyEffectInstance(instance) then
-		performanceOptimized[instance] = true
+		performanceState.optimized[instance] = true
 		pcall(function()
 			if instance:IsA("Sound") then
 				instance.Volume = 0
@@ -3391,7 +3393,7 @@ function disableLaggyEffect(instance)
 		or instance:IsA("DepthOfFieldEffect")
 		or instance:IsA("SunRaysEffect")
 	then
-		performanceOptimized[instance] = true
+		performanceState.optimized[instance] = true
 		pcall(function()
 			instance.Enabled = false
 		end)
@@ -3462,21 +3464,21 @@ function hidePerformanceTree(instance, hidePrompts)
 end
 
 function hidePerformanceVisual(instance, hidePrompts)
-	if not instance or performanceHidden[instance] then
+	if not instance or performanceState.hidden[instance] then
 		return 0
 	end
 
 	local changed = 0
 	changed += disableLaggyEffect(instance)
 	if instance:IsA("BasePart") then
-		performanceHidden[instance] = true
+		performanceState.hidden[instance] = true
 		pcall(function()
 			instance.LocalTransparencyModifier = 1
 			instance.CastShadow = false
 		end)
 		changed = 1
 	elseif instance:IsA("Decal") or instance:IsA("Texture") then
-		performanceHidden[instance] = true
+		performanceState.hidden[instance] = true
 		pcall(function()
 			instance.Transparency = 1
 		end)
@@ -3489,13 +3491,13 @@ function hidePerformanceVisual(instance, hidePrompts)
 		or instance:IsA("Handles")
 		or instance:IsA("ArcHandles")
 	then
-		performanceHidden[instance] = true
+		performanceState.hidden[instance] = true
 		pcall(function()
 			instance.Enabled = false
 		end)
 		changed = 1
 	elseif hidePrompts and instance:IsA("ProximityPrompt") then
-		performanceHidden[instance] = true
+		performanceState.hidden[instance] = true
 		pcall(function()
 			instance.Enabled = false
 		end)
@@ -3586,17 +3588,17 @@ function optimizePerformanceInstance(instance)
 		return changed
 	end
 
-	if performanceOptimized[instance] then
+	if performanceState.optimized[instance] then
 		return changed
 	end
 
 	changed += disableLaggyEffect(instance)
-	if performanceOptimized[instance] then
+	if performanceState.optimized[instance] then
 		return changed
 	end
 
 	if instance:IsA("BasePart") then
-		performanceOptimized[instance] = true
+		performanceState.optimized[instance] = true
 		pcall(function()
 			instance.Material = Enum.Material.SmoothPlastic
 			instance.Reflectance = 0
@@ -3607,7 +3609,7 @@ function optimizePerformanceInstance(instance)
 		end)
 		changed = 1
 	elseif instance:IsA("Decal") or instance:IsA("Texture") then
-		performanceOptimized[instance] = true
+		performanceState.optimized[instance] = true
 		pcall(function()
 			instance.Transparency = 1
 		end)
@@ -3620,13 +3622,13 @@ function optimizePerformanceInstance(instance)
 		or instance:IsA("Handles")
 		or instance:IsA("ArcHandles")
 	then
-		performanceOptimized[instance] = true
+		performanceState.optimized[instance] = true
 		pcall(function()
 			instance.Enabled = false
 		end)
 		changed = 1
 	elseif instance:IsA("Animator") then
-		performanceOptimized[instance] = true
+		performanceState.optimized[instance] = true
 		pcall(function()
 			for _, track in ipairs(instance:GetPlayingAnimationTracks()) do
 				track:Stop(0)
@@ -3652,44 +3654,44 @@ function optimizePerformanceTree(root, budget)
 end
 
 function connectPerformanceWatcher()
-	if performanceWatcherConnected then
+	if performanceState.watcherConnected then
 		return
 	end
 
-	performanceWatcherConnected = true
+	performanceState.watcherConnected = true
 	workspace.DescendantAdded:Connect(function(descendant)
 		if state.performanceMode then
-			if #performanceQueue - performanceQueueHead < 800 then
-				performanceQueue[#performanceQueue + 1] = descendant
+			if #performanceState.queue - performanceState.queueHead < 800 then
+				performanceState.queue[#performanceState.queue + 1] = descendant
 			end
-			if not performanceQueueRunning then
-				performanceQueueRunning = true
+			if not performanceState.queueRunning then
+				performanceState.queueRunning = true
 				task.spawn(function()
-					while state.performanceMode and performanceQueueHead <= #performanceQueue do
+					while state.performanceMode and performanceState.queueHead <= #performanceState.queue do
 						for _ = 1, 18 do
-							local item = performanceQueue[performanceQueueHead]
-							performanceQueue[performanceQueueHead] = nil
-							performanceQueueHead += 1
+							local item = performanceState.queue[performanceState.queueHead]
+							performanceState.queue[performanceState.queueHead] = nil
+							performanceState.queueHead += 1
 							if not item then
 								break
 							end
 							optimizePerformanceInstance(item)
 						end
-						if performanceQueueHead > 300 then
+						if performanceState.queueHead > 300 then
 							local compacted = {}
-							for index = performanceQueueHead, #performanceQueue do
-								compacted[#compacted + 1] = performanceQueue[index]
+							for index = performanceState.queueHead, #performanceState.queue do
+								compacted[#compacted + 1] = performanceState.queue[index]
 							end
-							performanceQueue = compacted
-							performanceQueueHead = 1
+							performanceState.queue = compacted
+							performanceState.queueHead = 1
 						end
 						task.wait(0.15)
 					end
-					if performanceQueueHead > #performanceQueue then
-						performanceQueue = {}
-						performanceQueueHead = 1
+					if performanceState.queueHead > #performanceState.queue then
+						performanceState.queue = {}
+						performanceState.queueHead = 1
 					end
-					performanceQueueRunning = false
+					performanceState.queueRunning = false
 				end)
 			end
 		end
@@ -3732,13 +3734,13 @@ enablePerformanceMode = function()
 		workspace.Terrain.Decoration = false
 	end)
 
-	if now - lastPerformanceGardenHideAt > 5 then
-		lastPerformanceGardenHideAt = now
+	if now - performanceState.lastGardenHideAt > 5 then
+		performanceState.lastGardenHideAt = now
 		changed += hidePerformanceGardens()
 	end
 
-	if now - lastPerformanceTreeScanAt > 20 then
-		lastPerformanceTreeScanAt = now
+	if now - performanceState.lastTreeScanAt > 20 then
+		performanceState.lastTreeScanAt = now
 		changed += optimizePerformanceTree(workspace, 100)
 	end
 
