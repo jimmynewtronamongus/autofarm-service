@@ -2520,6 +2520,27 @@ function sellThroughStevenFallback()
 	return actions
 end
 
+function moveToStevenForSell()
+	local prompt = findSellPrompt()
+	if not prompt then
+		return false
+	end
+
+	local part = getPromptPart(prompt)
+	if not part then
+		return false
+	end
+
+	local root = getRoot()
+	local maxDistance = prompt.MaxActivationDistance or 10
+	if not root or (root.Position - part.Position).Magnitude > math.max(maxDistance - 2, 6) then
+		teleportToPart(part, 3)
+		task.wait(0.15)
+	end
+
+	return true
+end
+
 function collectFruit()
 	if not isEnabled("fruitCollector") then
 		return
@@ -4336,19 +4357,22 @@ function autoSell(force)
 	local beforeSheckles = refreshCurrencyStats(true)
 	local farmedBeforeSell = stats.shecklesFarmed or 0
 	local actions = 0
+	local movedToSteven = moveToStevenForSell()
 	for attempt = 1, 3 do
 		if not force and not isEnabled("autoSell") then
 			return
 		end
 
-		for _, packetName in ipairs({ "AskBidAll", "PreviewSellAll", "GetFruitBid" }) do
-			local ok, count = sendExactPacket(packetName)
-			if ok then
-				actions += count or 1
-			end
+		if attempt > 1 and not movedToSteven then
+			movedToSteven = moveToStevenForSell()
 		end
-		task.wait(0.05)
-		local ok, count = sendExactPacket("SellAll")
+
+		local ok, count = sendExactPacket("PreviewSellAll")
+		if ok then
+			actions += count or 1
+		end
+		task.wait(0.08)
+		ok, count = sendExactPacket("SellAll")
 		if ok then
 			actions += count or 1
 		end
@@ -4367,14 +4391,6 @@ function autoSell(force)
 		for _, tool in ipairs(sellableTools) do
 			if not tool or not tool.Parent then
 				continue
-			end
-			ok, count = sendExactPacket("AskBid", tool)
-			if ok then
-				actions += count or 1
-			end
-			ok, count = sendExactPacket("GetFruitBid", tool)
-			if ok then
-				actions += count or 1
 			end
 			ok, count = sendExactPacket("SellItem", tool)
 			if ok then
@@ -4404,7 +4420,7 @@ function autoSell(force)
 			break
 		end
 
-		if attempt == 2 then
+		if attempt == 2 and movedToSteven then
 			actions += sellThroughStevenFallback()
 			task.wait(0.35)
 			currentInventoryCount = countInventoryTools()
