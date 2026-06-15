@@ -21,6 +21,7 @@ local CONFIG = {
 	collectInterval = 0.22,
 	plantInterval = 0.45,
 	sellInterval = 12.0,
+	sellWhenFullInterval = 1.5,
 	buyInterval = 1.0,
 	rainbowCollectInterval = 2.5,
 	petBuyInterval = 0.75,
@@ -60,6 +61,7 @@ local state = {
 	seedPlacer = false,
 	autoShovel = false,
 	autoSell = false,
+	sellWhenFull = true,
 	autoBuySeeds = false,
 	seedShopEnabled = true,
 	autoBuyGear = false,
@@ -67,6 +69,7 @@ local state = {
 	autoCollectRainbowSeeds = false,
 	autoBuyPets = false,
 	performanceMode = false,
+	hidePlants = false,
 	lastStatus = "Ready",
 }
 
@@ -142,6 +145,7 @@ local function loadConfig()
 
 	copyKnownValues(decoded.config, CONFIG, {
 		"sellInterval",
+		"sellWhenFullInterval",
 		"buyInterval",
 		"shovelInterval",
 		"lowRaritySeedLimit",
@@ -155,6 +159,7 @@ local function loadConfig()
 		"seedPlacer",
 		"autoShovel",
 		"autoSell",
+		"sellWhenFull",
 		"autoBuySeeds",
 		"seedShopEnabled",
 		"autoBuyGear",
@@ -162,6 +167,7 @@ local function loadConfig()
 		"autoCollectRainbowSeeds",
 		"autoBuyPets",
 		"performanceMode",
+		"hidePlants",
 	})
 
 	selectedSeeds = copyMap(decoded.selectedSeeds)
@@ -187,6 +193,7 @@ saveConfig = function()
 		version = 1,
 		config = {
 			sellInterval = CONFIG.sellInterval,
+			sellWhenFullInterval = CONFIG.sellWhenFullInterval,
 			buyInterval = CONFIG.buyInterval,
 			shovelInterval = CONFIG.shovelInterval,
 			lowRaritySeedLimit = CONFIG.lowRaritySeedLimit,
@@ -200,6 +207,7 @@ saveConfig = function()
 			seedPlacer = state.seedPlacer,
 			autoShovel = state.autoShovel,
 			autoSell = state.autoSell,
+			sellWhenFull = state.sellWhenFull,
 			autoBuySeeds = state.autoBuySeeds,
 			seedShopEnabled = state.seedShopEnabled,
 			autoBuyGear = state.autoBuyGear,
@@ -207,6 +215,7 @@ saveConfig = function()
 			autoCollectRainbowSeeds = state.autoCollectRainbowSeeds,
 			autoBuyPets = state.autoBuyPets,
 			performanceMode = state.performanceMode,
+			hidePlants = state.hidePlants,
 		},
 		selectedSeeds = selectedSeeds,
 		selectedShovelSeeds = selectedShovelSeeds,
@@ -229,6 +238,7 @@ local configLoaded = loadConfig()
 local webhookSentAt = {}
 local getStockItemsFolder
 local getShopStockAmount
+local getShopPriceAmount
 
 local function getRequestFunction()
 	return (syn and syn.request)
@@ -436,10 +446,13 @@ local function countEnabledToggles()
 		"seedPlacer",
 		"autoShovel",
 		"autoSell",
+		"sellWhenFull",
 		"autoBuySeeds",
 		"autoBuyGear",
 		"autoCollectRainbowSeeds",
 		"autoBuyPets",
+		"performanceMode",
+		"hidePlants",
 	}) do
 		if state[key] then
 			count += 1
@@ -585,6 +598,24 @@ getShopStockAmount = function(shopName, itemName)
 	end
 
 	return 0
+end
+
+getShopPriceAmount = function(shopName, itemName)
+	local items = getStockItemsFolder and getStockItemsFolder(shopName)
+	local stockItem = items and items:FindFirstChild(itemName)
+	if not stockItem then
+		return nil
+	end
+
+	return getNumericFromInstance(stockItem, {
+		"Price",
+		"Cost",
+		"Value",
+		"Sheckles",
+		"Coins",
+		"BuyPrice",
+		"CurrentPrice",
+	})
 end
 
 local function getSeedMetadataValue(seedName)
@@ -870,6 +901,7 @@ local teleportToPart
 local teleportToModelOrPart
 local isInventorySeedTool
 local enablePerformanceMode
+local enableHidePlants
 
 local function getCachedDescendants(key, root, maxAge)
 	local now = os.clock()
@@ -1176,17 +1208,21 @@ workspace.ChildAdded:Connect(function(child)
 		invalidateOwnGardenCache()
 		child.ChildAdded:Connect(invalidateOwnGardenCache)
 		child.ChildRemoved:Connect(invalidateOwnGardenCache)
-		if state.performanceMode then
+		if state.performanceMode or state.hidePlants then
 			task.defer(function()
-				if enablePerformanceMode then
+				if state.performanceMode and enablePerformanceMode then
 					enablePerformanceMode()
+				elseif enableHidePlants then
+					enableHidePlants()
 				end
 			end)
 		end
-	elseif child.Name == "Map" and state.performanceMode then
+	elseif child.Name == "Map" and (state.performanceMode or state.hidePlants) then
 		task.defer(function()
-			if enablePerformanceMode then
+			if state.performanceMode and enablePerformanceMode then
 				enablePerformanceMode()
+			elseif enableHidePlants then
+				enableHidePlants()
 			end
 		end)
 	end
@@ -3066,7 +3102,14 @@ function optimizePerformanceInstance(instance)
 		return 0
 	end
 
-	local changed = applyPerformanceGardenHiding(instance)
+	local changed = 0
+	if state.performanceMode or state.hidePlants then
+		changed = applyPerformanceGardenHiding(instance)
+	end
+	if not state.performanceMode then
+		return changed
+	end
+
 	if performanceOptimized[instance] then
 		return changed
 	end
@@ -3134,10 +3177,20 @@ function connectPerformanceWatcher()
 
 	performanceWatcherConnected = true
 	workspace.DescendantAdded:Connect(function(descendant)
-		if state.performanceMode then
+		if state.performanceMode or state.hidePlants then
 			optimizePerformanceInstance(descendant)
 		end
 	end)
+end
+
+enableHidePlants = function()
+	connectPerformanceWatcher()
+	local changed = 0
+	local gardens = getGardens()
+	if gardens then
+		changed += optimizePerformanceTree(gardens, 250)
+	end
+	setStatus(("Hide plants: hidden %d garden object(s)"):format(changed))
 end
 
 enablePerformanceMode = function()
@@ -3163,7 +3216,7 @@ enablePerformanceMode = function()
 end
 
 function schedulePerformanceModeRestore()
-	if not state.performanceMode then
+	if not state.performanceMode and not state.hidePlants then
 		return
 	end
 
@@ -3174,6 +3227,8 @@ function schedulePerformanceModeRestore()
 			end
 			if state.performanceMode then
 				enablePerformanceMode()
+			elseif state.hidePlants then
+				enableHidePlants()
 			end
 		end
 	end)
@@ -3668,8 +3723,8 @@ function autoShovel()
 	setStatus(("Auto shovel: tried %d/%d matching plant(s)"):format(actions, #targets))
 end
 
-function autoSell()
-	if not isEnabled("autoSell") then
+function autoSell(force)
+	if not force and not isEnabled("autoSell") then
 		return
 	end
 
@@ -3681,7 +3736,7 @@ function autoSell()
 
 	local actions = 0
 	local stand = getPath(workspace, "Map.Stands.Sell.Part")
-	if not isEnabled("autoSell") then
+	if not force and not isEnabled("autoSell") then
 		return
 	end
 
@@ -3697,7 +3752,7 @@ function autoSell()
 	end
 
 	for _, packetName in ipairs({ "SellAll", "SellInventory", "PreviewSellAll" }) do
-		if not isEnabled("autoSell") then
+		if not force and not isEnabled("autoSell") then
 			return
 		end
 
@@ -3708,7 +3763,7 @@ function autoSell()
 	end
 
 	for _, tool in ipairs(sellableTools) do
-		if not isEnabled("autoSell") then
+		if not force and not isEnabled("autoSell") then
 			return
 		end
 
@@ -3729,7 +3784,7 @@ function autoSell()
 	end
 
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
-		if not isEnabled("autoSell") then
+		if not force and not isEnabled("autoSell") then
 			return
 		end
 
@@ -4220,6 +4275,8 @@ local function makeToggle(label, key, order)
 
 		if key == "performanceMode" and state[key] then
 			task.spawn(enablePerformanceMode)
+		elseif key == "hidePlants" and state[key] then
+			task.spawn(enableHidePlants)
 		end
 	end)
 end
@@ -4247,12 +4304,14 @@ makeToggle("Teleport To Fruit", "collectTeleport", 6)
 makeToggle("Seed Placer", "seedPlacer", 7)
 makeToggle("Auto Shovel Plants", "autoShovel", 8)
 makeToggle("Auto Sell Inventory", "autoSell", 9)
+makeToggle("Sell When Backpack Full", "sellWhenFull", 10)
 makeSectionLabel("Shops", 10)
 makeToggle("Auto Buy Seeds", "autoBuySeeds", 11)
 makeToggle("Use Seed Shop", "seedShopEnabled", 12)
 makeToggle("Auto Buy Gear", "autoBuyGear", 13)
 makeToggle("Use Gear Shop", "gearShopEnabled", 14)
 makeToggle("Performance Mode", "performanceMode", 15)
+makeToggle("Hide Plants", "hidePlants", 16)
 
 local webhookBox = make("TextBox", {
 	Name = "WebhookUrl",
@@ -4266,7 +4325,7 @@ local webhookBox = make("TextBox", {
 	TextSize = 12,
 	TextTruncate = Enum.TextTruncate.AtEnd,
 	Size = UDim2.new(1, 0, 0, 30),
-	LayoutOrder = 16,
+	LayoutOrder = 17,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, webhookBox)
 make("UIPadding", {
@@ -4288,7 +4347,7 @@ local statsTitle = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 17,
+	LayoutOrder = 18,
 }, content)
 
 local statsFrame = make("Frame", {
@@ -4296,7 +4355,7 @@ local statsFrame = make("Frame", {
 	BackgroundColor3 = Color3.fromRGB(14, 18, 19),
 	BorderSizePixel = 0,
 	Size = UDim2.new(1, 0, 0, 128),
-	LayoutOrder = 18,
+	LayoutOrder = 19,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, statsFrame)
 make("UIPadding", {
@@ -4347,7 +4406,7 @@ local selectedSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 19,
+	LayoutOrder = 20,
 }, content)
 
 local seedRow = make("ScrollingFrame", {
@@ -4358,7 +4417,7 @@ local seedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 21,
+	LayoutOrder = 22,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4371,7 +4430,7 @@ local seedButtons = {}
 local seedButtonCount = 0
 local seedFilterText = ""
 
-makeSelectorSearch(content, 20, "Search seeds to buy", function(text)
+makeSelectorSearch(content, 21, "Search seeds to buy", function(text)
 	seedFilterText = text
 	refreshSelectorFilter(seedButtons, seedNames, seedFilterText, seedRow, 2)
 end)
@@ -4511,7 +4570,7 @@ local shovelSeedLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 22,
+	LayoutOrder = 23,
 }, content)
 
 local shovelSeedRow = make("ScrollingFrame", {
@@ -4522,7 +4581,7 @@ local shovelSeedRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 24,
+	LayoutOrder = 25,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4535,7 +4594,7 @@ local shovelSeedButtons = {}
 local shovelSeedButtonCount = 0
 local shovelSeedFilterText = ""
 
-makeSelectorSearch(content, 23, "Search seeds to shovel", function(text)
+makeSelectorSearch(content, 24, "Search seeds to shovel", function(text)
 	shovelSeedFilterText = text
 	refreshSelectorFilter(shovelSeedButtons, seedNames, shovelSeedFilterText, shovelSeedRow, 2)
 end)
@@ -4623,7 +4682,7 @@ local selectedGearLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 25,
+	LayoutOrder = 26,
 }, content)
 
 local gearRow = make("ScrollingFrame", {
@@ -4634,7 +4693,7 @@ local gearRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 27,
+	LayoutOrder = 28,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4647,7 +4706,7 @@ local gearButtons = {}
 local gearButtonCount = 0
 local gearFilterText = ""
 
-makeSelectorSearch(content, 26, "Search gear to buy", function(text)
+makeSelectorSearch(content, 27, "Search gear to buy", function(text)
 	gearFilterText = text
 	refreshSelectorFilter(gearButtons, gearNames, gearFilterText, gearRow, 2)
 end)
@@ -4659,7 +4718,16 @@ local function refreshGearButton(gearName)
 	end
 
 	local enabled = selectedGears[gearName] == true
-	button.Text = (enabled and "[x] " or "[ ] ") .. gearName
+	local price = getShopPriceAmount and getShopPriceAmount("GearShop", gearName)
+	local stock = getShopStockAmount and getShopStockAmount("GearShop", gearName) or 0
+	local suffix = ""
+	if price and price > 0 then
+		suffix = (" - $%s"):format(tostring(math.floor(price)))
+	end
+	if stock > 0 then
+		suffix = suffix .. (" [%d]"):format(stock)
+	end
+	button.Text = (enabled and "[x] " or "[ ] ") .. gearName .. suffix
 	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(52, 60, 54)
 end
 
@@ -4771,7 +4839,7 @@ local selectedPetLabel = make("TextLabel", {
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 15),
-	LayoutOrder = 28,
+	LayoutOrder = 29,
 }, content)
 
 local petRow = make("ScrollingFrame", {
@@ -4782,7 +4850,7 @@ local petRow = make("ScrollingFrame", {
 	ScrollBarThickness = 4,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 66),
-	LayoutOrder = 30,
+	LayoutOrder = 31,
 }, content)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(6, 6),
@@ -4795,7 +4863,7 @@ local petButtons = {}
 local petButtonCount = 0
 local petFilterText = ""
 
-makeSelectorSearch(content, 29, "Search pets to buy", function(text)
+makeSelectorSearch(content, 30, "Search pets to buy", function(text)
 	petFilterText = text
 	refreshSelectorFilter(petButtons, petNames, petFilterText, petRow, 2)
 end)
@@ -4968,6 +5036,7 @@ timers = {
 	seedPlacer = 0,
 	autoShovel = 0,
 	autoSell = 0,
+	sellWhenFull = 0,
 	autoBuySeeds = 0,
 	autoBuyGear = 0,
 	autoCollectRainbowSeeds = 0,
@@ -5010,6 +5079,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	timers.seedPlacer = state.seedPlacer and (timers.seedPlacer + deltaTime) or 0
 	timers.autoShovel = state.autoShovel and (timers.autoShovel + deltaTime) or 0
 	timers.autoSell = state.autoSell and (timers.autoSell + deltaTime) or 0
+	timers.sellWhenFull = state.sellWhenFull and (timers.sellWhenFull + deltaTime) or 0
 	timers.autoBuySeeds = state.autoBuySeeds and (timers.autoBuySeeds + deltaTime) or 0
 	timers.autoBuyGear = state.autoBuyGear and (timers.autoBuyGear + deltaTime) or 0
 	timers.autoCollectRainbowSeeds = state.autoCollectRainbowSeeds and (timers.autoCollectRainbowSeeds + deltaTime) or 0
@@ -5056,6 +5126,15 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	if state.seedPlacer and timers.seedPlacer >= CONFIG.plantInterval and not movementLocked then
 		if tryRun("seedPlacer", plantSeed) then
 			timers.seedPlacer = 0
+		end
+	end
+
+	if state.sellWhenFull and timers.sellWhenFull >= CONFIG.sellWhenFullInterval and not movementLocked then
+		timers.sellWhenFull = 0
+		if refreshInventoryStats() then
+			tryRun("sellWhenFull", function()
+				autoSell(true)
+			end)
 		end
 	end
 
