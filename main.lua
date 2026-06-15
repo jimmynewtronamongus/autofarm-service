@@ -18,32 +18,32 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 local CONFIG = {
-	collectInterval = 0.45,
-	plantInterval = 0.9,
+	collectInterval = 0.65,
+	plantInterval = 1.1,
 	sellInterval = 12.0,
 	sellWhenFullInterval = 1.5,
 	buyInterval = 1.5,
-	rainbowCollectInterval = 3.5,
-	petBuyInterval = 1.25,
+	rainbowCollectInterval = 4.5,
+	petBuyInterval = 1.5,
 	cacheRefreshInterval = 25.0,
 	dropCacheRefreshInterval = 5.0,
 	inventoryRefreshInterval = 2.5,
-	guiInventoryRefreshInterval = 8.0,
-	maxFruitCollectPerTick = 35,
-	maxFruitScanPerRoot = 900,
-	fruitCacheRefreshInterval = 3.0,
-	maxFruitTargetsCached = 140,
-	maxFruitPromptFallbackPerTick = 5,
-	maxSeedPlantPerTick = 8,
-	maxSeedPlacementsPerTool = 4,
+	guiInventoryRefreshInterval = 20.0,
+	maxFruitCollectPerTick = 24,
+	maxFruitScanPerRoot = 550,
+	fruitCacheRefreshInterval = 4.0,
+	maxFruitTargetsCached = 90,
+	maxFruitPromptFallbackPerTick = 3,
+	maxSeedPlantPerTick = 5,
+	maxSeedPlacementsPerTool = 3,
 	seedCountCacheRefreshInterval = 45.0,
 	maxSeedBuyPerTick = 3,
 	seedBuyRemoteRepeats = 4,
 	shovelInterval = 0.35,
 	shovelHoldDuration = 3.1,
 	maxShovelPerTick = 1,
-	maxDropCollectPerTick = 4,
-	maxDropScanPerRoot = 800,
+	maxDropCollectPerTick = 3,
+	maxDropScanPerRoot = 450,
 	maxInventoryItems = 200,
 	lowRaritySeedLimit = 10,
 	maxGardenPlants = 500,
@@ -87,6 +87,10 @@ local petNames = {}
 local buyPetNames = {}
 
 local selectedPets = {}
+
+local plantPromptTextCache = setmetatable({}, { __mode = "k" })
+local shovelPromptCache = setmetatable({}, { __mode = "k" })
+local harvestPromptCache = setmetatable({}, { __mode = "k" })
 
 local saveConfig = function() end
 local setStatus = function() end
@@ -443,6 +447,9 @@ local petVariantWords = {
 local statusValue
 local statsLabels = {}
 local sessionStartedAt = os.clock()
+local lastStatusSetAt = 0
+local pendingStatusMessage
+local lastStatsUIUpdateAt = 0
 
 local stats = {
 	fruitTargetsChecked = 0,
@@ -464,9 +471,17 @@ local stats = {
 local running = {}
 
 setStatus = function(message)
-	state.lastStatus = tostring(message)
+	local text = tostring(message)
+	local now = os.clock()
+	state.lastStatus = text
 	if statusValue then
-		statusValue.Value = state.lastStatus
+		if now - lastStatusSetAt >= 0.35 then
+			lastStatusSetAt = now
+			statusValue.Value = text
+			pendingStatusMessage = nil
+		else
+			pendingStatusMessage = text
+		end
 	end
 end
 
@@ -805,6 +820,7 @@ local function getPacketModule()
 end
 
 local packetRemote
+local packetEntryCache = {}
 
 local function getPacketRemote()
 	if packetRemote and packetRemote.Parent then
@@ -896,7 +912,17 @@ end
 local function sendPacket(packetName, ...)
 	local packet = getPacketModule()
 	if type(packet) == "table" then
-		local entry = findPacketEntry(packet, packetName)
+		local entry = packetEntryCache[packetName]
+		if entry == nil then
+			entry = findPacketEntry(packet, packetName)
+			if entry == nil then
+				entry = false
+			end
+			packetEntryCache[packetName] = entry
+		end
+		if entry == false then
+			entry = nil
+		end
 		if tryPacketEntry(entry, ...) then
 			return true
 		end
@@ -965,6 +991,14 @@ local function getCachedDescendants(key, root, maxAge)
 	end
 
 	return cache[listKey]
+end
+
+local function maybeYieldScan(startedAt, budgetSeconds)
+	if os.clock() - startedAt >= (budgetSeconds or 0.012) then
+		task.wait()
+		return os.clock()
+	end
+	return startedAt
 end
 
 local function getMap()
@@ -1382,7 +1416,8 @@ local function refreshInventoryStats(force)
 
 	local count = countInventoryTools()
 	local capacity = CONFIG.maxInventoryItems
-	if force or now - inventoryCache.guiCheckedAt >= CONFIG.guiInventoryRefreshInterval then
+	local nearCapacity = count >= math.max(capacity - 15, 1)
+	if (force or nearCapacity) and now - inventoryCache.guiCheckedAt >= CONFIG.guiInventoryRefreshInterval then
 		inventoryCache.guiCheckedAt = now
 		inventoryCache.guiFull = guiShowsInventoryFull()
 	end
@@ -1400,6 +1435,17 @@ local function refreshInventoryStats(force)
 end
 
 local function updateStatsUI()
+	local now = os.clock()
+	if now - lastStatsUIUpdateAt < 0.75 then
+		return
+	end
+	lastStatsUIUpdateAt = now
+	if pendingStatusMessage and statusValue then
+		statusValue.Value = pendingStatusMessage
+		pendingStatusMessage = nil
+		lastStatusSetAt = now
+	end
+
 	local elapsedMinutes = math.max((os.clock() - sessionStartedAt) / 60, 0.01)
 	local fruitRate = math.floor((stats.fruitCollected / elapsedMinutes) + 0.5)
 	local freeSlots = math.max((stats.inventoryCapacity or CONFIG.maxInventoryItems) - (stats.inventoryItems or 0), 0)
@@ -1585,7 +1631,7 @@ local function getFruitPlantTarget(fruit)
 	return nil
 end
 
-local function collectFruitPacket(target)
+local function collectFruitPacket(target, heavy)
 	if not target then
 		return false
 	end
@@ -1600,28 +1646,37 @@ local function collectFruitPacket(target)
 		current = current.Parent
 	end
 
-	local plant = getFruitPlantTarget(fruit)
-	local tries = {
-		{ fruit },
-		{ fruit and fruit.Name },
-		{ target },
-		{ target and target.Name },
-		{ plant, fruit },
-		{ plant and plant.Name, fruit and fruit.Name },
-		{ plant and plant.Name, fruit },
-	}
-	local unpackArgs = table.unpack or unpack
+	if sendPacket("CollectFruit", fruit) then
+		return true
+	end
 
-	for _, args in ipairs(tries) do
-		local clean = {}
-		for _, value in ipairs(args) do
-			if value ~= nil then
-				table.insert(clean, value)
-			end
-		end
-		if #clean > 0 and sendPacket("CollectFruit", unpackArgs(clean)) then
-			return true
-		end
+	if not heavy then
+		return false
+	end
+
+	local plant = getFruitPlantTarget(fruit)
+	if fruit and sendPacket("CollectFruit", fruit.Name) then
+		return true
+	end
+
+	if target ~= fruit and sendPacket("CollectFruit", target) then
+		return true
+	end
+
+	if target ~= fruit and target and sendPacket("CollectFruit", target.Name) then
+		return true
+	end
+
+	if plant and sendPacket("CollectFruit", plant, fruit) then
+		return true
+	end
+
+	if plant and sendPacket("CollectFruit", plant.Name, fruit and fruit.Name) then
+		return true
+	end
+
+	if plant and sendPacket("CollectFruit", plant.Name, fruit) then
+		return true
 	end
 
 	return false
@@ -1729,7 +1784,7 @@ local function collectPrompt(prompt)
 
 	triggerPrompt(prompt, true)
 	if target ~= nil then
-		collectFruitPacket(target)
+		collectFruitPacket(target, true)
 	end
 
 	return collectionTookEffect(target or prompt, beforeInventoryCount)
@@ -1740,18 +1795,29 @@ local function getHarvestPromptInTarget(target)
 		return nil
 	end
 
+	local cached = harvestPromptCache[target]
+	if cached ~= nil then
+		if cached == false or (cached.Parent and cached:IsDescendantOf(workspace)) then
+			return cached ~= false and cached or nil
+		end
+		harvestPromptCache[target] = nil
+	end
+
 	if target:IsA("ProximityPrompt") and isUsableHarvestPrompt(target) then
+		harvestPromptCache[target] = target
 		return target
 	end
 
 	if target:IsA("Model") or target:IsA("BasePart") or target:IsA("Folder") then
 		for _, descendant in ipairs(target:GetDescendants()) do
 			if isUsableHarvestPrompt(descendant) then
+				harvestPromptCache[target] = descendant
 				return descendant
 			end
 		end
 	end
 
+	harvestPromptCache[target] = false
 	return nil
 end
 
@@ -1762,9 +1828,6 @@ local function collectFruitTarget(target)
 
 	local beforeInventoryCount = countInventoryTools()
 	collectFruitPacket(target)
-	sendPacket("HarvestFruit", target)
-	sendPacket("Collect", target)
-	sendPacket("Harvest", target)
 
 	local part = getTargetPart(target)
 	if part and state.collectTeleport then
@@ -1787,7 +1850,7 @@ local function collectFruitTarget(target)
 		collectPrompt(prompt)
 	end
 
-	collectFruitPacket(target)
+	collectFruitPacket(target, true)
 	sendPacket("HarvestFruit", target)
 	sendPacket("Collect", target)
 	sendPacket("Harvest", target)
@@ -1877,8 +1940,10 @@ local function rebuildFruitTargetCache(roots)
 		end
 
 		local scanned = 0
+		local scanStartedAt = os.clock()
 		local descendants = getCachedDescendants("fruitFast" .. index, root, CONFIG.fruitCacheRefreshInterval)
 		for _, descendant in ipairs(descendants) do
+			scanStartedAt = maybeYieldScan(scanStartedAt, 0.01)
 			if #targets >= CONFIG.maxFruitTargetsCached then
 				break
 			end
@@ -1901,8 +1966,10 @@ local function rebuildFruitTargetCache(roots)
 			end
 
 			local scanned = 0
+			local scanStartedAt = os.clock()
 			local descendants = getCachedDescendants("fruitFallback" .. index, root, CONFIG.fruitCacheRefreshInterval)
 			for _, descendant in ipairs(descendants) do
+				scanStartedAt = maybeYieldScan(scanStartedAt, 0.01)
 				if #targets >= CONFIG.maxFruitTargetsCached then
 					break
 				end
@@ -2028,12 +2095,12 @@ local function collectFruitEntryFast(entry)
 		fired = triggerPromptFast(prompt) or fired
 	end
 
-	if target then
-		fired = collectFruitPacket(target) or fired
-	end
-
 	if part then
 		fired = touchPart(part, state.collectTeleport) or fired
+	end
+
+	if target and not fired then
+		fired = collectFruitPacket(target, true) or fired
 	end
 
 	return fired
@@ -2054,9 +2121,7 @@ local function collectFruitEntryRemoteOnly(entry)
 		return false
 	end
 
-	local fired = collectFruitPacket(target)
-	fired = sendPacket("CollectFruit", target) or fired
-	return fired
+	return collectFruitPacket(target)
 end
 
 function triggerPrompt(prompt, skipTouch)
@@ -2966,7 +3031,9 @@ function autoCollectRainbowSeeds()
 		end
 
 		local scanned = 0
+		local scanStartedAt = os.clock()
 		for _, descendant in ipairs(getCachedDescendants("rainbow" .. rootIndex, root, CONFIG.dropCacheRefreshInterval)) do
+			scanStartedAt = maybeYieldScan(scanStartedAt, 0.01)
 			if not isEnabled("autoCollectRainbowSeeds") then
 				return
 			end
@@ -3053,6 +3120,7 @@ local performanceOptimized = setmetatable({}, { __mode = "k" })
 local performanceHidden = setmetatable({}, { __mode = "k" })
 local performanceWatcherConnected = false
 local performanceQueue = {}
+local performanceQueueHead = 1
 local performanceQueueRunning = false
 
 function isLaggyEffectInstance(instance)
@@ -3326,19 +3394,35 @@ function connectPerformanceWatcher()
 	performanceWatcherConnected = true
 	workspace.DescendantAdded:Connect(function(descendant)
 		if state.performanceMode then
-			table.insert(performanceQueue, descendant)
+			if #performanceQueue - performanceQueueHead < 800 then
+				performanceQueue[#performanceQueue + 1] = descendant
+			end
 			if not performanceQueueRunning then
 				performanceQueueRunning = true
 				task.spawn(function()
-					while state.performanceMode and #performanceQueue > 0 do
-						for _ = 1, 25 do
-							local item = table.remove(performanceQueue, 1)
+					while state.performanceMode and performanceQueueHead <= #performanceQueue do
+						for _ = 1, 18 do
+							local item = performanceQueue[performanceQueueHead]
+							performanceQueue[performanceQueueHead] = nil
+							performanceQueueHead += 1
 							if not item then
 								break
 							end
 							optimizePerformanceInstance(item)
 						end
+						if performanceQueueHead > 300 then
+							local compacted = {}
+							for index = performanceQueueHead, #performanceQueue do
+								compacted[#compacted + 1] = performanceQueue[index]
+							end
+							performanceQueue = compacted
+							performanceQueueHead = 1
+						end
 						task.wait(0.15)
+					end
+					if performanceQueueHead > #performanceQueue then
+						performanceQueue = {}
+						performanceQueueHead = 1
 					end
 					performanceQueueRunning = false
 				end)
@@ -3601,6 +3685,14 @@ function plantHasPromptText(plant, seedName)
 		return false
 	end
 
+	local seedCache = plantPromptTextCache[plant]
+	if not seedCache then
+		seedCache = {}
+		plantPromptTextCache[plant] = seedCache
+	elseif seedCache[seedName] ~= nil then
+		return seedCache[seedName]
+	end
+
 	local lowered = string.lower(seedName)
 	local compactSeed = string.gsub(lowered, "[%s_%-]", "")
 	for _, descendant in ipairs(plant:GetDescendants()) do
@@ -3608,11 +3700,13 @@ function plantHasPromptText(plant, seedName)
 			local text = string.lower((descendant.ObjectText or "") .. " " .. (descendant.ActionText or "") .. " " .. descendant.Name)
 			local compactText = string.gsub(text, "[%s_%-]", "")
 			if string.find(text, lowered, 1, true) or string.find(compactText, compactSeed, 1, true) then
+				seedCache[seedName] = true
 				return true
 			end
 		end
 	end
 
+	seedCache[seedName] = false
 	return false
 end
 
@@ -3686,6 +3780,14 @@ function getShovelPrompt(target)
 		return nil
 	end
 
+	local cached = shovelPromptCache[target]
+	if cached ~= nil then
+		if cached == false or (cached.Parent and cached:IsDescendantOf(workspace)) then
+			return cached ~= false and cached or nil
+		end
+		shovelPromptCache[target] = nil
+	end
+
 	if target:IsA("ProximityPrompt") then
 		local text = string.lower((target.ActionText or "") .. " " .. (target.ObjectText or "") .. " " .. target.Name)
 		if string.find(text, "shovel", 1, true)
@@ -3693,6 +3795,7 @@ function getShovelPrompt(target)
 			or string.find(text, "delete", 1, true)
 			or string.find(text, "dig", 1, true)
 		then
+			shovelPromptCache[target] = target
 			return target
 		end
 	end
@@ -3705,11 +3808,13 @@ function getShovelPrompt(target)
 				or string.find(text, "delete", 1, true)
 				or string.find(text, "dig", 1, true)
 			then
+				shovelPromptCache[target] = descendant
 				return descendant
 			end
 		end
 	end
 
+	shovelPromptCache[target] = false
 	return nil
 end
 
@@ -3853,7 +3958,9 @@ function autoShovel()
 	local targets = {}
 	local seen = {}
 	for index, root in ipairs(roots) do
+		local scanStartedAt = os.clock()
 		for _, descendant in ipairs(getCachedDescendants("shovelPlants" .. index, root, CONFIG.cacheRefreshInterval)) do
+			scanStartedAt = maybeYieldScan(scanStartedAt, 0.01)
 			if #targets >= CONFIG.maxShovelPerTick then
 				break
 			end
