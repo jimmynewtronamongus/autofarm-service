@@ -67,9 +67,7 @@ local state = {
 	autoSell = false,
 	sellWhenFull = true,
 	autoBuySeeds = false,
-	seedShopEnabled = true,
 	autoBuyGear = false,
-	gearShopEnabled = true,
 	autoCollectRainbowSeeds = false,
 	autoBuyPets = false,
 	performanceMode = false,
@@ -168,9 +166,7 @@ local function loadConfig()
 		"autoSell",
 		"sellWhenFull",
 		"autoBuySeeds",
-		"seedShopEnabled",
 		"autoBuyGear",
-		"gearShopEnabled",
 		"autoCollectRainbowSeeds",
 		"autoBuyPets",
 		"performanceMode",
@@ -222,9 +218,7 @@ saveConfig = function()
 			autoSell = state.autoSell,
 			sellWhenFull = state.sellWhenFull,
 			autoBuySeeds = state.autoBuySeeds,
-			seedShopEnabled = state.seedShopEnabled,
 			autoBuyGear = state.autoBuyGear,
-			gearShopEnabled = state.gearShopEnabled,
 			autoCollectRainbowSeeds = state.autoCollectRainbowSeeds,
 			autoBuyPets = state.autoBuyPets,
 			performanceMode = state.performanceMode,
@@ -3162,7 +3156,10 @@ end
 
 function isOwnPlantVisual(instance, plot)
 	local current = instance
-	while current and current ~= plot and current ~= workspace do
+	while current and current ~= workspace do
+		if current == plot then
+			return false
+		end
 		local parent = current.Parent
 		local parentName = parent and string.lower(parent.Name) or ""
 		if parentName == "plants"
@@ -3177,6 +3174,10 @@ function isOwnPlantVisual(instance, plot)
 		current = parent
 	end
 	return false
+end
+
+function hidePerformanceTree(instance, hidePrompts)
+	return hidePerformanceVisual(instance, hidePrompts)
 end
 
 function hidePerformanceVisual(instance, hidePrompts)
@@ -3231,12 +3232,12 @@ function applyPerformanceGardenHiding(instance)
 
 	if gardenPlotIsOwn(plot) then
 		if isOwnPlantVisual(instance, plot) then
-			return hidePerformanceVisual(instance, false)
+			return hidePerformanceTree(instance, false)
 		end
 		return 0
 	end
 
-	return hidePerformanceVisual(instance, true)
+	return hidePerformanceTree(instance, true)
 end
 
 function optimizePerformanceInstance(instance)
@@ -4028,11 +4029,6 @@ function buySeed()
 		return
 	end
 
-	if not state.seedShopEnabled then
-		setStatus("Auto buy: seed shop disabled")
-		return
-	end
-
 	local bought = 0
 	local attempts = 0
 	local lastMessage = "Auto buy: no seeds selected"
@@ -4106,11 +4102,6 @@ end
 
 function buyGear()
 	if not isEnabled("autoBuyGear") then
-		return
-	end
-
-	if not state.gearShopEnabled then
-		setStatus("Auto gear: gear shop disabled")
 		return
 	end
 
@@ -4541,10 +4532,8 @@ makeToggle("Auto Sell Inventory", "autoSell", 13)
 makeToggle("Sell When Backpack Full", "sellWhenFull", 14)
 makeSectionLabel("Shops", 15)
 makeToggle("Auto Buy Seeds", "autoBuySeeds", 16)
-makeToggle("Use Seed Shop", "seedShopEnabled", 17)
-makeToggle("Auto Buy Gear", "autoBuyGear", 18)
-makeToggle("Use Gear Shop", "gearShopEnabled", 19)
-makeToggle("Performance Mode", "performanceMode", 20)
+makeToggle("Auto Buy Gear", "autoBuyGear", 17)
+makeToggle("Performance Mode", "performanceMode", 18)
 
 local webhookBox = make("TextBox", {
 	Name = "WebhookUrl",
