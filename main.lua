@@ -2469,9 +2469,9 @@ function guiButtonText(button)
 	return string.lower(table.concat(parts, " "))
 end
 
-function clickSellButtons()
+function clickSellInventoryButton()
 	local ownGui = playerGui:FindFirstChild("GardenAutomationGui")
-	local clicked = 0
+	local fallbackButton
 	local scanned = 0
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
 		if scanned >= 160 then
@@ -2480,19 +2480,23 @@ function clickSellButtons()
 		if descendant:IsA("GuiButton") and descendant.Visible and (not ownGui or not descendant:IsDescendantOf(ownGui)) then
 			scanned += 1
 			local text = guiButtonText(descendant)
-			if string.find(text, "sell all", 1, true)
-				or string.find(text, "sell inventory", 1, true)
-				or string.find(text, "sell my", 1, true)
-				or string.find(text, "i want to sell", 1, true)
+			if string.find(text, "sell inventory", 1, true) then
+				return activateButton(descendant) and 1 or 0
+			end
+			if not fallbackButton
+				and (string.find(text, "sell my inventory", 1, true)
+					or string.find(text, "sell all", 1, true)
+					or string.find(text, "i want to sell", 1, true))
 			then
-				if activateButton(descendant) then
-					clicked += 1
-					task.wait(0.08)
-				end
+				fallbackButton = descendant
 			end
 		end
 	end
-	return clicked
+
+	if fallbackButton and activateButton(fallbackButton) then
+		return 1
+	end
+	return 0
 end
 
 function sellThroughStevenFallback(allowTeleport)
@@ -2519,7 +2523,7 @@ function sellThroughStevenFallback(allowTeleport)
 		actions += 1
 	end
 	task.wait(0.2)
-	actions += clickSellButtons()
+	actions += clickSellInventoryButton()
 	return actions
 end
 
@@ -4375,6 +4379,8 @@ function autoSell(force)
 
 		if movedToSteven and sellPrompt and triggerPrompt(sellPrompt, true) then
 			actions += 1
+			task.wait(0.2)
+			actions += clickSellInventoryButton()
 			task.wait(0.12)
 		end
 
