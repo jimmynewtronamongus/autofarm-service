@@ -93,6 +93,7 @@ selectedPets = {}
 plantPromptTextCache = setmetatable({}, { __mode = "k" })
 shovelPromptCache = setmetatable({}, { __mode = "k" })
 harvestPromptCache = setmetatable({}, { __mode = "k" })
+handledPetSpawns = setmetatable({}, { __mode = "k" })
 
 saveConfig = function() end
 setStatus = function() end
@@ -1208,7 +1209,7 @@ function refreshBuyPetNamesFromWildSpawns()
 
 	for _, descendant in ipairs(wildPetSpawns:GetDescendants()) do
 		local model
-		if descendant:IsA("ProximityPrompt") then
+		if descendant:IsA("ProximityPrompt") and descendant.Parent and descendant:IsDescendantOf(workspace) then
 			model = descendant:FindFirstAncestorWhichIsA("Model")
 		elseif descendant:IsA("Model") and descendant:FindFirstChildWhichIsA("ProximityPrompt", true) then
 			model = descendant
@@ -4758,6 +4759,35 @@ function buyGear()
 	end
 end
 
+function petSpawnHandled(model, prompt)
+	local now = os.clock()
+	local handledUntil = handledPetSpawns[model] or handledPetSpawns[prompt]
+	if handledUntil and now < handledUntil then
+		return true
+	end
+	if prompt and (not prompt.Parent or not prompt:IsDescendantOf(workspace)) then
+		return true
+	end
+	if model and (not model.Parent or not model:IsDescendantOf(workspace)) then
+		return true
+	end
+	local ok, enabled = pcall(function()
+		return prompt.Enabled
+	end)
+	return ok and enabled == false
+end
+
+function markPetSpawnHandled(model, prompt, seconds)
+	local untilTime = os.clock() + (seconds or 20)
+	if model then
+		handledPetSpawns[model] = untilTime
+	end
+	if prompt then
+		handledPetSpawns[prompt] = untilTime
+	end
+	cache.wildPetsAt = 0
+end
+
 function buyOnePet(petName)
 	if not isEnabled("autoBuyPets") then
 		return false, "Auto pets: disabled"
@@ -4771,8 +4801,12 @@ function buyOnePet(petName)
 			return false, "Auto pets: disabled"
 		end
 
-		if descendant:IsA("ProximityPrompt") then
+		if descendant:IsA("ProximityPrompt") and descendant.Parent and descendant:IsDescendantOf(workspace) then
 			local model = descendant:FindFirstAncestorWhichIsA("Model")
+			if petSpawnHandled(model, descendant) then
+				continue
+			end
+
 			local modelName = model and string.lower(string.gsub(model.Name, "%s+", "")) or ""
 			local isBuyPrompt = descendant.Name == "BuyPrompt" or textMatches(descendant, { "buy", "purchase", "adopt" })
 			local isPetPrompt = string.find(modelName, petTerm, 1, true) ~= nil or textMatches(descendant, { petName })
@@ -4786,6 +4820,7 @@ function buyOnePet(petName)
 				local root = getRoot()
 				local inRange = not root or not part or (root.Position - part.Position).Magnitude <= ((descendant.MaxActivationDistance or 10) + 4)
 				if inRange and triggerPrompt(descendant, true) then
+					markPetSpawnHandled(model, descendant, 25)
 					return true, ("Auto pets: moved in range and bought %s"):format(petName)
 				end
 			end
