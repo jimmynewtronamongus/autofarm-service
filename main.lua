@@ -2515,14 +2515,14 @@ function activateButton(button)
 	if button:IsA("GuiButton") and typeof(getconnections) == "function" then
 		for _, signal in ipairs({ button.Activated, button.MouseButton1Click, button.MouseButton1Down }) do
 			for _, connection in ipairs(getconnections(signal)) do
-				pcall(function()
+				local ok = pcall(function()
 					if connection.Function then
 						connection.Function()
 					elseif connection.Fire then
 						connection:Fire()
 					end
 				end)
-				fired = true
+				fired = fired or ok
 			end
 		end
 	end
@@ -2540,12 +2540,20 @@ function activateButton(button)
 	end
 
 	local ok = pcall(function()
+		virtualInputManager:SendMouseMoveEvent(position.X, position.Y, game)
 		virtualInputManager:SendMouseButtonEvent(position.X, position.Y, 0, true, game, 1)
 		task.wait(0.04)
 		virtualInputManager:SendMouseButtonEvent(position.X, position.Y, 0, false, game, 1)
 	end)
 
-	return fired or ok
+	local activated = false
+	if button:IsA("GuiButton") then
+		activated = pcall(function()
+			button:Activate()
+		end)
+	end
+
+	return fired or ok or activated
 end
 
 function findSellPrompt()
@@ -2636,21 +2644,79 @@ function findFirstVisibleButton(root)
 	if not root then
 		return nil
 	end
-	if root:IsA("GuiButton") and guiObjectVisible(root) then
+	if root:IsA("GuiButton") and guiObjectVisible(root) and root.AbsoluteSize.X > 0 and root.AbsoluteSize.Y > 0 then
 		return root
 	end
 	for _, child in ipairs(root:GetDescendants()) do
-		if child:IsA("GuiButton") and guiObjectVisible(child) then
+		if child:IsA("GuiButton") and guiObjectVisible(child) and child.AbsoluteSize.X > 0 and child.AbsoluteSize.Y > 0 then
 			return child
 		end
 	end
 	return nil
 end
 
+function getGuiTextBlob(instance, maxDescendants)
+	local parts = { safeText(instance.Name) }
+	pcall(function()
+		table.insert(parts, safeText(instance.Text))
+	end)
+
+	local scanned = 0
+	for _, descendant in ipairs(instance:GetDescendants()) do
+		if scanned >= (maxDescendants or 40) then
+			break
+		end
+		scanned += 1
+		table.insert(parts, safeText(descendant.Name))
+		pcall(function()
+			table.insert(parts, safeText(descendant.Text))
+		end)
+	end
+
+	return string.lower(table.concat(parts, " "))
+end
+
+function sellInventoryTextMatches(text)
+	return string.find(text, "sell inventory", 1, true)
+		or string.find(text, "sell my inventory", 1, true)
+		or string.find(text, "sell all my", 1, true)
+		or (string.find(text, "inventory", 1, true) and string.find(text, "sell", 1, true))
+end
+
+function guiArea(object)
+	return math.max(object.AbsoluteSize.X, 1) * math.max(object.AbsoluteSize.Y, 1)
+end
+
+function findSmallestSellOptionContainer(instance)
+	local best
+	local current = instance
+	while current and current ~= playerGui do
+		if current:IsA("GuiObject") and guiObjectVisible(current) and findFirstVisibleButton(current) then
+			local text = getGuiTextBlob(current, 60)
+			if sellInventoryTextMatches(text) then
+				if not best or guiArea(current) < guiArea(best) then
+					best = current
+				end
+			end
+		end
+		current = current.Parent
+	end
+	return best
+end
+
 function findNearbyOptionButton(instance)
 	local ancestorButton = findAncestorButton(instance)
 	if ancestorButton then
 		return ancestorButton
+	end
+
+	local optionContainer = findSmallestSellOptionContainer(instance)
+	if optionContainer then
+		local namedButton = optionContainer:FindFirstChild("ImageButton", true)
+		if namedButton and namedButton:IsA("GuiButton") and guiObjectVisible(namedButton) then
+			return namedButton
+		end
+		return findFirstVisibleButton(optionContainer)
 	end
 
 	local current = instance
@@ -2681,6 +2747,8 @@ end
 function findSellInventoryButton()
 	local ownGui = playerGui:FindFirstChild("GardenAutomationGui")
 	local fallbackButton
+	local bestButton
+	local bestArea = math.huge
 	local scanned = 0
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
 		if scanned >= 800 then
@@ -2697,12 +2765,13 @@ function findSellInventoryButton()
 				text = string.lower(safeText(descendant.Name))
 			end
 			local button = findClickableGuiObject(descendant)
-			if string.find(text, "sell inventory", 1, true)
-				or string.find(text, "sell my inventory", 1, true)
-				or string.find(text, "sell all my", 1, true)
-				or string.find(text, "inventory", 1, true) and string.find(text, "sell", 1, true)
-			then
-				return button
+			if sellInventoryTextMatches(text) then
+				local container = findSmallestSellOptionContainer(descendant) or descendant
+				local area = container:IsA("GuiObject") and guiArea(container) or math.huge
+				if button and area < bestArea then
+					bestArea = area
+					bestButton = button
+				end
 			end
 			if not fallbackButton
 				and (string.find(text, "sell my inventory", 1, true)
@@ -2714,10 +2783,24 @@ function findSellInventoryButton()
 		end
 	end
 
-	return fallbackButton
+	return bestButton or fallbackButton
 end
 
-function clickSellInventoryButton(timeoutSeconds, stopKey, token)
+function fireSellInventoryPackets()
+	local actions = 0
+	for _, packetName in ipairs({ "SellAll" }) do
+		local ok, count = sendExactPacket(packetName)
+		if ok then
+			actions += count or 1
+		end
+		if sendPacket(packetName) then
+			actions += 1
+		end
+	end
+	return actions
+end
+
+function clickSellInventoryButton(timeoutSeconds, stopKey, token, beforeInventoryCount, beforeSheckles)
 	local startedAt = os.clock()
 	repeat
 		if runStopped(stopKey, token) then
@@ -2725,6 +2808,14 @@ function clickSellInventoryButton(timeoutSeconds, stopKey, token)
 		end
 		local button = findSellInventoryButton()
 		if button and activateButton(button) then
+			task.wait(0.12)
+			activateButton(button)
+			fireSellInventoryPackets()
+			task.wait(0.25)
+			if beforeInventoryCount and sellSucceeded(beforeInventoryCount, beforeSheckles) then
+				setStatus("Sell: inventory sold through Steven")
+				return 1
+			end
 			setStatus("Sell: clicked Sell Inventory option")
 			return 1
 		end
@@ -2794,7 +2885,7 @@ function callSellControllerFallback()
 	return actions
 end
 
-function sellViaStevenDialogue(allowTeleport, stopKey, token)
+function sellViaStevenDialogue(allowTeleport, stopKey, token, beforeInventoryCount, beforeSheckles)
 	if runStopped(stopKey, token) then
 		return 0
 	end
@@ -2826,19 +2917,23 @@ function sellViaStevenDialogue(allowTeleport, stopKey, token)
 	end
 
 	local actions = 0
-	for _ = 1, 2 do
+	for _ = 1, 4 do
 		if runStopped(stopKey, token) then
 			return actions
 		end
 		if triggerPrompt(prompt, true) then
 			actions += 1
 		end
-		task.wait(0.25)
-		local clicked = clickSellInventoryButton(1.2, stopKey, token)
+		task.wait(0.35)
+		local clicked = clickSellInventoryButton(1.5, stopKey, token, beforeInventoryCount, beforeSheckles)
 		actions += clicked
-		if clicked > 0 then
+		if beforeInventoryCount and sellSucceeded(beforeInventoryCount, beforeSheckles) then
 			break
 		end
+		if clicked > 0 and not beforeInventoryCount then
+			break
+		end
+		task.wait(0.25)
 	end
 
 	if actions <= 0 then
@@ -4726,7 +4821,7 @@ function autoSell(force)
 			if runStopped(stopKey, token) then
 				return
 			end
-			actions += sellViaStevenDialogue(false, stopKey, token)
+			actions += sellViaStevenDialogue(false, stopKey, token, beforeInventoryCount, beforeSheckles)
 			task.wait(0.45)
 			local sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
 			if sold then
