@@ -3541,7 +3541,7 @@ function isLikelyFruitTool(item)
 		end
 	end
 
-	return true
+	return false
 end
 
 function getSellableFruitTools()
@@ -4907,6 +4907,10 @@ function autoSell(force)
 
 	for attempt = 1, 4 do
 		if runStopped(stopKey, token) then
+			return
+		end
+		if #getSellableFruitTools() <= 0 then
+			setStatus("Sell: no sellable fruit in inventory")
 			return
 		end
 
@@ -6436,13 +6440,15 @@ RunService.Heartbeat:Connect(function(deltaTime)
 
 	local inventoryFull = false
 	local sellNeeded = false
+	local hasSellableInventory = false
 	if state.sellWhenFull or state.autoSell then
 		inventoryFull = refreshInventoryStats(false)
-		sellNeeded = inventoryFull
+		hasSellableInventory = #getSellableFruitTools() > 0
+		sellNeeded = inventoryFull and hasSellableInventory
 	end
-	local urgentSellDue = inventoryFull and (state.sellWhenFull or state.autoSell)
-	local sellDue = urgentSellDue
-		or (state.autoSell and timers.autoSell >= CONFIG.sellInterval)
+	local urgentSellDue = hasSellableInventory and inventoryFull and (state.sellWhenFull or state.autoSell)
+	local sellDue = hasSellableInventory and (urgentSellDue
+		or (state.autoSell and timers.autoSell >= CONFIG.sellInterval))
 
 	if sellDue and not running.autoSell and not running.sellWhenFull then
 		if state.sellWhenFull and sellNeeded then
@@ -6457,6 +6463,9 @@ RunService.Heartbeat:Connect(function(deltaTime)
 				timers.autoSell = 0
 			end
 		end
+	elseif not hasSellableInventory then
+		timers.autoSell = 0
+		timers.sellWhenFull = 0
 	end
 
 	local shovelDue = state.autoShovel and timers.autoShovel >= CONFIG.shovelInterval
@@ -6470,7 +6479,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 
 	movementLocked = movementLocked or running.autoShovel
 	local fruitMovementLocked = running.autoShovel
-		or (inventoryFull and (sellDue or running.autoSell or running.sellWhenFull))
+		or (hasSellableInventory and inventoryFull and (sellDue or running.autoSell or running.sellWhenFull))
 
 	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval and not movementLocked then
 		if tryRun("autoBuyPets", buyPets) then
