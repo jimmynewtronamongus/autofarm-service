@@ -254,6 +254,8 @@ local configLoaded = loadConfig()
 
 local webhookSentAt = {}
 local stockLastAmounts = {}
+local stockWebhookQueue = {}
+local stockWebhookScheduled = false
 local getStockItemsFolder
 local getShopStockAmount
 local getShopPriceAmount
@@ -369,6 +371,56 @@ function itemIsInStock(shopName, itemName)
 	return stockAmount > 0
 end
 
+function flushStockWebhookQueue()
+	stockWebhookScheduled = false
+	local queued = stockWebhookQueue
+	stockWebhookQueue = {}
+
+	local byShop = {}
+	local keys = {}
+	for _, entry in pairs(queued) do
+		if entry.amount and entry.amount > 0 then
+			byShop[entry.shopName] = byShop[entry.shopName] or {}
+			table.insert(byShop[entry.shopName], ("- %s (%d available)"):format(entry.itemName, entry.amount))
+			table.insert(keys, entry.key)
+		end
+	end
+
+	local sections = {}
+	for shopName, lines in pairs(byShop) do
+		table.sort(lines)
+		table.insert(sections, ("**%s**\n%s"):format(shopName, table.concat(lines, "\n")))
+	end
+	table.sort(sections)
+
+	if #sections == 0 then
+		return
+	end
+
+	local sent = sendWebhook("Stock update", table.concat(sections, "\n\n"), nil)
+	if sent then
+		local now = os.clock()
+		for _, key in ipairs(keys) do
+			webhookSentAt[key] = now
+		end
+	end
+end
+
+function queueStockWebhook(shopName, itemName, stockAmount, key)
+	stockWebhookQueue[key] = {
+		shopName = shopName,
+		itemName = itemName,
+		amount = stockAmount,
+		key = key,
+	}
+
+	if stockWebhookScheduled then
+		return
+	end
+	stockWebhookScheduled = true
+	task.delay(1.25, flushStockWebhookQueue)
+end
+
 function notifyStock(shopName, itemName, force)
 	local stockFolderName = getStockFolderName(shopName)
 	local stockAmount = getShopStockAmount(stockFolderName, itemName)
@@ -384,11 +436,9 @@ function notifyStock(shopName, itemName, force)
 	if (force or previousAmount == nil or previousAmount <= 0)
 		and (shouldNotifySelected(selectedSeeds, itemName) or shouldNotifySelected(selectedGears, itemName))
 	then
-		sendWebhook(
-			shopName .. " stock",
-			("%s is now in stock (%d available)."):format(itemName, stockAmount),
-			key
-		)
+		if not webhookSentAt[key] or os.clock() - webhookSentAt[key] >= 45 then
+			queueStockWebhook(shopName, itemName, stockAmount, key)
+		end
 	end
 end
 
