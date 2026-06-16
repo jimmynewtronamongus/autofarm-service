@@ -2441,19 +2441,33 @@ function findSellPrompt()
 	local npcs = workspace:FindFirstChild("NPCS") or workspace:FindFirstChild("NPCs")
 	local steven = npcs and npcs:FindFirstChild("Steven")
 	local root = steven and steven:FindFirstChild("HumanoidRootPart")
-	local direct = root and root:FindFirstChildWhichIsA("ProximityPrompt")
-	if direct then
-		return direct
-	end
+	local fallback
 
-	local map = getMap()
-	local stand = map and map:FindFirstChild("Stands") and map.Stands:FindFirstChild("Sell")
-	for _, searchRoot in ipairs({ root, steven, stand }) do
+	for _, searchRoot in ipairs({ root, steven }) do
 		if searchRoot then
 			for _, descendant in ipairs(searchRoot:GetDescendants()) do
 				if descendant:IsA("ProximityPrompt") then
 					local text = string.lower((descendant.ActionText or "") .. " " .. (descendant.ObjectText or "") .. " " .. descendant.Name)
-					if string.find(text, "sell", 1, true) or string.find(text, "talk", 1, true) or string.find(text, "interact", 1, true) then
+					local dontShow = descendant:GetAttribute("DontShow") ~= nil
+					if not dontShow and string.find(text, "steven", 1, true) and string.find(text, "talk", 1, true) then
+						return descendant
+					end
+					if not fallback and not dontShow and (string.find(text, "steven", 1, true) or string.find(text, "sell", 1, true)) then
+						fallback = descendant
+					end
+				end
+			end
+		end
+	end
+
+	local map = getMap()
+	local stand = map and map:FindFirstChild("Stands") and map.Stands:FindFirstChild("Sell")
+	for _, searchRoot in ipairs({ stand }) do
+		if searchRoot then
+			for _, descendant in ipairs(searchRoot:GetDescendants()) do
+				if descendant:IsA("ProximityPrompt") then
+					local text = string.lower((descendant.ActionText or "") .. " " .. (descendant.ObjectText or "") .. " " .. descendant.Name)
+					if string.find(text, "sell", 1, true) or string.find(text, "talk", 1, true) then
 						return descendant
 					end
 				end
@@ -2461,7 +2475,7 @@ function findSellPrompt()
 		end
 	end
 
-	return nil
+	return fallback
 end
 
 function guiButtonText(button)
@@ -2485,7 +2499,29 @@ function guiButtonText(button)
 	return string.lower(table.concat(parts, " "))
 end
 
-function clickSellInventoryButton()
+function guiObjectVisible(object)
+	local current = object
+	while current and current ~= playerGui do
+		if current:IsA("GuiObject") and not current.Visible then
+			return false
+		end
+		current = current.Parent
+	end
+	return true
+end
+
+function findAncestorButton(instance)
+	local current = instance
+	while current and current ~= playerGui do
+		if current:IsA("GuiButton") then
+			return current
+		end
+		current = current.Parent
+	end
+	return nil
+end
+
+function findSellInventoryButton()
 	local ownGui = playerGui:FindFirstChild("GardenAutomationGui")
 	local fallbackButton
 	local scanned = 0
@@ -2493,29 +2529,46 @@ function clickSellInventoryButton()
 		if scanned >= 160 then
 			break
 		end
-		if descendant:IsA("GuiButton") and descendant.Visible and (not ownGui or not descendant:IsDescendantOf(ownGui)) then
+		if descendant:IsA("GuiObject") and guiObjectVisible(descendant) and (not ownGui or not descendant:IsDescendantOf(ownGui)) then
 			scanned += 1
-			local text = guiButtonText(descendant)
+			local text
+			if descendant:IsA("GuiButton") then
+				text = guiButtonText(descendant)
+			elseif descendant:IsA("TextLabel") or descendant:IsA("TextBox") then
+				text = string.lower(safeText(descendant.Name) .. " " .. safeText(descendant.Text))
+			else
+				text = string.lower(safeText(descendant.Name))
+			end
+			local button = descendant:IsA("GuiButton") and descendant or findAncestorButton(descendant)
 			if string.find(text, "sell inventory", 1, true) then
-				return activateButton(descendant) and 1 or 0
+				return button
 			end
 			if not fallbackButton
 				and (string.find(text, "sell my inventory", 1, true)
 					or string.find(text, "sell all", 1, true)
 					or string.find(text, "i want to sell", 1, true))
 			then
-				fallbackButton = descendant
+				fallbackButton = button
 			end
 		end
 	end
 
-	if fallbackButton and activateButton(fallbackButton) then
-		return 1
-	end
+	return fallbackButton
+end
+
+function clickSellInventoryButton(timeoutSeconds)
+	local startedAt = os.clock()
+	repeat
+		local button = findSellInventoryButton()
+		if button and activateButton(button) then
+			return 1
+		end
+		task.wait(0.08)
+	until not timeoutSeconds or timeoutSeconds <= 0 or os.clock() - startedAt >= timeoutSeconds
 	return 0
 end
 
-function sellThroughStevenFallback(allowTeleport)
+function sellViaStevenDialogue(allowTeleport)
 	local prompt = findSellPrompt()
 	if not prompt then
 		return 0
@@ -2528,19 +2581,44 @@ function sellThroughStevenFallback(allowTeleport)
 		if root and (root.Position - part.Position).Magnitude > maxDistance + 2 and not allowTeleport then
 			return 0
 		end
-		if (not root or (root.Position - part.Position).Magnitude > maxDistance + 2) and allowTeleport then
+		if (not root or (root.Position - part.Position).Magnitude > math.max(maxDistance - 2, 6)) and allowTeleport then
 			teleportToPart(part, 3)
-			task.wait(0.08)
+			task.wait(0.15)
 		end
 	end
 
-	local actions = 0
-	if triggerPrompt(prompt, true) then
-		actions += 1
+	local root = getRoot()
+	if part and root and (root.Position - part.Position).Magnitude > ((prompt.MaxActivationDistance or 10) + 3) then
+		return 0
 	end
-	task.wait(0.2)
-	actions += clickSellInventoryButton()
+
+	local actions = 0
+	for _ = 1, 2 do
+		if triggerPrompt(prompt, true) then
+			actions += 1
+		end
+		task.wait(0.25)
+		local clicked = clickSellInventoryButton(1.2)
+		actions += clicked
+		if clicked > 0 then
+			break
+		end
+	end
+
 	return actions
+end
+
+function sellSucceeded(beforeInventoryCount, beforeSheckles)
+	local currentInventoryCount = countInventoryTools()
+	local currentSheckles = refreshCurrencyStats(true)
+	return currentInventoryCount < beforeInventoryCount
+		or (currentSheckles and beforeSheckles and currentSheckles > beforeSheckles),
+		currentInventoryCount,
+		currentSheckles
+end
+
+function sellThroughStevenFallback(allowTeleport)
+	return sellViaStevenDialogue(allowTeleport)
 end
 
 function moveToStevenForSell(allowTeleport)
@@ -4373,7 +4451,7 @@ function autoSell(force)
 	local inventoryFull = refreshInventoryStats(true)
 	local beforeInventoryCount = countInventoryTools()
 	local sellableTools = getSellableFruitTools()
-	if beforeInventoryCount <= 0 then
+	if #sellableTools <= 0 then
 		refreshInventoryStats(true)
 		if not force then
 			setStatus("Sell: nothing to sell")
@@ -4386,21 +4464,25 @@ function autoSell(force)
 	local beforeSheckles = refreshCurrencyStats(true)
 	local farmedBeforeSell = stats.shecklesFarmed or 0
 	local actions = 0
-	local movedToSteven, sellPrompt = moveToStevenForSell(inventoryFull == true)
-	for attempt = 1, 3 do
+	local allowTeleport = inventoryFull == true or force == true
+	local movedToSteven = false
+
+	for attempt = 1, 4 do
 		if not force and not isEnabled("autoSell") then
 			return
 		end
 
-		if attempt > 1 and not movedToSteven then
-			movedToSteven, sellPrompt = moveToStevenForSell(inventoryFull == true)
+		if attempt == 1 or not movedToSteven then
+			movedToSteven = select(1, moveToStevenForSell(allowTeleport))
 		end
 
-		if movedToSteven and sellPrompt and triggerPrompt(sellPrompt, true) then
-			actions += 1
-			task.wait(0.2)
-			actions += clickSellInventoryButton()
-			task.wait(0.12)
+		if movedToSteven then
+			actions += sellViaStevenDialogue(false)
+			task.wait(0.45)
+			local sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
+			if sold then
+				break
+			end
 		end
 
 		local ok, count = sendExactPacket("PreviewSellAll")
@@ -4414,62 +4496,33 @@ function autoSell(force)
 		end
 
 		task.wait(0.35)
-
-		local currentInventoryCount = countInventoryTools()
-		local currentSheckles = refreshCurrencyStats(true)
-		if currentInventoryCount < beforeInventoryCount
-			or (currentSheckles and beforeSheckles and currentSheckles > beforeSheckles)
-		then
+		local sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
+		if sold then
 			break
 		end
 
-		sellableTools = getSellableFruitTools()
-		for _, tool in ipairs(sellableTools) do
-			if not tool or not tool.Parent then
-				continue
+		if movedToSteven then
+			for _, tool in ipairs(getSellableFruitTools()) do
+				if not tool or not tool.Parent then
+					continue
+				end
+				ok, count = sendExactPacket("SellItem", tool)
+				if ok then
+					actions += count or 1
+				end
+				ok, count = sendExactPacket("SellFruit", tool)
+				if ok then
+					actions += count or 1
+				end
 			end
-			ok, count = sendExactPacket("SellItem", tool)
-			if ok then
-				actions += count or 1
-			end
-			ok, count = sendExactPacket("SellItem", tool.Name)
-			if ok then
-				actions += count or 1
-			end
-			ok, count = sendExactPacket("SellFruit", tool)
-			if ok then
-				actions += count or 1
-			end
-			ok, count = sendExactPacket("SellFruit", tool.Name)
-			if ok then
-				actions += count or 1
-			end
-		end
-
-		task.wait(0.35)
-
-		currentInventoryCount = countInventoryTools()
-		currentSheckles = refreshCurrencyStats(true)
-		if currentInventoryCount < beforeInventoryCount
-			or (currentSheckles and beforeSheckles and currentSheckles > beforeSheckles)
-		then
-			break
-		end
-
-		if attempt == 2 and movedToSteven then
-			actions += sellThroughStevenFallback(inventoryFull == true)
-			task.wait(0.35)
-			currentInventoryCount = countInventoryTools()
-			currentSheckles = refreshCurrencyStats(true)
-			if currentInventoryCount < beforeInventoryCount
-				or (currentSheckles and beforeSheckles and currentSheckles > beforeSheckles)
-			then
+			task.wait(0.3)
+			sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
+			if sold then
 				break
 			end
 		end
 
-		sellableTools = getSellableFruitTools()
-		if #sellableTools == 0 then
+		if #getSellableFruitTools() == 0 then
 			break
 		end
 	end
