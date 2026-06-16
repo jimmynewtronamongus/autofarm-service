@@ -516,6 +516,19 @@ local stats = {
 }
 
 local running = {}
+local stopTokens = {}
+
+function bumpStopToken(key)
+	stopTokens[key] = (stopTokens[key] or 0) + 1
+end
+
+function getStopToken(key)
+	return stopTokens[key] or 0
+end
+
+function runStopped(key, token)
+	return key and (not isEnabled(key) or getStopToken(key) ~= token)
+end
 
 setStatus = function(message)
 	local text = tostring(message)
@@ -2471,13 +2484,9 @@ function activateButton(button)
 		fired = true
 	end
 
-	if fired then
-		return true
-	end
-
 	local position = button.AbsolutePosition + button.AbsoluteSize / 2
 	if not virtualInputManager then
-		return false
+		return fired
 	end
 
 	local ok = pcall(function()
@@ -2486,7 +2495,7 @@ function activateButton(button)
 		virtualInputManager:SendMouseButtonEvent(position.X, position.Y, 0, false, game, 1)
 	end)
 
-	return ok
+	return fired or ok
 end
 
 function findSellPrompt()
@@ -2658,9 +2667,12 @@ function findSellInventoryButton()
 	return fallbackButton
 end
 
-function clickSellInventoryButton(timeoutSeconds)
+function clickSellInventoryButton(timeoutSeconds, stopKey, token)
 	local startedAt = os.clock()
 	repeat
+		if runStopped(stopKey, token) then
+			return 0
+		end
 		local button = findSellInventoryButton()
 		if button and activateButton(button) then
 			setStatus("Sell: clicked Sell Inventory option")
@@ -2732,7 +2744,11 @@ function callSellControllerFallback()
 	return actions
 end
 
-function sellViaStevenDialogue(allowTeleport)
+function sellViaStevenDialogue(allowTeleport, stopKey, token)
+	if runStopped(stopKey, token) then
+		return 0
+	end
+
 	local prompt = findSellPrompt()
 	if not prompt then
 		return callSellControllerFallback()
@@ -2746,6 +2762,9 @@ function sellViaStevenDialogue(allowTeleport)
 			return 0
 		end
 		if (not root or (root.Position - part.Position).Magnitude > math.max(maxDistance - 2, 6)) and allowTeleport then
+			if runStopped(stopKey, token) then
+				return 0
+			end
 			teleportToPart(part, 3)
 			task.wait(0.15)
 		end
@@ -2758,11 +2777,14 @@ function sellViaStevenDialogue(allowTeleport)
 
 	local actions = 0
 	for _ = 1, 2 do
+		if runStopped(stopKey, token) then
+			return actions
+		end
 		if triggerPrompt(prompt, true) then
 			actions += 1
 		end
 		task.wait(0.25)
-		local clicked = clickSellInventoryButton(1.2)
+		local clicked = clickSellInventoryButton(1.2, stopKey, token)
 		actions += clicked
 		if clicked > 0 then
 			break
@@ -4612,7 +4634,9 @@ function autoShovel()
 end
 
 function autoSell(force)
-	if not force and not isEnabled("autoSell") then
+	local stopKey = force and "sellWhenFull" or "autoSell"
+	local token = getStopToken(stopKey)
+	if runStopped(stopKey, token) then
 		return
 	end
 
@@ -4636,7 +4660,7 @@ function autoSell(force)
 	local movedToSteven = false
 
 	for attempt = 1, 4 do
-		if not force and not isEnabled("autoSell") then
+		if runStopped(stopKey, token) then
 			return
 		end
 
@@ -4644,12 +4668,22 @@ function autoSell(force)
 			movedToSteven = select(1, moveToStevenForSell(allowTeleport))
 		end
 
+		if runStopped(stopKey, token) then
+			return
+		end
+
 		if movedToSteven then
-			actions += sellViaStevenDialogue(false)
+			if runStopped(stopKey, token) then
+				return
+			end
+			actions += sellViaStevenDialogue(false, stopKey, token)
 			task.wait(0.45)
 			local sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
 			if sold then
 				break
+			end
+			if runStopped(stopKey, token) then
+				return
 			end
 			actions += callSellControllerFallback()
 			task.wait(0.35)
@@ -4659,11 +4693,17 @@ function autoSell(force)
 			end
 		end
 
+		if runStopped(stopKey, token) then
+			return
+		end
 		local ok, count = sendExactPacket("PreviewSellAll")
 		if ok then
 			actions += count or 1
 		end
 		task.wait(0.08)
+		if runStopped(stopKey, token) then
+			return
+		end
 		ok, count = sendExactPacket("SellAll")
 		if ok then
 			actions += count or 1
@@ -4677,6 +4717,9 @@ function autoSell(force)
 
 		if movedToSteven then
 			for _, tool in ipairs(getSellableFruitTools()) do
+				if runStopped(stopKey, token) then
+					return
+				end
 				if not tool or not tool.Parent then
 					continue
 				end
@@ -5226,7 +5269,28 @@ function makeToggle(label, key, order)
 	button.Activated:Connect(function()
 		state[key] = not state[key]
 		if not state[key] then
+			bumpStopToken(key)
 			running[key] = false
+			if timers and timers[key] ~= nil then
+				timers[key] = 0
+			end
+			if key == "autoSell" then
+				bumpStopToken("sellWhenFull")
+				running.sellWhenFull = false
+				if timers then
+					timers.sellWhenFull = 0
+				end
+			elseif key == "sellWhenFull" then
+				bumpStopToken("autoSell")
+				running.autoSell = false
+				if timers then
+					timers.autoSell = 0
+				end
+			elseif key == "fruitCollector" then
+				fruitTargetCache.refreshedAt = 0
+			end
+		else
+			bumpStopToken(key)
 		end
 		button.Text = ("%s: %s"):format(label, state[key] and "ON" or "OFF")
 		button.BackgroundColor3 = state[key] and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(34, 41, 42)
