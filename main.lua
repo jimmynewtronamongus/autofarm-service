@@ -23,6 +23,8 @@ CONFIG = {
 	sellInterval = 12.0,
 	sellWhenFullInterval = 1.5,
 	schedulerInterval = 0.25,
+	enableSellPacketCapture = false,
+	maxSellAttempts = 2,
 	sellResumeFreeSlots = 8,
 	buyInterval = 1.5,
 	rainbowCollectInterval = 4.5,
@@ -2870,20 +2872,13 @@ function fireSellInventoryPackets()
 		end
 	end
 
-	for _, packetName in ipairs({ "SellAll" }) do
-		local ok, count = sendExactPacket(packetName)
-		if ok then
-			actions += count or 1
-		end
-		if sendPacket(packetName) then
-			actions += 1
-		end
-	end
 	return actions
 end
 
 function clickSellInventoryButton(timeoutSeconds, stopKey, token, beforeInventoryCount, beforeSheckles)
-	installPacketHook()
+	if CONFIG.enableSellPacketCapture then
+		installPacketHook()
+	end
 	local startedAt = os.clock()
 	repeat
 		if runStopped(stopKey, token) then
@@ -2892,7 +2887,7 @@ function clickSellInventoryButton(timeoutSeconds, stopKey, token, beforeInventor
 		end
 		local button = findSellInventoryButton()
 		if button then
-			sellCaptureActive = true
+			sellCaptureActive = CONFIG.enableSellPacketCapture == true
 			local clicked = activateButton(button)
 			task.wait(0.12)
 			if not beforeInventoryCount or not sellSucceeded(beforeInventoryCount, beforeSheckles) then
@@ -2904,7 +2899,9 @@ function clickSellInventoryButton(timeoutSeconds, stopKey, token, beforeInventor
 				task.wait(0.08)
 				continue
 			end
-			fireSellInventoryPackets()
+			if CONFIG.enableSellPacketCapture then
+				fireSellInventoryPackets()
+			end
 			task.wait(0.25)
 			if beforeInventoryCount and sellSucceeded(beforeInventoryCount, beforeSheckles) then
 				setStatus("Sell: inventory sold through Steven")
@@ -2991,7 +2988,7 @@ function sellViaStevenDialogue(allowTeleport, stopKey, token, beforeInventoryCou
 
 	local prompt = findSellPrompt()
 	if not prompt then
-		return callSellControllerFallback()
+		return 0
 	end
 
 	local part = getPromptPart(prompt)
@@ -3033,10 +3030,6 @@ function sellViaStevenDialogue(allowTeleport, stopKey, token, beforeInventoryCou
 			break
 		end
 		task.wait(0.25)
-	end
-
-	if actions <= 0 then
-		actions += callSellControllerFallback()
 	end
 
 	return actions
@@ -4932,11 +4925,10 @@ function autoSell(force)
 
 	local beforeSheckles = refreshCurrencyStats(true)
 	local farmedBeforeSell = stats.shecklesFarmed or 0
-	local actions = 0
 	local allowTeleport = force == true or state.autoSell == true or inventoryFull == true
 	local movedToSteven = false
 
-	for attempt = 1, 4 do
+	for attempt = 1, CONFIG.maxSellAttempts do
 		if runStopped(stopKey, token) then
 			return
 		end
@@ -4957,64 +4949,9 @@ function autoSell(force)
 			if runStopped(stopKey, token) then
 				return
 			end
-			actions += sellViaStevenDialogue(false, stopKey, token, beforeInventoryCount, beforeSheckles)
+			sellViaStevenDialogue(false, stopKey, token, beforeInventoryCount, beforeSheckles)
 			task.wait(0.45)
 			local sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
-			if sold then
-				break
-			end
-			if runStopped(stopKey, token) then
-				return
-			end
-			actions += callSellControllerFallback()
-			task.wait(0.35)
-			sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
-			if sold then
-				break
-			end
-		end
-
-		if runStopped(stopKey, token) then
-			return
-		end
-		local ok, count = sendExactPacket("PreviewSellAll")
-		if ok then
-			actions += count or 1
-		end
-		task.wait(0.08)
-		if runStopped(stopKey, token) then
-			return
-		end
-		ok, count = sendExactPacket("SellAll")
-		if ok then
-			actions += count or 1
-		end
-
-		task.wait(0.35)
-		local sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
-		if sold then
-			break
-		end
-
-		if movedToSteven then
-			for _, tool in ipairs(getSellableFruitTools(true)) do
-				if runStopped(stopKey, token) then
-					return
-				end
-				if not tool or not tool.Parent then
-					continue
-				end
-				ok, count = sendExactPacket("SellItem", tool)
-				if ok then
-					actions += count or 1
-				end
-				ok, count = sendExactPacket("SellFruit", tool)
-				if ok then
-					actions += count or 1
-				end
-			end
-			task.wait(0.3)
-			sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
 			if sold then
 				break
 			end
