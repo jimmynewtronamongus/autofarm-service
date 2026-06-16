@@ -24,23 +24,23 @@ CONFIG = {
 	sellWhenFullInterval = 1.5,
 	schedulerInterval = 0.25,
 	enableSellPacketCapture = false,
-	maxSellAttempts = 1,
-	sellGuiSearchLimit = 260,
-	sellGuiClickTimeout = 0.75,
-	sellCooldown = 6.0,
+	maxSellAttempts = 2,
+	sellGuiSearchLimit = 180,
+	sellGuiClickTimeout = 0.9,
+	sellCooldown = 3.0,
 	sellResumeFreeSlots = 8,
 	buyInterval = 1.5,
 	rainbowCollectInterval = 4.5,
 	petBuyInterval = 1.5,
 	cacheRefreshInterval = 25.0,
 	dropCacheRefreshInterval = 5.0,
-	inventoryRefreshInterval = 3.5,
+	inventoryRefreshInterval = 1.0,
 	guiInventoryRefreshInterval = 30.0,
-	maxFruitCollectPerTick = 20,
-	maxFruitScanPerRoot = 900,
-	fruitCacheRefreshInterval = 3.0,
-	maxFruitTargetsCached = 180,
-	maxFruitPromptFallbackPerTick = 18,
+	maxFruitCollectPerTick = 32,
+	maxFruitScanPerRoot = 1800,
+	fruitCacheRefreshInterval = 1.5,
+	maxFruitTargetsCached = 420,
+	maxFruitPromptFallbackPerTick = 32,
 	maxSeedPlantPerTick = 3,
 	maxSeedPlacementsPerTool = 2,
 	seedCountCacheRefreshInterval = 45.0,
@@ -51,7 +51,7 @@ CONFIG = {
 	maxShovelPerTick = 1,
 	maxDropCollectPerTick = 3,
 	maxDropScanPerRoot = 300,
-	maxInventoryItems = 200,
+	maxInventoryItems = 100,
 	lowRaritySeedLimit = 10,
 	maxGardenPlants = 500,
 	seedPlacementMode = "Farm Corner",
@@ -1872,6 +1872,9 @@ function refreshInventoryStats(force)
 	end
 
 	local count = countInventoryTools()
+	if type(getSellableFruitTools) == "function" then
+		count = #getSellableFruitTools(force == true)
+	end
 	local capacity = CONFIG.maxInventoryItems
 	local nearCapacity = count >= math.max(capacity - 15, 1)
 	if count < math.max(capacity - 20, 1) then
@@ -2635,6 +2638,31 @@ function activateButton(button)
 	return fired or ok or activated
 end
 
+function clickButtonLight(button)
+	if not button or not button:IsA("GuiObject") then
+		return false
+	end
+
+	local position = button.AbsolutePosition + button.AbsoluteSize / 2
+	local clicked = false
+	if virtualInputManager then
+		clicked = pcall(function()
+			virtualInputManager:SendMouseMoveEvent(position.X, position.Y, game)
+			virtualInputManager:SendMouseButtonEvent(position.X, position.Y, 0, true, game, 1)
+			task.wait(0.035)
+			virtualInputManager:SendMouseButtonEvent(position.X, position.Y, 0, false, game, 1)
+		end)
+	end
+
+	if button:IsA("GuiButton") then
+		clicked = pcall(function()
+			button:Activate()
+		end) or clicked
+	end
+
+	return clicked
+end
+
 function findSellPrompt()
 	local npcs = workspace:FindFirstChild("NPCS") or workspace:FindFirstChild("NPCs")
 	local steven = npcs and npcs:FindFirstChild("Steven")
@@ -2823,14 +2851,26 @@ function findClickableGuiObject(instance)
 	return findNearbyOptionButton(instance)
 end
 
+local cachedSellInventoryButton
+
 function findSellInventoryButton()
+	if cachedSellInventoryButton
+		and cachedSellInventoryButton.Parent
+		and guiObjectVisible(cachedSellInventoryButton)
+	then
+		return cachedSellInventoryButton
+	end
+	cachedSellInventoryButton = nil
+
 	local ownGui = playerGui:FindFirstChild("GardenAutomationGui")
 	local fallbackButton
 	local bestButton
 	local bestArea = math.huge
 	local scanned = 0
-	for _, descendant in ipairs(playerGui:GetDescendants()) do
-		if scanned >= CONFIG.sellGuiSearchLimit then
+	local stack = playerGui:GetChildren()
+	while #stack > 0 and scanned < CONFIG.sellGuiSearchLimit do
+		local descendant = table.remove(stack)
+		if not descendant then
 			break
 		end
 		if (descendant:IsA("GuiButton") or descendant:IsA("TextLabel") or descendant:IsA("TextBox"))
@@ -2862,9 +2902,16 @@ function findSellInventoryButton()
 				fallbackButton = button
 			end
 		end
+		if descendant:IsA("GuiObject") or descendant:IsA("LayerCollector") or descendant == playerGui then
+			local children = descendant:GetChildren()
+			for index = #children, 1, -1 do
+				stack[#stack + 1] = children[index]
+			end
+		end
 	end
 
-	return bestButton or fallbackButton
+	cachedSellInventoryButton = bestButton or fallbackButton
+	return cachedSellInventoryButton
 end
 
 function fireSellInventoryPackets()
@@ -2897,7 +2944,7 @@ function clickSellInventoryButton(timeoutSeconds, stopKey, token, beforeInventor
 		if button then
 			triedButton = button
 			sellCaptureActive = CONFIG.enableSellPacketCapture == true
-			local clicked = activateButton(button)
+			local clicked = clickButtonLight(button)
 			task.wait(0.35)
 			sellCaptureActive = false
 			if not clicked then
@@ -3029,7 +3076,7 @@ function sellViaStevenDialogue(allowTeleport, stopKey, token, beforeInventoryCou
 end
 
 function sellSucceeded(beforeInventoryCount, beforeSheckles)
-	local currentInventoryCount = countInventoryTools()
+	local currentInventoryCount = type(getSellableFruitTools) == "function" and #getSellableFruitTools(true) or countInventoryTools()
 	local currentSheckles = refreshCurrencyStats(true)
 	return currentInventoryCount < beforeInventoryCount
 		or (currentSheckles and beforeSheckles and currentSheckles > beforeSheckles),
@@ -4910,7 +4957,6 @@ function autoSell(force)
 	fruitCollectionPausedUntil = now + 2.5
 
 	local inventoryFull = refreshInventoryStats(true)
-	local beforeInventoryCount = countInventoryTools()
 	local sellableTools = getSellableFruitTools(true)
 	if #sellableTools <= 0 then
 		refreshInventoryStats(true)
@@ -4921,6 +4967,7 @@ function autoSell(force)
 		end
 		return
 	end
+	local beforeInventoryCount = #sellableTools
 
 	local beforeSheckles = refreshCurrencyStats(true)
 	local farmedBeforeSell = stats.shecklesFarmed or 0
@@ -4969,7 +5016,7 @@ function autoSell(force)
 
 	refreshInventoryStats(true)
 	invalidateSellableInventoryCache()
-	local afterInventoryCount = countInventoryTools()
+	local afterInventoryCount = #getSellableFruitTools(true)
 	updateStatsUI()
 	if afterInventoryCount >= beforeInventoryCount and (not afterSheckles or not beforeSheckles or afterSheckles <= beforeSheckles) then
 		setStatus(("Sell failed: remote/NPC fallback made no change (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
