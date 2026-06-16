@@ -945,6 +945,33 @@ end
 local packetRemote
 local packetEntryCache = {}
 local packetObjectCache = {}
+local packetHookInstalled = false
+local sellCaptureActive = false
+local lastPacketBuffer
+local sellInventoryPacketBuffer
+
+function isPacketBuffer(value)
+	local valueType = typeof(value)
+	return valueType == "buffer" or string.sub(tostring(value), 1, 8) == "buffer: "
+end
+
+function rememberPacketBuffer(value)
+	if not isPacketBuffer(value) then
+		return
+	end
+
+	lastPacketBuffer = value
+	if sellCaptureActive then
+		sellInventoryPacketBuffer = value
+	elseif not sellInventoryPacketBuffer and type(findSellPrompt) == "function" and type(getSellableFruitTools) == "function" then
+		local prompt = findSellPrompt()
+		local part = prompt and getPromptPart(prompt)
+		local root = getRoot()
+		if part and root and (root.Position - part.Position).Magnitude <= 18 and #getSellableFruitTools() > 0 then
+			sellInventoryPacketBuffer = value
+		end
+	end
+end
 
 function getPacketRemote()
 	if packetRemote and packetRemote.Parent then
@@ -965,6 +992,53 @@ function getPacketRemote()
 
 	packetRemote = nil
 	return nil
+end
+
+function installPacketHook()
+	if packetHookInstalled then
+		return true
+	end
+
+	local remote = getPacketRemote()
+	if not remote then
+		return false
+	end
+
+	if typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "function" and typeof(newcclosure) == "function" then
+		local ok = pcall(function()
+			local oldNamecall
+			oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+				local args = { ... }
+				if self == remote and getnamecallmethod() == "FireServer" then
+					rememberPacketBuffer(args[1])
+				end
+				return oldNamecall(self, ...)
+			end))
+		end)
+		if ok then
+			packetHookInstalled = true
+			return true
+		end
+	end
+
+	if typeof(hookfunction) == "function" then
+		local ok = pcall(function()
+			local oldFireServer
+			oldFireServer = hookfunction(remote.FireServer, function(self, ...)
+				local args = { ... }
+				if self == remote then
+					rememberPacketBuffer(args[1])
+				end
+				return oldFireServer(self, ...)
+			end)
+		end)
+		if ok then
+			packetHookInstalled = true
+			return true
+		end
+	end
+
+	return false
 end
 
 function packetNameExists(packetName)
@@ -2788,6 +2862,16 @@ end
 
 function fireSellInventoryPackets()
 	local actions = 0
+	local remote = getPacketRemote()
+	if remote and sellInventoryPacketBuffer then
+		local ok = pcall(function()
+			remote:FireServer(sellInventoryPacketBuffer)
+		end)
+		if ok then
+			actions += 1
+		end
+	end
+
 	for _, packetName in ipairs({ "SellAll" }) do
 		local ok, count = sendExactPacket(packetName)
 		if ok then
@@ -2801,26 +2885,43 @@ function fireSellInventoryPackets()
 end
 
 function clickSellInventoryButton(timeoutSeconds, stopKey, token, beforeInventoryCount, beforeSheckles)
+	installPacketHook()
 	local startedAt = os.clock()
 	repeat
 		if runStopped(stopKey, token) then
+			sellCaptureActive = false
 			return 0
 		end
 		local button = findSellInventoryButton()
-		if button and activateButton(button) then
+		if button then
+			sellCaptureActive = true
+			local clicked = activateButton(button)
 			task.wait(0.12)
-			activateButton(button)
+			if not beforeInventoryCount or not sellSucceeded(beforeInventoryCount, beforeSheckles) then
+				activateButton(button)
+			end
+			task.wait(0.1)
+			sellCaptureActive = false
+			if not clicked then
+				task.wait(0.08)
+				continue
+			end
 			fireSellInventoryPackets()
 			task.wait(0.25)
 			if beforeInventoryCount and sellSucceeded(beforeInventoryCount, beforeSheckles) then
 				setStatus("Sell: inventory sold through Steven")
 				return 1
 			end
-			setStatus("Sell: clicked Sell Inventory option")
+			if sellInventoryPacketBuffer then
+				setStatus("Sell: captured Steven packet, waiting for sell")
+			else
+				setStatus("Sell: clicked Sell Inventory option")
+			end
 			return 1
 		end
 		task.wait(0.08)
 	until not timeoutSeconds or timeoutSeconds <= 0 or os.clock() - startedAt >= timeoutSeconds
+	sellCaptureActive = false
 	setStatus("Sell: Sell Inventory option not found")
 	return 0
 end
