@@ -252,6 +252,7 @@ end
 local configLoaded = loadConfig()
 
 local webhookSentAt = {}
+local stockLastAmounts = {}
 local getStockItemsFolder
 local getShopStockAmount
 local getShopPriceAmount
@@ -364,28 +365,28 @@ end
 function itemIsInStock(shopName, itemName)
 	local stockFolderName = getStockFolderName(shopName)
 	local stockAmount = getShopStockAmount and getShopStockAmount(stockFolderName, itemName) or 0
-	if stockAmount > 0 then
-		return true
-	end
-
-	local items = getStockItemsFolder and getStockItemsFolder(stockFolderName)
-	if items and items:FindFirstChild(itemName) and stockAmount >= 0 then
-		return true
-	end
-
-	return shopGuiShowsItem(shopName, itemName)
+	return stockAmount > 0
 end
 
-function notifyStock(shopName, itemName)
-	if itemIsInStock(shopName, itemName)
+function notifyStock(shopName, itemName, force)
+	local stockFolderName = getStockFolderName(shopName)
+	local stockAmount = getShopStockAmount(stockFolderName, itemName)
+	local key = "stock:" .. shopName .. ":" .. itemName
+	local previousAmount = stockLastAmounts[key]
+	stockLastAmounts[key] = stockAmount
+
+	if stockAmount <= 0 then
+		webhookSentAt[key] = nil
+		return
+	end
+
+	if (force or previousAmount == nil or previousAmount <= 0)
 		and (shouldNotifySelected(selectedSeeds, itemName) or shouldNotifySelected(selectedGears, itemName))
 	then
-		local stockAmount = getShopStockAmount(getStockFolderName(shopName), itemName)
 		sendWebhook(
 			shopName .. " stock",
-			stockAmount > 0 and ("%s is now in stock (%d available)."):format(itemName, stockAmount)
-				or (itemName .. " is now in stock."),
-			"stock:" .. shopName .. ":" .. itemName
+			("%s is now in stock (%d available)."):format(itemName, stockAmount),
+			key
 		)
 	end
 end
@@ -409,17 +410,51 @@ function watchStockItem(shopName, item)
 		end)
 	end
 
+	for _, attributeName in ipairs({
+		"Stock",
+		"StockAmount",
+		"CurrentStock",
+		"Amount",
+		"Quantity",
+		"Count",
+		"Available",
+	}) do
+		item:GetAttributeChangedSignal(attributeName):Connect(changed)
+	end
+
 	if item:IsA("ValueBase") then
 		item.Changed:Connect(changed)
 	end
 
 	for _, descendant in ipairs(item:GetDescendants()) do
+		for _, attributeName in ipairs({
+			"Stock",
+			"StockAmount",
+			"CurrentStock",
+			"Amount",
+			"Quantity",
+			"Count",
+			"Available",
+		}) do
+			descendant:GetAttributeChangedSignal(attributeName):Connect(changed)
+		end
 		if descendant:IsA("ValueBase") then
 			descendant.Changed:Connect(changed)
 		end
 	end
 
 	item.DescendantAdded:Connect(function(descendant)
+		for _, attributeName in ipairs({
+			"Stock",
+			"StockAmount",
+			"CurrentStock",
+			"Amount",
+			"Quantity",
+			"Count",
+			"Available",
+		}) do
+			descendant:GetAttributeChangedSignal(attributeName):Connect(changed)
+		end
 		if descendant:IsA("ValueBase") then
 			descendant.Changed:Connect(changed)
 			changed()
@@ -633,11 +668,31 @@ function getNumericFromInstance(instance, keys)
 	return nil
 end
 
+function stockKeyLooksValid(name)
+	local lowered = string.lower(tostring(name or ""))
+	return lowered == "stock"
+		or lowered == "stockamount"
+		or lowered == "currentstock"
+		or lowered == "amount"
+		or lowered == "quantity"
+		or lowered == "count"
+		or lowered == "available"
+		or string.find(lowered, "stock", 1, true) ~= nil
+end
+
 getShopStockAmount = function(shopName, itemName)
 	local items = getStockItemsFolder and getStockItemsFolder(shopName)
 	local stockItem = items and items:FindFirstChild(itemName)
 	if not stockItem then
 		return 0
+	end
+
+	if stockItem:IsA("NumberValue") or stockItem:IsA("IntValue") then
+		return math.max(0, math.floor(tonumber(stockItem.Value) or 0))
+	end
+
+	if stockItem:IsA("BoolValue") then
+		return stockItem.Value and 1 or 0
 	end
 
 	local value = getNumericFromInstance(stockItem, {
@@ -648,23 +703,18 @@ getShopStockAmount = function(shopName, itemName)
 		"Quantity",
 		"Count",
 		"Available",
-		"Value",
 	})
 	if value then
 		return math.max(0, math.floor(value))
 	end
 
-	if stockItem:IsA("BoolValue") then
-		return stockItem.Value and 1 or 0
-	end
-
 	for _, descendant in ipairs(stockItem:GetDescendants()) do
-		if descendant:IsA("NumberValue") or descendant:IsA("IntValue") then
+		if stockKeyLooksValid(descendant.Name) and (descendant:IsA("NumberValue") or descendant:IsA("IntValue")) then
 			local number = tonumber(descendant.Value)
 			if number and number > 0 then
 				return math.floor(number)
 			end
-		elseif descendant:IsA("BoolValue") and descendant.Value == true then
+		elseif stockKeyLooksValid(descendant.Name) and descendant:IsA("BoolValue") and descendant.Value == true then
 			return 1
 		end
 	end
@@ -5293,7 +5343,7 @@ function makeSeedButton(seedName)
 		saveConfig()
 		setStatus((selectedSeeds[seedName] and "Selected " or "Unselected ") .. seedName)
 		if selectedSeeds[seedName] then
-			notifyStock("Seed shop", seedName)
+			notifyStock("Seed shop", seedName, true)
 		end
 	end)
 
@@ -5577,7 +5627,7 @@ function makeGearButton(gearName)
 		saveConfig()
 		setStatus((selectedGears[gearName] and "Selected " or "Unselected ") .. gearName)
 		if selectedGears[gearName] then
-			notifyStock("Gear shop", gearName)
+			notifyStock("Gear shop", gearName, true)
 		end
 	end)
 
