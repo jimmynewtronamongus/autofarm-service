@@ -24,7 +24,10 @@ CONFIG = {
 	sellWhenFullInterval = 1.5,
 	schedulerInterval = 0.25,
 	enableSellPacketCapture = false,
-	maxSellAttempts = 2,
+	maxSellAttempts = 1,
+	sellGuiSearchLimit = 260,
+	sellGuiClickTimeout = 0.75,
+	sellCooldown = 6.0,
 	sellResumeFreeSlots = 8,
 	buyInterval = 1.5,
 	rainbowCollectInterval = 4.5,
@@ -570,6 +573,8 @@ local stats = {
 
 local running = {}
 local stopTokens = {}
+local lastAutoSellAttemptAt = 0
+local fruitCollectionPausedUntil = 0
 
 function bumpStopToken(key)
 	stopTokens[key] = (stopTokens[key] or 0) + 1
@@ -2825,21 +2830,22 @@ function findSellInventoryButton()
 	local bestArea = math.huge
 	local scanned = 0
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
-		if scanned >= 800 then
+		if scanned >= CONFIG.sellGuiSearchLimit then
 			break
 		end
-		if descendant:IsA("GuiObject") and guiObjectVisible(descendant) and (not ownGui or not descendant:IsDescendantOf(ownGui)) then
+		if (descendant:IsA("GuiButton") or descendant:IsA("TextLabel") or descendant:IsA("TextBox"))
+			and guiObjectVisible(descendant)
+			and (not ownGui or not descendant:IsDescendantOf(ownGui))
+		then
 			scanned += 1
 			local text
 			if descendant:IsA("GuiButton") then
 				text = guiButtonText(descendant)
-			elseif descendant:IsA("TextLabel") or descendant:IsA("TextBox") then
-				text = string.lower(safeText(descendant.Name) .. " " .. safeText(descendant.Text))
 			else
-				text = string.lower(safeText(descendant.Name))
+				text = string.lower(safeText(descendant.Name) .. " " .. safeText(descendant.Text))
 			end
-			local button = findClickableGuiObject(descendant)
 			if sellInventoryTextMatches(text) then
+				local button = findClickableGuiObject(descendant)
 				local container = findSmallestSellOptionContainer(descendant) or descendant
 				local area = container:IsA("GuiObject") and guiArea(container) or math.huge
 				if button and area < bestArea then
@@ -2852,6 +2858,7 @@ function findSellInventoryButton()
 					or string.find(text, "sell all", 1, true)
 					or string.find(text, "i want to sell", 1, true))
 			then
+				local button = findClickableGuiObject(descendant)
 				fallbackButton = button
 			end
 		end
@@ -2880,29 +2887,25 @@ function clickSellInventoryButton(timeoutSeconds, stopKey, token, beforeInventor
 		installPacketHook()
 	end
 	local startedAt = os.clock()
+	local triedButton
 	repeat
 		if runStopped(stopKey, token) then
 			sellCaptureActive = false
 			return 0
 		end
-		local button = findSellInventoryButton()
+		local button = triedButton or findSellInventoryButton()
 		if button then
+			triedButton = button
 			sellCaptureActive = CONFIG.enableSellPacketCapture == true
 			local clicked = activateButton(button)
-			task.wait(0.12)
-			if not beforeInventoryCount or not sellSucceeded(beforeInventoryCount, beforeSheckles) then
-				activateButton(button)
-			end
-			task.wait(0.1)
+			task.wait(0.35)
 			sellCaptureActive = false
 			if not clicked then
-				task.wait(0.08)
-				continue
+				return 0
 			end
 			if CONFIG.enableSellPacketCapture then
 				fireSellInventoryPackets()
 			end
-			task.wait(0.25)
 			if beforeInventoryCount and sellSucceeded(beforeInventoryCount, beforeSheckles) then
 				setStatus("Sell: inventory sold through Steven")
 				return 1
@@ -2914,7 +2917,7 @@ function clickSellInventoryButton(timeoutSeconds, stopKey, token, beforeInventor
 			end
 			return 1
 		end
-		task.wait(0.08)
+		task.wait(0.12)
 	until not timeoutSeconds or timeoutSeconds <= 0 or os.clock() - startedAt >= timeoutSeconds
 	sellCaptureActive = false
 	setStatus("Sell: Sell Inventory option not found")
@@ -3013,24 +3016,14 @@ function sellViaStevenDialogue(allowTeleport, stopKey, token, beforeInventoryCou
 	end
 
 	local actions = 0
-	for _ = 1, 4 do
-		if runStopped(stopKey, token) then
-			return actions
-		end
-		if triggerPrompt(prompt, true) then
-			actions += 1
-		end
-		task.wait(0.35)
-		local clicked = clickSellInventoryButton(1.5, stopKey, token, beforeInventoryCount, beforeSheckles)
-		actions += clicked
-		if beforeInventoryCount and sellSucceeded(beforeInventoryCount, beforeSheckles) then
-			break
-		end
-		if clicked > 0 and not beforeInventoryCount then
-			break
-		end
-		task.wait(0.25)
+	if runStopped(stopKey, token) then
+		return actions
 	end
+	if triggerPrompt(prompt, true) then
+		actions += 1
+	end
+	task.wait(0.3)
+	actions += clickSellInventoryButton(CONFIG.sellGuiClickTimeout, stopKey, token, beforeInventoryCount, beforeSheckles)
 
 	return actions
 end
@@ -4909,6 +4902,12 @@ function autoSell(force)
 	if runStopped(stopKey, token) then
 		return
 	end
+	local now = os.clock()
+	if now - lastAutoSellAttemptAt < CONFIG.sellCooldown then
+		return
+	end
+	lastAutoSellAttemptAt = now
+	fruitCollectionPausedUntil = now + 2.5
 
 	local inventoryFull = refreshInventoryStats(true)
 	local beforeInventoryCount = countInventoryTools()
@@ -4969,6 +4968,7 @@ function autoSell(force)
 	end
 
 	refreshInventoryStats(true)
+	invalidateSellableInventoryCache()
 	local afterInventoryCount = countInventoryTools()
 	updateStatsUI()
 	if afterInventoryCount >= beforeInventoryCount and (not afterSheckles or not beforeSheckles or afterSheckles <= beforeSheckles) then
@@ -6485,7 +6485,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	end
 
 	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
-		if fruitMovementLocked then
+		if fruitMovementLocked or os.clock() < fruitCollectionPausedUntil then
 			timers.fruitCollector = CONFIG.collectInterval
 		else
 			if tryRun("fruitCollector", collectFruit) then
