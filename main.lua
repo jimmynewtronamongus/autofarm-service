@@ -853,6 +853,14 @@ function getPacketRemote()
 	return nil
 end
 
+function packetNameExists(packetName)
+	local remote = getPacketRemote()
+	if not remote then
+		return true
+	end
+	return remote:GetAttribute(packetName) ~= nil
+end
+
 function firePacketRemote(packetName, ...)
 	local remote = getPacketRemote()
 	if not remote then
@@ -860,6 +868,9 @@ function firePacketRemote(packetName, ...)
 	end
 
 	local id = remote:GetAttribute(packetName)
+	if id == nil then
+		return false
+	end
 	for _, firstArg in ipairs({ packetName, id }) do
 		if firstArg ~= nil then
 			local ok = pcall(function(...)
@@ -987,6 +998,10 @@ function findPacketEntry(root, packetName, seen)
 end
 
 function sendPacket(packetName, ...)
+	if not packetNameExists(packetName) then
+		return false
+	end
+
 	local packet = getPacketModule()
 	if type(packet) == "table" then
 		local entry = packetEntryCache[packetName]
@@ -1022,6 +1037,10 @@ function sendPacket(packetName, ...)
 end
 
 function sendExactPacket(packetName, ...)
+	if not packetNameExists(packetName) then
+		return false, 0
+	end
+
 	local actions = 0
 	local ok, count = firePacketObject(packetName, ...)
 	if ok then
@@ -2256,8 +2275,6 @@ function collectFruitEntryFast(entry, heavy)
 
 	if heavy and target then
 		fired = collectFruitPacket(target, true) or fired
-		fired = sendPacket("HarvestFruit", target) or fired
-		fired = sendPacket("Collect", target) or fired
 	end
 
 	if part and (heavy or state.collectTeleport) then
@@ -2823,18 +2840,15 @@ end
 function tryPlantSeedRemote(seedName, position)
 	local attempts = 0
 	local cframe = CFrame.new(position)
-	local packets = { "PlantSeed", "PlaceSeed", "Plant", "GrowPlant" }
 	local unpackArgs = table.unpack or unpack
 
-	for _, packetName in ipairs(packets) do
-		for _, args in ipairs({
-			{ seedName, position },
-			{ position, seedName },
-			{ seedName, cframe },
-		}) do
-			attempts += 1
-			sendPacket(packetName, unpackArgs(args))
-		end
+	for _, args in ipairs({
+		{ seedName, position },
+		{ position, seedName },
+		{ seedName, cframe },
+	}) do
+		attempts += 1
+		sendPacket("PlantSeed", unpackArgs(args))
 	end
 
 	return attempts
