@@ -2449,7 +2449,7 @@ end
 function activateButton(button)
 	local fired = false
 
-	if typeof(getconnections) == "function" then
+	if button:IsA("GuiButton") and typeof(getconnections) == "function" then
 		for _, signal in ipairs({ button.Activated, button.MouseButton1Click, button.MouseButton1Down }) do
 			for _, connection in ipairs(getconnections(signal)) do
 				pcall(function()
@@ -2464,7 +2464,7 @@ function activateButton(button)
 		end
 	end
 
-	if typeof(firesignal) == "function" then
+	if button:IsA("GuiButton") and typeof(firesignal) == "function" then
 		pcall(firesignal, button.MouseButton1Click)
 		pcall(firesignal, button.Activated)
 		pcall(firesignal, button.MouseButton1Down)
@@ -2572,12 +2572,16 @@ function findAncestorButton(instance)
 	return nil
 end
 
+function findClickableGuiObject(instance)
+	return findAncestorButton(instance) or (instance:IsA("GuiObject") and instance or nil)
+end
+
 function findSellInventoryButton()
 	local ownGui = playerGui:FindFirstChild("GardenAutomationGui")
 	local fallbackButton
 	local scanned = 0
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
-		if scanned >= 160 then
+		if scanned >= 800 then
 			break
 		end
 		if descendant:IsA("GuiObject") and guiObjectVisible(descendant) and (not ownGui or not descendant:IsDescendantOf(ownGui)) then
@@ -2590,8 +2594,12 @@ function findSellInventoryButton()
 			else
 				text = string.lower(safeText(descendant.Name))
 			end
-			local button = descendant:IsA("GuiButton") and descendant or findAncestorButton(descendant)
-			if string.find(text, "sell inventory", 1, true) then
+			local button = findClickableGuiObject(descendant)
+			if string.find(text, "sell inventory", 1, true)
+				or string.find(text, "sell my inventory", 1, true)
+				or string.find(text, "sell all my", 1, true)
+				or string.find(text, "inventory", 1, true) and string.find(text, "sell", 1, true)
+			then
 				return button
 			end
 			if not fallbackButton
@@ -2619,10 +2627,70 @@ function clickSellInventoryButton(timeoutSeconds)
 	return 0
 end
 
+function getControllerModule(pathNames)
+	local current = localPlayer:FindFirstChild("PlayerScripts")
+	for _, name in ipairs(pathNames) do
+		current = current and current:FindFirstChild(name)
+	end
+	if current and current:IsA("ModuleScript") then
+		local ok, module = pcall(require, current)
+		if ok then
+			return module
+		end
+	end
+	return nil
+end
+
+function callSellFunctionsIn(value, seen)
+	if type(value) ~= "table" then
+		return 0
+	end
+	seen = seen or {}
+	if seen[value] then
+		return 0
+	end
+	seen[value] = true
+
+	local actions = 0
+	for key, child in pairs(value) do
+		local name = string.lower(tostring(key))
+		if type(child) == "function" then
+			if string.find(name, "sell", 1, true)
+				and (string.find(name, "inventory", 1, true)
+					or string.find(name, "all", 1, true)
+					or string.find(name, "fruit", 1, true))
+			then
+				if pcall(child, value) then
+					actions += 1
+				end
+				if pcall(child) then
+					actions += 1
+				end
+			end
+		elseif type(child) == "table" then
+			actions += callSellFunctionsIn(child, seen)
+		end
+	end
+	return actions
+end
+
+function callSellControllerFallback()
+	local actions = 0
+	for _, path in ipairs({
+		{ "Controllers", "NPCController", "Sell_Steven" },
+		{ "Controllers", "NPCController" },
+		{ "Controllers", "NPCDialogueController" },
+	}) do
+		local module = getControllerModule(path)
+		actions += callSellFunctionsIn(module)
+	end
+	return actions
+end
+
 function sellViaStevenDialogue(allowTeleport)
 	local prompt = findSellPrompt()
 	if not prompt then
-		return 0
+		return callSellControllerFallback()
 	end
 
 	local part = getPromptPart(prompt)
@@ -2654,6 +2722,10 @@ function sellViaStevenDialogue(allowTeleport)
 		if clicked > 0 then
 			break
 		end
+	end
+
+	if actions <= 0 then
+		actions += callSellControllerFallback()
 	end
 
 	return actions
@@ -4515,7 +4587,7 @@ function autoSell(force)
 	local beforeSheckles = refreshCurrencyStats(true)
 	local farmedBeforeSell = stats.shecklesFarmed or 0
 	local actions = 0
-	local allowTeleport = inventoryFull == true or force == true
+	local allowTeleport = force == true or state.autoSell == true or inventoryFull == true
 	local movedToSteven = false
 
 	for attempt = 1, 4 do
@@ -4531,6 +4603,12 @@ function autoSell(force)
 			actions += sellViaStevenDialogue(false)
 			task.wait(0.45)
 			local sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
+			if sold then
+				break
+			end
+			actions += callSellControllerFallback()
+			task.wait(0.35)
+			sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
 			if sold then
 				break
 			end
