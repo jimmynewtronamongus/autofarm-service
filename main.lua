@@ -2482,6 +2482,7 @@ function activateButton(button)
 
 	local ok = pcall(function()
 		virtualInputManager:SendMouseButtonEvent(position.X, position.Y, 0, true, game, 1)
+		task.wait(0.04)
 		virtualInputManager:SendMouseButtonEvent(position.X, position.Y, 0, false, game, 1)
 	end)
 
@@ -2572,8 +2573,50 @@ function findAncestorButton(instance)
 	return nil
 end
 
+function findFirstVisibleButton(root)
+	if not root then
+		return nil
+	end
+	if root:IsA("GuiButton") and guiObjectVisible(root) then
+		return root
+	end
+	for _, child in ipairs(root:GetDescendants()) do
+		if child:IsA("GuiButton") and guiObjectVisible(child) then
+			return child
+		end
+	end
+	return nil
+end
+
+function findNearbyOptionButton(instance)
+	local ancestorButton = findAncestorButton(instance)
+	if ancestorButton then
+		return ancestorButton
+	end
+
+	local current = instance
+	while current and current ~= playerGui do
+		local directButton = findFirstVisibleButton(current)
+		if directButton then
+			return directButton
+		end
+		local parent = current.Parent
+		if parent and parent:IsA("GuiObject") then
+			for _, sibling in ipairs(parent:GetChildren()) do
+				local siblingButton = findFirstVisibleButton(sibling)
+				if siblingButton then
+					return siblingButton
+				end
+			end
+		end
+		current = parent
+	end
+
+	return instance:IsA("GuiObject") and instance or nil
+end
+
 function findClickableGuiObject(instance)
-	return findAncestorButton(instance) or (instance:IsA("GuiObject") and instance or nil)
+	return findNearbyOptionButton(instance)
 end
 
 function findSellInventoryButton()
@@ -2620,10 +2663,12 @@ function clickSellInventoryButton(timeoutSeconds)
 	repeat
 		local button = findSellInventoryButton()
 		if button and activateButton(button) then
+			setStatus("Sell: clicked Sell Inventory option")
 			return 1
 		end
 		task.wait(0.08)
 	until not timeoutSeconds or timeoutSeconds <= 0 or os.clock() - startedAt >= timeoutSeconds
+	setStatus("Sell: Sell Inventory option not found")
 	return 0
 end
 
