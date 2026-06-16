@@ -22,6 +22,7 @@ CONFIG = {
 	plantInterval = 1.3,
 	sellInterval = 12.0,
 	sellWhenFullInterval = 1.5,
+	schedulerInterval = 0.25,
 	sellResumeFreeSlots = 8,
 	buyInterval = 1.5,
 	rainbowCollectInterval = 4.5,
@@ -30,11 +31,11 @@ CONFIG = {
 	dropCacheRefreshInterval = 5.0,
 	inventoryRefreshInterval = 3.5,
 	guiInventoryRefreshInterval = 30.0,
-	maxFruitCollectPerTick = 28,
-	maxFruitScanPerRoot = 1600,
-	fruitCacheRefreshInterval = 2.0,
-	maxFruitTargetsCached = 260,
-	maxFruitPromptFallbackPerTick = 28,
+	maxFruitCollectPerTick = 20,
+	maxFruitScanPerRoot = 900,
+	fruitCacheRefreshInterval = 3.0,
+	maxFruitTargetsCached = 180,
+	maxFruitPromptFallbackPerTick = 18,
 	maxSeedPlantPerTick = 3,
 	maxSeedPlacementsPerTool = 2,
 	seedCountCacheRefreshInterval = 45.0,
@@ -44,7 +45,7 @@ CONFIG = {
 	shovelHoldDuration = 3.1,
 	maxShovelPerTick = 1,
 	maxDropCollectPerTick = 3,
-	maxDropScanPerRoot = 450,
+	maxDropScanPerRoot = 300,
 	maxInventoryItems = 200,
 	lowRaritySeedLimit = 10,
 	maxGardenPlants = 500,
@@ -963,13 +964,6 @@ function rememberPacketBuffer(value)
 	lastPacketBuffer = value
 	if sellCaptureActive then
 		sellInventoryPacketBuffer = value
-	elseif not sellInventoryPacketBuffer and type(findSellPrompt) == "function" and type(getSellableFruitTools) == "function" then
-		local prompt = findSellPrompt()
-		local part = prompt and getPromptPart(prompt)
-		local root = getRoot()
-		if part and root and (root.Position - part.Position).Magnitude <= 18 and #getSellableFruitTools() > 0 then
-			sellInventoryPacketBuffer = value
-		end
 	end
 end
 
@@ -1004,23 +998,6 @@ function installPacketHook()
 		return false
 	end
 
-	if typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "function" and typeof(newcclosure) == "function" then
-		local ok = pcall(function()
-			local oldNamecall
-			oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-				local args = { ... }
-				if self == remote and getnamecallmethod() == "FireServer" then
-					rememberPacketBuffer(args[1])
-				end
-				return oldNamecall(self, ...)
-			end))
-		end)
-		if ok then
-			packetHookInstalled = true
-			return true
-		end
-	end
-
 	if typeof(hookfunction) == "function" then
 		local ok = pcall(function()
 			local oldFireServer
@@ -1031,6 +1008,23 @@ function installPacketHook()
 				end
 				return oldFireServer(self, ...)
 			end)
+		end)
+		if ok then
+			packetHookInstalled = true
+			return true
+		end
+	end
+
+	if typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "function" and typeof(newcclosure) == "function" then
+		local ok = pcall(function()
+			local oldNamecall
+			oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+				local args = { ... }
+				if sellCaptureActive and self == remote and getnamecallmethod() == "FireServer" then
+					rememberPacketBuffer(args[1])
+				end
+				return oldNamecall(self, ...)
+			end))
 		end)
 		if ok then
 			packetHookInstalled = true
@@ -1587,24 +1581,28 @@ if gardensForCache then
 	gardensForCache.ChildRemoved:Connect(invalidateOwnGardenCache)
 end
 
+local performanceRefreshQueued = false
+function queuePerformanceRefresh(delaySeconds)
+	if performanceRefreshQueued or not state.performanceMode then
+		return
+	end
+	performanceRefreshQueued = true
+	task.delay(delaySeconds or 1, function()
+		performanceRefreshQueued = false
+		if state.performanceMode and enablePerformanceMode then
+			enablePerformanceMode()
+		end
+	end)
+end
+
 workspace.ChildAdded:Connect(function(child)
 	if child.Name == "Gardens" then
 		invalidateOwnGardenCache()
 		child.ChildAdded:Connect(invalidateOwnGardenCache)
 		child.ChildRemoved:Connect(invalidateOwnGardenCache)
-		if state.performanceMode then
-			task.defer(function()
-				if enablePerformanceMode then
-					enablePerformanceMode()
-				end
-			end)
-		end
+		queuePerformanceRefresh(1)
 	elseif child.Name == "Map" and state.performanceMode then
-		task.defer(function()
-			if enablePerformanceMode then
-				enablePerformanceMode()
-			end
-		end)
+		queuePerformanceRefresh(1)
 	end
 end)
 
@@ -3155,6 +3153,7 @@ function collectFruit()
 	stats.fruitCollected += gained
 	stats.fruitTargetsChecked += totalCached
 	if gained > 0 then
+		invalidateSellableInventoryCache()
 		fruitTargetCache.noGainStreak = 0
 	else
 		fruitTargetCache.noGainStreak = math.min(fruitTargetCache.noGainStreak + 1, 3)
@@ -3544,7 +3543,18 @@ function isLikelyFruitTool(item)
 	return false
 end
 
-function getSellableFruitTools()
+local sellableInventoryCache = {
+	tools = {},
+	count = 0,
+	checkedAt = 0,
+	dirty = true,
+}
+
+function invalidateSellableInventoryCache()
+	sellableInventoryCache.dirty = true
+end
+
+function scanSellableFruitTools()
 	local tools = {}
 	local character = getCharacter()
 	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
@@ -3579,6 +3589,27 @@ function getSellableFruitTools()
 	end)
 
 	return tools
+end
+
+function getSellableFruitTools(force)
+	local now = os.clock()
+	if not force
+		and not sellableInventoryCache.dirty
+		and now - sellableInventoryCache.checkedAt < 1.0
+	then
+		return sellableInventoryCache.tools
+	end
+
+	local tools = scanSellableFruitTools()
+	sellableInventoryCache.tools = tools
+	sellableInventoryCache.count = #tools
+	sellableInventoryCache.checkedAt = now
+	sellableInventoryCache.dirty = false
+	return tools
+end
+
+function hasSellableFruitTools()
+	return #getSellableFruitTools(false) > 0
 end
 
 function getSelectedGearList()
@@ -4888,7 +4919,7 @@ function autoSell(force)
 
 	local inventoryFull = refreshInventoryStats(true)
 	local beforeInventoryCount = countInventoryTools()
-	local sellableTools = getSellableFruitTools()
+	local sellableTools = getSellableFruitTools(true)
 	if #sellableTools <= 0 then
 		refreshInventoryStats(true)
 		if not force then
@@ -4909,7 +4940,7 @@ function autoSell(force)
 		if runStopped(stopKey, token) then
 			return
 		end
-		if #getSellableFruitTools() <= 0 then
+		if #getSellableFruitTools(true) <= 0 then
 			setStatus("Sell: no sellable fruit in inventory")
 			return
 		end
@@ -4966,7 +4997,7 @@ function autoSell(force)
 		end
 
 		if movedToSteven then
-			for _, tool in ipairs(getSellableFruitTools()) do
+			for _, tool in ipairs(getSellableFruitTools(true)) do
 				if runStopped(stopKey, token) then
 					return
 				end
@@ -4989,7 +5020,7 @@ function autoSell(force)
 			end
 		end
 
-		if #getSellableFruitTools() == 0 then
+		if #getSellableFruitTools(true) == 0 then
 			break
 		end
 	end
@@ -6395,9 +6426,32 @@ function runGuarded(key, callback)
 	end)
 end
 
+function watchToolContainer(container)
+	if not container then
+		return
+	end
+	container.ChildAdded:Connect(invalidateSellableInventoryCache)
+	container.ChildRemoved:Connect(invalidateSellableInventoryCache)
+end
+
+watchToolContainer(localPlayer:FindFirstChildOfClass("Backpack"))
+localPlayer.ChildAdded:Connect(function(child)
+	if child:IsA("Backpack") then
+		watchToolContainer(child)
+		invalidateSellableInventoryCache()
+	end
+end)
+if localPlayer.Character then
+	watchToolContainer(localPlayer.Character)
+end
+localPlayer.CharacterAdded:Connect(function(character)
+	watchToolContainer(character)
+	invalidateSellableInventoryCache()
+end)
+
 RunService.Heartbeat:Connect(function(deltaTime)
 	schedulerAccumulator += deltaTime
-	if schedulerAccumulator < 0.1 then
+	if schedulerAccumulator < CONFIG.schedulerInterval then
 		return
 	end
 	deltaTime = schedulerAccumulator
@@ -6443,7 +6497,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	local hasSellableInventory = false
 	if state.sellWhenFull or state.autoSell then
 		inventoryFull = refreshInventoryStats(false)
-		hasSellableInventory = #getSellableFruitTools() > 0
+		hasSellableInventory = hasSellableFruitTools()
 		sellNeeded = inventoryFull and hasSellableInventory
 	end
 	local urgentSellDue = hasSellableInventory and inventoryFull and (state.sellWhenFull or state.autoSell)
