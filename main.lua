@@ -4604,22 +4604,6 @@ function vectorFromConfigPosition(value)
 	return nil
 end
 
-function getMouseWorldPosition()
-	local ok, mouse = pcall(function()
-		return localPlayer:GetMouse()
-	end)
-	if not ok or not mouse then
-		return nil
-	end
-
-	local hit = mouse.Hit
-	if typeof(hit) == "CFrame" then
-		return hit.Position
-	end
-
-	return nil
-end
-
 function getToolByWords(words)
 	local character = getCharacter()
 	local humanoid = getHumanoid()
@@ -5823,13 +5807,12 @@ setBuildTab("Farm")
 makeSectionLabel("Farm", 1)
 makeToggle("Fruit Collector", "fruitCollector", 2)
 makeToggle("Trowel Plants", "autoMovePlants", 3)
-makeCommandButton("Set Trowel Position", 4, function()
+makeCommandButton("Set Trowel Target", 4, function()
 	local root = getRoot()
-	local position = getMouseWorldPosition() or (root and root.Position)
-	if position then
-		CONFIG.movePlantPosition = { x = position.X, y = position.Y, z = position.Z }
+	if root then
+		CONFIG.movePlantPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
 		saveConfig()
-		setStatus("Saved mouse position for trowel target")
+		setStatus("Saved current position for trowel target")
 	end
 end)
 makeToggle("Auto Sell Inventory", "autoSell", 5)
