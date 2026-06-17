@@ -2920,6 +2920,40 @@ end
 
 local cachedSellInventoryButton
 
+function findVisibleNpcOptionButton()
+	local ownGui = playerGui:FindFirstChild("GardenAutomationGui")
+	local scanned = 0
+	local stack = playerGui:GetChildren()
+	while #stack > 0 and scanned < CONFIG.sellGuiSearchLimit do
+		local object = table.remove(stack)
+		if not object then
+			break
+		end
+		if object:IsA("GuiButton")
+			and guiObjectVisible(object)
+			and (not ownGui or not object:IsDescendantOf(ownGui))
+		then
+			local path = string.lower(getObjectPath(object))
+			local name = string.lower(object.Name)
+			if string.find(path, "npc", 1, true)
+				or string.find(path, "dialog", 1, true)
+				or string.find(path, "option", 1, true)
+				or string.find(name, "imagebutton", 1, true)
+			then
+				return object
+			end
+		end
+		if object:IsA("GuiObject") or object:IsA("LayerCollector") or object == playerGui then
+			scanned += 1
+			local children = object:GetChildren()
+			for index = #children, 1, -1 do
+				stack[#stack + 1] = children[index]
+			end
+		end
+	end
+	return nil
+end
+
 function findSellInventoryButton()
 	if cachedSellInventoryButton
 		and cachedSellInventoryButton.Parent
@@ -2977,7 +3011,7 @@ function findSellInventoryButton()
 		end
 	end
 
-	cachedSellInventoryButton = bestButton or fallbackButton
+	cachedSellInventoryButton = bestButton or fallbackButton or findVisibleNpcOptionButton()
 	return cachedSellInventoryButton
 end
 
@@ -3002,6 +3036,7 @@ function clickSellInventoryButton(timeoutSeconds, stopKey, token, beforeInventor
 	end
 	local startedAt = os.clock()
 	local triedButton
+	local attempts = 0
 	repeat
 		if runStopped(stopKey, token) then
 			sellCaptureActive = false
@@ -3011,8 +3046,9 @@ function clickSellInventoryButton(timeoutSeconds, stopKey, token, beforeInventor
 		if button then
 			triedButton = button
 			sellCaptureActive = CONFIG.enableSellPacketCapture == true
-			local clicked = clickButtonLight(button)
-			task.wait(0.35)
+			attempts += 1
+			local clicked = activateButton(button)
+			task.wait(0.45)
 			sellCaptureActive = false
 			if not clicked then
 				return 0
@@ -3023,6 +3059,12 @@ function clickSellInventoryButton(timeoutSeconds, stopKey, token, beforeInventor
 			if beforeInventoryCount and sellSucceeded(beforeInventoryCount, beforeSheckles) then
 				setStatus("Sell: inventory sold through Steven")
 				return 1
+			end
+			if attempts < 2 and beforeInventoryCount then
+				cachedSellInventoryButton = nil
+				triedButton = nil
+				task.wait(0.18)
+				continue
 			end
 			if sellInventoryPacketBuffer then
 				setStatus("Sell: captured Steven packet, waiting for sell")
@@ -3442,6 +3484,10 @@ function getSeedPlantPosition(index, center)
 		offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * radius
 	end
 
+	if CONFIG.seedPlacementMode == "Saved Position" then
+		return basePosition + offset
+	end
+
 	local origin = basePosition + offset + Vector3.new(0, 12, 0)
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
@@ -3463,14 +3509,22 @@ function tryPlantSeedRemote(seedName, position)
 	local attempts = 0
 	local cframe = CFrame.new(position)
 	local unpackArgs = table.unpack or unpack
+	local tool = findSeedTool(seedName, false)
+	local seedToolName = tool and tool.Name or (seedName .. " Seed")
 
 	for _, args in ipairs({
 		{ seedName, position },
 		{ position, seedName },
 		{ seedName, cframe },
+		{ seedToolName, position },
+		{ position, seedToolName },
+		{ tool, position },
+		{ position, tool },
 	}) do
-		attempts += 1
-		sendPacket("PlantSeed", unpackArgs(args))
+		if args[1] ~= nil and args[2] ~= nil then
+			attempts += 1
+			sendPacket("PlantSeed", unpackArgs(args))
+		end
 	end
 
 	return attempts
@@ -3480,6 +3534,15 @@ function moveToOwnGarden()
 	local root = getRoot()
 	if not root then
 		return nil, "character"
+	end
+
+	local savedPosition = vectorFromConfigPosition and vectorFromConfigPosition(CONFIG.savedPlantPosition)
+	if CONFIG.seedPlacementMode == "Saved Position" and savedPosition then
+		if (root.Position - savedPosition).Magnitude > 10 then
+			root.CFrame = CFrame.new(savedPosition + Vector3.new(0, 3, 0))
+			task.wait(0.18)
+		end
+		return savedPosition, nil
 	end
 
 	local anchor = getOwnGardenAnchor()
@@ -4559,6 +4622,10 @@ function plantSeed()
 	local gardenPosition, moveReason = moveToOwnGarden()
 	if not gardenPosition then
 		setStatus(moveReason == "garden" and "Seed placer: own garden not found" or "Seed placer: character root missing")
+		return
+	end
+	if CONFIG.seedPlacementMode == "Saved Position" and not vectorFromConfigPosition(CONFIG.savedPlantPosition) then
+		setStatus("Seed placer: save a plant position first")
 		return
 	end
 
@@ -6895,7 +6962,14 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	end
 
 	local shovelDue = state.autoShovel and timers.autoShovel >= CONFIG.shovelInterval
-	local movementLocked = running.autoShovel or sellDue or running.autoSell or running.sellWhenFull
+	local movementLocked = running.autoShovel
+		or running.autoWater
+		or running.autoSprinkler
+		or running.autoCollectRainbowSeeds
+		or running.autoBuyPets
+		or sellDue
+		or running.autoSell
+		or running.sellWhenFull
 
 	if shovelDue and not movementLocked then
 		if tryRun("autoShovel", autoShovel) then
