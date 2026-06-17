@@ -13,7 +13,7 @@ localPlayer = Players.LocalPlayer
 playerGui = localPlayer:WaitForChild("PlayerGui")
 
 CONFIG = {
-	collectInterval = 0.8,
+	collectInterval = 0.45,
 	sellInterval = 12.0,
 	sellWhenFullInterval = 1.5,
 	schedulerInterval = 0.25,
@@ -24,12 +24,14 @@ CONFIG = {
 	mailInterval = 6.0,
 	petSellInterval = 5.0,
 	petBuyInterval = 1.5,
+	petWalkDistance = 8.0,
+	petWalkTimeout = 8.0,
 	cacheRefreshInterval = 25.0,
 	inventoryRefreshInterval = 1.0,
 	guiInventoryRefreshInterval = 30.0,
-	maxFruitCollectPerTick = 8,
+	maxFruitCollectPerTick = 14,
 	maxFruitScanPerRoot = 550,
-	fruitCacheRefreshInterval = 3.0,
+	fruitCacheRefreshInterval = 1.25,
 	maxFruitTargetsCached = 320,
 	maxFruitPromptFallbackPerTick = 8,
 	deepPacketDiscovery = false,
@@ -37,6 +39,8 @@ CONFIG = {
 	packetDiscoveryLimit = 1200,
 	maxSeedBuyPerTick = 3,
 	seedBuyRemoteRepeats = 4,
+	maxGearBuyPerTick = 3,
+	gearBuyRemoteRepeats = 4,
 	maxInventoryItems = 100,
 	movePlantPosition = nil,
 	petSellMutationFilter = "",
@@ -2934,6 +2938,41 @@ function triggerHarvestPrompt(prompt)
 	return began or ended
 end
 
+function triggerAnyPrompt(prompt)
+	if not prompt or not prompt:IsA("ProximityPrompt") then
+		return false
+	end
+
+	local ok, enabled = pcall(function()
+		return prompt.Enabled
+	end)
+	if ok and enabled == false then
+		return false
+	end
+
+	if typeof(fireproximityprompt) == "function" then
+		local fired = pcall(fireproximityprompt, prompt)
+			or pcall(fireproximityprompt, prompt, 0)
+			or pcall(fireproximityprompt, prompt, 1, true)
+		if fired then
+			return true
+		end
+	end
+
+	local holdSeconds = 0.05
+	pcall(function()
+		holdSeconds = math.clamp(tonumber(prompt.HoldDuration) or 0, 0, 2) + 0.05
+	end)
+	local began = pcall(function()
+		prompt:InputHoldBegin()
+	end)
+	task.wait(holdSeconds)
+	local ended = pcall(function()
+		prompt:InputHoldEnd()
+	end)
+	return began or ended
+end
+
 function getTargetPart(target)
 	if not target then
 		return nil
@@ -3242,9 +3281,12 @@ function pruneFruitTargetCache()
 	end
 end
 
-function collectFruitEntryFast(entry, heavy)
+function collectFruitEntryFast(entry, heavy, verifyEach)
 	if not isLiveFruitEntry(entry) then
 		return false, false
+	end
+	if verifyEach == nil then
+		verifyEach = true
 	end
 
 	local target = entry.target
@@ -3254,15 +3296,19 @@ function collectFruitEntryFast(entry, heavy)
 	local fired = false
 	if prompt then
 		fired = triggerHarvestPrompt(prompt) or fired
-		if collectionTookEffect(target or prompt, beforeInventoryCount) then
+		if verifyEach and collectionTookEffect(target or prompt, beforeInventoryCount) then
 			return true, true
 		end
 	end
 	if target then
 		fired = collectFruitPacket(target, true, prompt) or fired
-		if collectionTookEffect(target or prompt, beforeInventoryCount) then
+		if verifyEach and collectionTookEffect(target or prompt, beforeInventoryCount) then
 			return true, true
 		end
+	end
+
+	if not verifyEach then
+		return false, fired
 	end
 
 	return false, fired
@@ -3396,6 +3442,7 @@ function collectFruit()
 	end
 
 	local heavyFallback = fruitTargetCache.noGainStreak >= 1
+	local verifyEachHarvest = fruitTargetCache.noGainStreak >= 2
 	local failedRemoteHarvests = 0
 	local attemptedHarvests = 0
 	for index, entry in ipairs(targets) do
@@ -3409,11 +3456,11 @@ function collectFruit()
 		end
 
 		if fallback < fallbackLimit and isLiveFruitEntry(entry) and entry.target then
-			local harvested, attempted = collectFruitEntryFast(entry, heavyFallback)
+			local harvested, attempted = collectFruitEntryFast(entry, heavyFallback, verifyEachHarvest)
 			if attempted then
 				attemptedHarvests += 1
 			end
-			if harvested then
+			if harvested or (attempted and not verifyEachHarvest) then
 				fallback += 1
 				fired += 1
 				failedRemoteHarvests = 0
@@ -3737,13 +3784,24 @@ end
 
 function getSelectedGearList()
 	local selected = {}
+	local seen = {}
 
 	for _, gearName in ipairs(gearNames) do
 		if selectedGears[gearName] then
+			seen[gearName] = true
 			table.insert(selected, gearName)
 		end
 	end
 
+	for gearName, enabled in pairs(selectedGears) do
+		if enabled and not seen[gearName] then
+			addUniqueName(gearNames, gearName)
+			table.insert(selected, gearName)
+		end
+	end
+
+	table.sort(gearNames)
+	table.sort(selected)
 	return selected
 end
 
@@ -4546,6 +4604,22 @@ function vectorFromConfigPosition(value)
 	return nil
 end
 
+function getMouseWorldPosition()
+	local ok, mouse = pcall(function()
+		return localPlayer:GetMouse()
+	end)
+	if not ok or not mouse then
+		return nil
+	end
+
+	local hit = mouse.Hit
+	if typeof(hit) == "CFrame" then
+		return hit.Position
+	end
+
+	return nil
+end
+
 function getToolByWords(words)
 	local character = getCharacter()
 	local humanoid = getHumanoid()
@@ -4832,16 +4906,41 @@ function buyOneGear(gearName)
 	table.insert(packetVariants, { { ItemName = primary } })
 	table.insert(packetVariants, { { Name = primary, Quantity = 1 } })
 
-	local rawNameOk = sendRawStringVariants("PurchaseGear", aliases)
-	local rawQuantityOk = sendRawStringNumberVariants("PurchaseGear", aliases, 1)
-	local typedOk = sendTypedPacketArgVariants("PurchaseGear", { "String" }, typedVariants)
-	local typedQuantityOk = sendTypedPacketArgVariants("PurchaseGear", { "String", "NumberU8" }, typedQuantityVariants)
-	local ok = sendPacketArgVariants("PurchaseGear", packetVariants)
-	if rawNameOk or rawQuantityOk or typedOk or typedQuantityOk or ok then
-		return true, "Gear: " .. primary
+	local actions = 0
+	for repeatIndex = 1, CONFIG.gearBuyRemoteRepeats do
+		local rawNameOk, rawNameCount = sendRawStringVariants("PurchaseGear", aliases)
+		if rawNameOk then
+			actions += rawNameCount or 1
+		end
+
+		local rawQuantityOk, rawQuantityCount = sendRawStringNumberVariants("PurchaseGear", aliases, 1)
+		if rawQuantityOk then
+			actions += rawQuantityCount or 1
+		end
+
+		local typedOk, typedCount = sendTypedPacketArgVariants("PurchaseGear", { "String" }, typedVariants)
+		if typedOk then
+			actions += typedCount or 1
+		end
+
+		local typedQuantityOk, typedQuantityCount = sendTypedPacketArgVariants("PurchaseGear", { "String", "NumberU8" }, typedQuantityVariants)
+		if typedQuantityOk then
+			actions += typedQuantityCount or 1
+		end
+
+		local ok, count = sendPacketArgVariants("PurchaseGear", packetVariants)
+		if ok then
+			actions += count or 1
+		end
+
+		task.wait()
 	end
 
-	return false, "Gear: remote failed " .. primary
+	if actions > 0 then
+		return true, "Gear: " .. primary, actions
+	end
+
+	return false, "Gear: remote failed " .. primary, 0
 end
 
 function buyGear()
@@ -4850,33 +4949,38 @@ function buyGear()
 	end
 
 	local bought = 0
+	local attempts = 0
 	local lastMessage = "Auto gear: no gear selected"
 
 	for _, gearName in ipairs(getSelectedGearList()) do
 		if not isEnabled("autoBuyGear") then
 			return
 		end
+		if attempts >= CONFIG.maxGearBuyPerTick then
+			break
+		end
 
 		local beforeInventoryCount = countInventoryTools()
 		local beforeSheckles = refreshCurrencyStats(true)
-		local ok, message = buyOneGear(gearName)
+		local ok, message, actions = buyOneGear(gearName)
 		lastMessage = message
 		if ok then
 			local changed = purchaseChanged(beforeInventoryCount, beforeSheckles)
 			if changed then
 				bought += 1
 			else
-				lastMessage = "Auto gear: no verified purchase for " .. gearName
+				lastMessage = ("Auto gear: requested %s (%d action(s)), no verified purchase yet"):format(gearName, actions or 0)
 			end
 			task.wait(0.12)
 		end
+		attempts += 1
 	end
 
 	if bought > 0 then
 		stats.gearBought += bought
 		refreshInventoryStats()
 		updateStatsUI()
-		setStatus(("Auto gear: verified %d purchase(s)"):format(bought))
+		setStatus(("Auto gear: verified %d purchase(s) across %d attempt(s)"):format(bought, attempts))
 	else
 		setStatus(lastMessage)
 	end
@@ -4933,6 +5037,55 @@ function getPetBuyAliases(petName, model, prompt)
 		addBuyAlias(aliases, seen, spawnId)
 	end
 	return aliases, spawnId
+end
+
+function getPetPromptPosition(model, prompt)
+	local part = getPromptPart(prompt) or getTargetPart(model)
+	return part and part.Position or nil
+end
+
+function walkToPosition(position, stopDistance, timeoutSeconds)
+	local humanoid = getHumanoid()
+	local root = getRoot()
+	if not humanoid or not root or not position then
+		return false
+	end
+
+	stopDistance = stopDistance or CONFIG.petWalkDistance
+	timeoutSeconds = timeoutSeconds or CONFIG.petWalkTimeout
+	local startedAt = os.clock()
+
+	while os.clock() - startedAt < timeoutSeconds do
+		root = getRoot()
+		if not root then
+			return false
+		end
+		local distance = (root.Position - position).Magnitude
+		if distance <= stopDistance then
+			return true
+		end
+
+		pcall(function()
+			humanoid:MoveTo(position)
+		end)
+		task.wait(0.2)
+	end
+
+	root = getRoot()
+	return root and (root.Position - position).Magnitude <= stopDistance
+end
+
+function walkToPetPrompt(model, prompt)
+	local position = getPetPromptPosition(model, prompt)
+	if not position then
+		return false
+	end
+
+	local reached = walkToPosition(position, CONFIG.petWalkDistance, CONFIG.petWalkTimeout)
+	if reached then
+		task.wait(0.1)
+	end
+	return reached
 end
 
 function buyPetRemote(petName, model, prompt)
@@ -5008,9 +5161,13 @@ function buyOnePet(petName)
 			local isPetPrompt = string.find(modelName, petTerm, 1, true) ~= nil or textMatches(descendant, { petName })
 
 			if isBuyPrompt and isPetPrompt then
-				if buyPetRemote(petName, model, descendant) then
-					markPetSpawnHandled(model, descendant, 25)
-					return true, ("Auto pets: remote requested %s"):format(petName)
+				local walked = walkToPetPrompt(model, descendant)
+				local prompted = walked and triggerAnyPrompt(descendant)
+				local remoteRequested = buyPetRemote(petName, model, descendant)
+				if prompted or remoteRequested then
+					markPetSpawnHandled(model, descendant, prompted and 8 or 3)
+					local mode = prompted and "walk prompt" or "remote"
+					return true, ("Auto pets: %s requested %s"):format(mode, petName)
 				end
 			end
 		end
@@ -5666,12 +5823,13 @@ setBuildTab("Farm")
 makeSectionLabel("Farm", 1)
 makeToggle("Fruit Collector", "fruitCollector", 2)
 makeToggle("Trowel Plants", "autoMovePlants", 3)
-makeCommandButton("Set Trowel Target", 4, function()
+makeCommandButton("Set Trowel Position", 4, function()
 	local root = getRoot()
-	if root then
-		CONFIG.movePlantPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
+	local position = getMouseWorldPosition() or (root and root.Position)
+	if position then
+		CONFIG.movePlantPosition = { x = position.X, y = position.Y, z = position.Z }
 		saveConfig()
-		setStatus("Saved current position for trowel target")
+		setStatus("Saved mouse position for trowel target")
 	end
 end)
 makeToggle("Auto Sell Inventory", "autoSell", 5)
