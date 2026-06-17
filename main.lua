@@ -84,7 +84,6 @@ seedPriority = {}
 
 state = {
 	fruitCollector = false,
-	collectTeleport = true,
 	seedPlacer = false,
 	autoShovel = false,
 	autoSell = false,
@@ -216,7 +215,6 @@ function loadConfig()
 	})
 	copyKnownValues(decoded.state, state, {
 		"fruitCollector",
-		"collectTeleport",
 		"seedPlacer",
 		"autoShovel",
 		"autoSell",
@@ -295,7 +293,6 @@ saveConfig = function()
 		},
 		state = {
 			fruitCollector = state.fruitCollector,
-			collectTeleport = state.collectTeleport,
 			seedPlacer = state.seedPlacer,
 			autoShovel = state.autoShovel,
 			autoSell = state.autoSell,
@@ -2132,7 +2129,7 @@ function updateStatsUI()
 	for key, label in pairs(statsLabels) do
 		if label and label.Parent then
 			if key == "status" then
-				label.Text = ("Run: %s | Enabled: %d | TP %s"):format(snapshot.runtime, snapshot.enabled, state.collectTeleport and "ON" or "OFF")
+				label.Text = ("Run: %s | Enabled: %d"):format(snapshot.runtime, snapshot.enabled)
 			elseif key == "systems" then
 				label.Text = ("Sheckles: %s"):format(formatNumber(snapshot.sheckles))
 			elseif key == "inventory" then
@@ -2680,12 +2677,6 @@ function collectFruitEntryFast(entry, heavy)
 end
 
 function triggerPrompt(prompt, skipTouch)
-	local part = getPromptPart and getPromptPart(prompt)
-	if part and not skipTouch then
-		teleportToPart(part, 3)
-		task.wait(0.05)
-	end
-
 	local oldHoldDuration
 	local oldRequiresLineOfSight
 	local oldMaxActivationDistance
@@ -3283,7 +3274,7 @@ function callSellControllerFallback()
 	return actions
 end
 
-function sellViaStevenDialogue(allowTeleport, stopKey, token, beforeInventoryCount, beforeSheckles)
+function sellViaStevenDialogue(stopKey, token, beforeInventoryCount, beforeSheckles)
 	if runStopped(stopKey, token) then
 		return 0
 	end
@@ -3297,15 +3288,8 @@ function sellViaStevenDialogue(allowTeleport, stopKey, token, beforeInventoryCou
 	if part then
 		local root = getRoot()
 		local maxDistance = prompt.MaxActivationDistance or 10
-		if root and (root.Position - part.Position).Magnitude > maxDistance + 2 and not allowTeleport then
+		if root and (root.Position - part.Position).Magnitude > maxDistance + 2 then
 			return 0
-		end
-		if (not root or (root.Position - part.Position).Magnitude > math.max(maxDistance - 2, 6)) and allowTeleport then
-			if runStopped(stopKey, token) then
-				return 0
-			end
-			teleportToPart(part, 3)
-			task.wait(0.15)
 		end
 	end
 
@@ -3336,8 +3320,8 @@ function sellSucceeded(beforeInventoryCount, beforeSheckles)
 		currentSheckles
 end
 
-function sellThroughStevenFallback(allowTeleport)
-	return sellViaStevenDialogue(allowTeleport)
+function sellThroughStevenFallback()
+	return sellViaStevenDialogue()
 end
 
 function getToolPacketId(tool)
@@ -3405,7 +3389,7 @@ function sellInventoryByRemote(sellableTools)
 	return actions
 end
 
-function moveToStevenForSell(allowTeleport)
+function moveToStevenForSell()
 	local prompt = findSellPrompt()
 	if not prompt then
 		return false, nil
@@ -3419,11 +3403,7 @@ function moveToStevenForSell(allowTeleport)
 	local root = getRoot()
 	local maxDistance = prompt.MaxActivationDistance or 10
 	if not root or (root.Position - part.Position).Magnitude > math.max(maxDistance - 2, 6) then
-		if not allowTeleport then
-			return false, prompt
-		end
-		teleportToPart(part, 3)
-		task.wait(0.15)
+		return false, prompt
 	end
 
 	return true, prompt
@@ -3483,7 +3463,7 @@ function collectFruit()
 	end
 
 	local heavyFallback = fruitTargetCache.noGainStreak >= 1
-	local failedTeleportHarvests = 0
+	local failedRemoteHarvests = 0
 	for index, entry in ipairs(targets) do
 		if not isEnabled("fruitCollector") then
 			return
@@ -3498,11 +3478,11 @@ function collectFruit()
 			if collectFruitEntryFast(entry, heavyFallback) then
 				fallback += 1
 				fired += 1
-				failedTeleportHarvests = 0
+				failedRemoteHarvests = 0
 			else
-				failedTeleportHarvests += 1
+				failedRemoteHarvests += 1
 				fruitTargetCache.refreshedAt = 0
-				if failedTeleportHarvests >= 2 then
+				if failedRemoteHarvests >= 2 then
 					setStatus("Fruit collector: remote harvest failed, waiting before next target")
 					break
 				end
@@ -3761,10 +3741,6 @@ function moveToOwnGarden()
 
 	local savedPosition = vectorFromConfigPosition and vectorFromConfigPosition(CONFIG.savedPlantPosition)
 	if CONFIG.seedPlacementMode == "Saved Position" and savedPosition then
-		if (root.Position - savedPosition).Magnitude > 10 then
-			root.CFrame = CFrame.new(savedPosition + Vector3.new(0, 3, 0))
-			task.wait(0.18)
-		end
 		return savedPosition, nil
 	end
 
@@ -3774,36 +3750,11 @@ function moveToOwnGarden()
 	end
 
 	local gardenPosition = typeof(anchor) == "Vector3" and anchor or anchor.Position
-	if (root.Position - gardenPosition).Magnitude > math.max(CONFIG.plantRadius, 18) then
-		root.CFrame = CFrame.new(gardenPosition + Vector3.new(0, 4, 0))
-		task.wait(0.15)
-	end
-
 	return gardenPosition, nil
 end
 
 function returnToGardenAfterSell()
-	if not (state.fruitCollector or state.seedPlacer or state.autoShovel or state.autoMovePlants or state.autoWater or state.autoSprinkler) then
-		return false
-	end
-
-	local root = getRoot()
-	if not root then
-		return false
-	end
-
-	local anchor = getOwnGardenAnchor()
-	if not anchor then
-		return false
-	end
-
-	local gardenPosition = typeof(anchor) == "Vector3" and anchor or anchor.Position
-	if (root.Position - gardenPosition).Magnitude > 12 then
-		root.CFrame = CFrame.new(gardenPosition + Vector3.new(0, 4, 0))
-		task.wait(0.15)
-	end
-
-	return true
+	return false
 end
 
 isInventorySeedTool = function(item)
@@ -3915,7 +3866,6 @@ function isKnownGearTool(item)
 		"sprinkler",
 		"trowel",
 		"wheelbarrow",
-		"teleporter",
 		"gnome",
 		"lantern",
 		"flashbang",
@@ -4151,14 +4101,14 @@ function getSelectedPetList()
 	return selected
 end
 
-function touchPart(part, allowTeleportFallback)
+function touchPart(part, allowTouchOnly)
 	local root = getRoot()
 	if not root or not part or not part:IsA("BasePart") then
 		return false
 	end
 
-	if allowTeleportFallback == nil then
-		allowTeleportFallback = true
+	if allowTouchOnly == nil then
+		allowTouchOnly = true
 	end
 
 	if typeof(firetouchinterest) == "function" then
@@ -4168,69 +4118,11 @@ function touchPart(part, allowTeleportFallback)
 		return true
 	end
 
-	if not allowTeleportFallback then
+	if not allowTouchOnly then
 		return false
 	end
 
-	local oldCFrame = root.CFrame
-	local ok = pcall(function()
-		root.CFrame = part.CFrame + Vector3.new(0, 3, 0)
-		task.wait(0.05)
-		root.CFrame = oldCFrame
-	end)
-
-	return ok
-end
-
-teleportToPart = function(part, height)
-	local root = getRoot()
-	if not root or not part or not part:IsA("BasePart") then
-		return false
-	end
-
-	local character = getCharacter()
-	local targetCFrame = part.CFrame + Vector3.new(0, height or 3, 0)
-	local ok = pcall(function()
-		if character and character.PivotTo then
-			character:PivotTo(targetCFrame)
-		end
-		root.CFrame = targetCFrame
-		root.AssemblyLinearVelocity = Vector3.zero
-		root.AssemblyAngularVelocity = Vector3.zero
-	end)
-	if ok then
-		task.wait(0.15)
-	end
-	return ok
-end
-
-teleportToModelOrPart = function(model, part, height)
-	if model and model:IsA("Model") then
-		local pivotOk, pivot = pcall(function()
-			return model:GetPivot()
-		end)
-		if pivotOk then
-			local root = getRoot()
-			local character = getCharacter()
-			local targetCFrame = CFrame.new(pivot.Position + Vector3.new(0, height or 3, 0))
-			local ok = pcall(function()
-				if character and character.PivotTo then
-					character:PivotTo(targetCFrame)
-				end
-				if root then
-					root.CFrame = targetCFrame
-					root.AssemblyLinearVelocity = Vector3.zero
-					root.AssemblyAngularVelocity = Vector3.zero
-				end
-			end)
-			if ok then
-				task.wait(0.15)
-				return true
-			end
-		end
-	end
-
-	return teleportToPart(part, height)
+	return false
 end
 
 function getPromptPart(prompt)
@@ -4384,20 +4276,17 @@ function autoCollectRainbowSeeds()
 			break
 		end
 
-		local part = target:IsA("ProximityPrompt") and getPromptPart(target) or target
-		local model = target:IsA("ProximityPrompt") and target:FindFirstAncestorWhichIsA("Model") or nil
-		local moved = part and (model and teleportToModelOrPart(model, part, 3) or teleportToPart(part, 3))
-		if moved then
-			task.wait(CONFIG.promptSettleDelay)
-			if target:IsA("ProximityPrompt") then
-				if triggerPromptReliable(target) then
-					task.wait(CONFIG.promptSettleDelay)
-					checked += 1
-				end
-			elseif touchPart(target) then
+		if target:IsA("ProximityPrompt") then
+			local part = getPromptPart(target)
+			local root = getRoot()
+			local inRange = not root or not part or (root.Position - part.Position).Magnitude <= ((target.MaxActivationDistance or 10) + 3)
+			if inRange and triggerPromptReliable(target) then
 				task.wait(CONFIG.promptSettleDelay)
 				checked += 1
 			end
+		elseif touchPart(target, false) then
+			task.wait(CONFIG.promptSettleDelay)
+			checked += 1
 		end
 	end
 
@@ -5060,11 +4949,6 @@ function movePlantTarget(plant, targetPosition)
 	end
 
 	local part = getTargetPart(plant)
-	if part then
-		teleportToModelOrPart(plant:IsA("Model") and plant or nil, part, 3)
-		task.wait(0.1)
-	end
-
 	local tool = getTrowelTool()
 	if tool and part then
 		useToolAtPosition(tool, part.Position, 0.45)
@@ -5329,13 +5213,6 @@ function aimAndHoldPart(part, holdDuration, tool)
 		return false
 	end
 
-	local root = getRoot()
-	if root then
-		pcall(function()
-			root.CFrame = CFrame.lookAt(root.Position, Vector3.new(part.Position.X, root.Position.Y, part.Position.Z))
-		end)
-	end
-
 	pcall(function()
 		camera.CFrame = CFrame.lookAt(camera.CFrame.Position, part.Position)
 	end)
@@ -5374,12 +5251,6 @@ function shovelPlantTarget(plant)
 	end
 
 	local part = getTargetPart(plant)
-	local root = getRoot()
-	if part and root and (root.Position - part.Position).Magnitude > 18 then
-		teleportToModelOrPart(plant:IsA("Model") and plant or nil, part, 3)
-		task.wait(0.08)
-	end
-
 	local shovelTool = getShovelTool()
 	local prompt = getShovelPrompt(plant)
 	local fired = false
@@ -5564,12 +5435,6 @@ end
 function useToolAtPosition(tool, position, holdSeconds)
 	if not tool or not position then
 		return false
-	end
-
-	local root = getRoot()
-	if root and (root.Position - position).Magnitude > 20 then
-		root.CFrame = CFrame.new(position + Vector3.new(0, 4, 0))
-		task.wait(0.12)
 	end
 
 	local part = Instance.new("Part")
@@ -6093,15 +5958,11 @@ function buyOnePet(petName)
 
 			if isBuyPrompt and isPetPrompt then
 				local part = getPromptPart(descendant)
-				if part then
-					teleportToModelOrPart(model, part, 3)
-				end
-
 				local root = getRoot()
 				local inRange = not root or not part or (root.Position - part.Position).Magnitude <= ((descendant.MaxActivationDistance or 10) + 4)
 				if inRange and triggerPromptReliable(descendant) then
 					markPetSpawnHandled(model, descendant, 25)
-					return true, ("Auto pets: moved in range and bought %s"):format(petName)
+					return true, ("Auto pets: bought %s"):format(petName)
 				end
 			end
 		end
@@ -6748,7 +6609,6 @@ makeToggle("Collect Gold/Rainbow Drops", "autoCollectRainbowSeeds", 4)
 setBuildTab("Farm")
 makeSectionLabel("Farm", 1)
 makeToggle("Fruit Collector", "fruitCollector", 2)
-makeToggle("Teleport To Fruit", "collectTeleport", 3)
 makeToggle("Seed Placer", "seedPlacer", 4)
 makeToggle("Auto Shovel Plants", "autoShovel", 5)
 makeToggle("Auto Move Plants", "autoMovePlants", 6)
