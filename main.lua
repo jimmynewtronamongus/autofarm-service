@@ -30,7 +30,7 @@ CONFIG = {
 	maxFruitCollectPerTick = 8,
 	maxFruitScanPerRoot = 550,
 	fruitCacheRefreshInterval = 3.0,
-	maxFruitTargetsCached = 140,
+	maxFruitTargetsCached = 320,
 	maxFruitPromptFallbackPerTick = 8,
 	deepPacketDiscovery = false,
 	packetDiscoveryCooldown = 60.0,
@@ -1897,6 +1897,7 @@ function plotBelongsToLocalPlayer(plot)
 end
 
 local ownGardenCache = {
+	plots = {},
 	roots = {},
 	checkedAt = 0,
 }
@@ -1911,6 +1912,7 @@ local fruitTargetCache = {
 
 function invalidateOwnGardenCache()
 	ownGardenCache.checkedAt = 0
+	ownGardenCache.plots = {}
 	cache.ownGardenDescendants = nil
 	cache.ownGardenAt = nil
 	fruitTargetCache.refreshedAt = 0
@@ -1932,6 +1934,81 @@ function addUniqueInstance(list, instance)
 
 	table.insert(list, instance)
 	return true
+end
+
+function plotHasLocalPlayerPlants(plot)
+	local plants = plot and plot:FindFirstChild("Plants")
+	if not plants then
+		return false
+	end
+
+	local userPrefix = tostring(localPlayer.UserId) .. "_"
+	for _, plant in ipairs(plants:GetChildren()) do
+		if string.sub(plant.Name, 1, #userPrefix) == userPrefix then
+			return true
+		end
+	end
+
+	return false
+end
+
+function getPlotDistanceFromPlayer(plot)
+	local root = getRoot()
+	if not root or not plot then
+		return math.huge
+	end
+
+	local part
+	if plot:IsA("BasePart") then
+		part = plot
+	elseif plot:IsA("Model") or plot:IsA("Folder") then
+		part = plot:FindFirstChildWhichIsA("BasePart", true)
+	end
+	if not part then
+		return math.huge
+	end
+
+	return (root.Position - part.Position).Magnitude
+end
+
+function getOwnGardenPlots()
+	local now = os.clock()
+	if now - ownGardenCache.checkedAt < 5 and #ownGardenCache.plots > 0 then
+		return ownGardenCache.plots
+	end
+
+	local gardens = getGardens()
+	local plots = {}
+	if not gardens then
+		ownGardenCache.plots = plots
+		ownGardenCache.checkedAt = now
+		return plots
+	end
+
+	for _, plot in ipairs(gardens:GetChildren()) do
+		if plotBelongsToLocalPlayer(plot) or plotHasLocalPlayerPlants(plot) then
+			addUniqueInstance(plots, plot)
+		end
+	end
+
+	if #plots == 0 then
+		local closestPlot
+		local closestDistance = math.huge
+		for _, plot in ipairs(gardens:GetChildren()) do
+			if plot:FindFirstChild("Plants") then
+				local distance = getPlotDistanceFromPlayer(plot)
+				if distance < closestDistance then
+					closestPlot = plot
+					closestDistance = distance
+				end
+			end
+		end
+		addUniqueInstance(plots, closestPlot)
+	end
+
+	ownGardenCache.plots = plots
+	ownGardenCache.checkedAt = now
+	return plots
 end
 
 function collectNamedDescendantRoots(root, names, results, limit)
@@ -1960,13 +2037,7 @@ function getOwnGardenRoots()
 		return ownGardenCache.roots
 	end
 
-	local gardens = getGardens()
-	local userId = tostring(localPlayer.UserId)
 	local roots = {}
-
-	if not gardens then
-		return roots
-	end
 
 	local function addOwnPlot(plot)
 		if not plot then
@@ -1993,23 +2064,15 @@ function getOwnGardenRoots()
 		end
 	end
 
-	for _, plot in ipairs(gardens:GetChildren()) do
-		local plants = plot:FindFirstChild("Plants")
-		if plants and plotBelongsToLocalPlayer(plot) then
-			addOwnPlot(plot)
-		elseif plants then
-			for _, plant in ipairs(plants:GetChildren()) do
-				if string.sub(plant.Name, 1, #userId + 1) == userId .. "_" then
-					addOwnPlot(plot)
-					break
-				end
-			end
-		elseif plotBelongsToLocalPlayer(plot) then
-			addOwnPlot(plot)
-		end
+	for _, plot in ipairs(getOwnGardenPlots()) do
+		addOwnPlot(plot)
 	end
 
 	if #roots == 0 then
+		local gardens = getGardens()
+		if not gardens then
+			return roots
+		end
 		for _, plot in ipairs(gardens:GetChildren()) do
 			if plot:FindFirstChild("Plants") or plot:FindFirstChild("Fruits") then
 				addOwnPlot(plot)
@@ -2699,6 +2762,28 @@ function collectionTookEffect(target, beforeInventoryCount)
 	return beforeInventoryCount ~= nil and afterInventoryCount > beforeInventoryCount
 end
 
+function triggerHarvestPrompt(prompt)
+	if not isUsableHarvestPrompt(prompt) then
+		return false
+	end
+
+	if typeof(fireproximityprompt) == "function" then
+		local ok = pcall(fireproximityprompt, prompt)
+		if ok then
+			return true
+		end
+	end
+
+	local began = pcall(function()
+		prompt:InputHoldBegin()
+	end)
+	task.wait(0.03)
+	local ended = pcall(function()
+		prompt:InputHoldEnd()
+	end)
+	return began or ended
+end
+
 function getTargetPart(target)
 	if not target then
 		return nil
@@ -2721,6 +2806,12 @@ function collectPrompt(prompt)
 	local target = getCollectFruitTarget(prompt)
 	local beforeInventoryCount = countInventoryTools()
 	local fired = false
+	if prompt then
+		fired = triggerHarvestPrompt(prompt) or fired
+		if collectionTookEffect(target or prompt, beforeInventoryCount) then
+			return true
+		end
+	end
 	if target ~= nil then
 		fired = collectFruitPacket(target, true, prompt) or fired
 		if collectionTookEffect(target or prompt, beforeInventoryCount) then
@@ -2728,7 +2819,7 @@ function collectPrompt(prompt)
 		end
 	end
 
-	return fired
+	return false
 end
 
 function getHarvestPromptInTarget(target)
@@ -2839,6 +2930,45 @@ function addFruitTarget(targets, seenTargets, prompt, target)
 	})
 end
 
+function addPromptFromHarvestPart(targets, seenTargets, container)
+	if not container then
+		return
+	end
+
+	local harvestPart = container:FindFirstChild("HarvestPart")
+	local prompt = harvestPart and harvestPart:FindFirstChild("HarvestPrompt")
+	if prompt and isUsableHarvestPrompt(prompt) then
+		addFruitTarget(targets, seenTargets, prompt, container)
+	end
+end
+
+function addGardenPlantHarvestTargets(targets, seenTargets, plot)
+	local plants = plot and plot:FindFirstChild("Plants")
+	if not plants then
+		return
+	end
+
+	local scanStartedAt = os.clock()
+	for _, plant in ipairs(plants:GetChildren()) do
+		scanStartedAt = maybeYieldScan(scanStartedAt, 0.012)
+		if #targets >= CONFIG.maxFruitTargetsCached then
+			return
+		end
+
+		addPromptFromHarvestPart(targets, seenTargets, plant)
+
+		local fruits = plant:FindFirstChild("Fruits")
+		if fruits then
+			for _, fruit in ipairs(fruits:GetChildren()) do
+				if #targets >= CONFIG.maxFruitTargetsCached then
+					return
+				end
+				addPromptFromHarvestPart(targets, seenTargets, fruit)
+			end
+		end
+	end
+end
+
 function isFruitModelCandidate(instance)
 	if not instance or not instance.Parent then
 		return false
@@ -2858,6 +2988,10 @@ end
 function rebuildFruitTargetCache(roots, forceDescendantRefresh)
 	local targets = {}
 	local seenTargets = {}
+
+	for _, plot in ipairs(getOwnGardenPlots()) do
+		addGardenPlantHarvestTargets(targets, seenTargets, plot)
+	end
 
 	for index, root in ipairs(roots) do
 		if not root then
@@ -2968,6 +3102,12 @@ function collectFruitEntryFast(entry, heavy)
 
 	local beforeInventoryCount = countInventoryTools()
 	local fired = false
+	if prompt then
+		fired = triggerHarvestPrompt(prompt) or fired
+		if collectionTookEffect(target or prompt, beforeInventoryCount) then
+			return true
+		end
+	end
 	if target then
 		fired = collectFruitPacket(target, true, prompt) or fired
 		if collectionTookEffect(target or prompt, beforeInventoryCount) then
@@ -2975,7 +3115,7 @@ function collectFruitEntryFast(entry, heavy)
 		end
 	end
 
-	return fired
+	return false
 end
 
 function sellSucceeded(beforeInventoryCount, beforeSheckles)
