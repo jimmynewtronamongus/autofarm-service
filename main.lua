@@ -326,6 +326,11 @@ saveConfig = function()
 end
 
 local configLoaded = loadConfig()
+state.seedPlacer = false
+state.autoShovel = false
+state.autoWater = false
+state.autoSprinkler = false
+state.autoCollectRainbowSeeds = false
 
 local webhookSentAt = {}
 local stockLastAmounts = {}
@@ -2521,29 +2526,46 @@ function isLiveFruitEntry(entry)
 		return false
 	end
 
-	if not entry.prompt then
-		return false
-	end
-
 	return true
 end
 
 function addFruitTarget(targets, seenTargets, prompt, target)
-	if not prompt or not isUsableHarvestPrompt(prompt) then
+	if prompt and not isUsableHarvestPrompt(prompt) then
 		return
 	end
 
 	target = target or getCollectFruitTarget(prompt)
-	if not target or seenTargets[prompt] then
+	if not target then
 		return
 	end
 
-	seenTargets[prompt] = true
+	local key = target or prompt
+	if seenTargets[key] then
+		return
+	end
+
+	seenTargets[key] = true
 	table.insert(targets, {
 		prompt = prompt,
 		target = target,
 		priority = getFruitPriority(target),
 	})
+end
+
+function isFruitModelCandidate(instance)
+	if not instance or not instance.Parent then
+		return false
+	end
+	if not (instance:IsA("Model") or instance:IsA("Folder") or instance:IsA("BasePart")) then
+		return false
+	end
+	local parent = instance.Parent
+	if parent and parent.Name == "Fruits" then
+		return true
+	end
+	local pathText = string.lower(getObjectPath(instance))
+	return string.find(pathText, ".fruits.", 1, true) ~= nil
+		or string.find(pathText, ".fruit.", 1, true) ~= nil
 end
 
 function rebuildFruitTargetCache(roots, forceDescendantRefresh)
@@ -2574,6 +2596,8 @@ function rebuildFruitTargetCache(roots, forceDescendantRefresh)
 
 			if isUsableHarvestPrompt(descendant) then
 				addFruitTarget(targets, seenTargets, descendant, getCollectFruitTarget(descendant))
+			elseif isFruitModelCandidate(descendant) then
+				addFruitTarget(targets, seenTargets, nil, descendant)
 			end
 		end
 	end
@@ -2654,9 +2678,6 @@ function collectFruitEntryFast(entry, heavy)
 
 	local target = entry.target
 	local prompt = entry.prompt
-	if not prompt or not isUsableHarvestPrompt(prompt) then
-		return false
-	end
 
 	local beforeInventoryCount = countInventoryTools()
 	local fired = false
@@ -3263,7 +3284,8 @@ function sellToolByRemote(tool)
 
 	local soldItem = sendPacketArgVariants("SellItem", variants)
 	local soldFruit = sendPacketArgVariants("SellFruit", variants)
-	return soldItem or soldFruit
+	local soldPreview = sendPacketArgVariants("PreviewSellAll", variants)
+	return soldItem or soldFruit or soldPreview
 end
 
 function sellInventoryByRemote(sellableTools)
@@ -3291,6 +3313,10 @@ function sellInventoryByRemote(sellableTools)
 	local ok, count = sendPacketArgVariants("SellAll", sellAllVariants)
 	if ok then
 		actions += count
+	end
+	local previewOk, previewCount = sendPacketArgVariants("PreviewSellAll", sellAllVariants)
+	if previewOk then
+		actions += previewCount
 	end
 
 	for _, tool in ipairs(sellableTools or {}) do
@@ -3387,7 +3413,7 @@ function collectFruit()
 			return
 		end
 
-		if fallback < fallbackLimit and isLiveFruitEntry(entry) and (entry.prompt or heavyFallback) then
+		if fallback < fallbackLimit and isLiveFruitEntry(entry) and entry.target then
 			if collectFruitEntryFast(entry, heavyFallback) then
 				fallback += 1
 				fired += 1
@@ -3843,6 +3869,7 @@ function isLikelyFruitTool(item)
 		or string.find(name, "lb", 1, true)
 		or string.find(name, "fruit", 1, true)
 		or string.find(name, "harvest", 1, true)
+		or toolNameMatchesList(item, seedNames)
 	then
 		return true
 	end
@@ -5701,16 +5728,22 @@ function buySeed()
 end
 
 function buyOneGear(gearName)
-	local exactOk = false
-	local exactActions = 0
-	exactOk, exactActions = sendExactPacket("PurchaseGear", gearName)
-	if not exactOk then
-		exactOk, exactActions = sendExactPacket("PurchaseGear", gearName, 1)
-	end
-	if exactOk and exactActions > 0 then
-		return true, "Gear: " .. gearName
-	end
-	if sendPacket("PurchaseGear", gearName) or sendPacket("PurchaseGear", gearName, 1) then
+	local compact = string.gsub(tostring(gearName or ""), "%s+", "")
+	local underscored = string.gsub(tostring(gearName or ""), "%s+", "_")
+	local ok = sendPacketArgVariants("PurchaseGear", {
+		{ gearName },
+		{ gearName, 1 },
+		{ underscored },
+		{ underscored, 1 },
+		{ compact },
+		{ compact, 1 },
+		{ { Name = gearName } },
+		{ { Gear = gearName } },
+		{ { Item = gearName } },
+		{ { ItemName = gearName } },
+		{ { Name = gearName, Quantity = 1 } },
+	})
+	if ok then
 		return true, "Gear: " .. gearName
 	end
 
@@ -5784,6 +5817,42 @@ function markPetSpawnHandled(model, prompt, seconds)
 	cache.wildPetsAt = 0
 end
 
+function getPetSpawnId(model, prompt)
+	return getInstancePacketId(model)
+		or getInstancePacketId(prompt)
+		or (model and string.match(model.Name, "([%w%-]+)$"))
+		or (model and model.Name)
+end
+
+function buyPetRemote(petName, model, prompt)
+	local spawnId = getPetSpawnId(model, prompt)
+	local modelName = model and model.Name or petName
+	local variants = {
+		{ petName },
+		{ modelName },
+		{ model },
+		{ prompt },
+		{ { Name = petName } },
+		{ { Pet = petName } },
+		{ { PetName = petName } },
+	}
+	if spawnId ~= nil then
+		table.insert(variants, 1, { spawnId })
+		table.insert(variants, { spawnId, petName })
+		table.insert(variants, { petName, spawnId })
+		table.insert(variants, { { Id = spawnId } })
+		table.insert(variants, { { PetId = spawnId } })
+		table.insert(variants, { { SpawnId = spawnId } })
+		table.insert(variants, { { UID = spawnId } })
+		table.insert(variants, { { Id = spawnId, PetName = petName } })
+	end
+
+	local tameOk = sendPacketArgVariants("WildPetTame", variants)
+	local collectedOk = sendPacketArgVariants("WildPetCollected", variants)
+	local slotOk = sendPacketArgVariants("PetRequestPurchaseSlot", variants)
+	return tameOk or collectedOk or slotOk
+end
+
 function buyOnePet(petName)
 	if not isEnabled("autoBuyPets") then
 		return false, "Auto pets: disabled"
@@ -5808,18 +5877,19 @@ function buyOnePet(petName)
 			local isPetPrompt = string.find(modelName, petTerm, 1, true) ~= nil or textMatches(descendant, { petName })
 
 			if isBuyPrompt and isPetPrompt then
-				local part = getPromptPart(descendant)
-				local root = getRoot()
-				local inRange = not root or not part or (root.Position - part.Position).Magnitude <= ((descendant.MaxActivationDistance or 10) + 4)
-				if inRange and triggerPromptReliable(descendant) then
+				if buyPetRemote(petName, model, descendant) then
 					markPetSpawnHandled(model, descendant, 25)
-					return true, ("Auto pets: bought %s"):format(petName)
+					return true, ("Auto pets: remote requested %s"):format(petName)
 				end
 			end
 		end
 	end
 
-	return false, ("Auto pets: no matching prompt for %s"):format(petName)
+	if buyPetRemote(petName) then
+		return true, ("Auto pets: remote requested %s"):format(petName)
+	end
+
+	return false, ("Auto pets: no matching remote target for %s"):format(petName)
 end
 
 function buyPets()
@@ -6034,7 +6104,8 @@ function sellPetTool(info)
 	end
 
 	local ok = sendPacketArgVariants("SellPet", variants)
-	return ok
+	local itemOk = sendPacketArgVariants("SellItem", variants)
+	return ok or itemOk
 end
 
 function autoSellPets()
@@ -6460,126 +6531,16 @@ makeToggle("Collect Gold/Rainbow Drops", "autoCollectRainbowSeeds", 4)
 setBuildTab("Farm")
 makeSectionLabel("Farm", 1)
 makeToggle("Fruit Collector", "fruitCollector", 2)
-makeToggle("Seed Placer", "seedPlacer", 4)
-makeToggle("Auto Shovel Plants", "autoShovel", 5)
-makeToggle("Auto Move Plants", "autoMovePlants", 6)
-makeToggle("Auto Water", "autoWater", 7)
-makeToggle("Water Only Growing Plants", "waterOnlyGrowing", 8)
-makeToggle("Auto Sprinkler", "autoSprinkler", 9)
-local placementModes = { "Farm Corner", "Random", "Saved Position" }
-local placementButton
-placementButton = makeCommandButton("Placement Mode: " .. CONFIG.seedPlacementMode, 10, function()
-	local currentIndex = 1
-	for index, mode in ipairs(placementModes) do
-		if mode == CONFIG.seedPlacementMode then
-			currentIndex = index
-			break
-		end
-	end
-	CONFIG.seedPlacementMode = placementModes[(currentIndex % #placementModes) + 1]
-	placementButton.Text = "Placement Mode: " .. CONFIG.seedPlacementMode
-	saveConfig()
-	setStatus("Seed placement mode: " .. CONFIG.seedPlacementMode)
-end)
-makeCommandButton("Save Plant Position", 11, function()
-	local root = getRoot()
-	if root then
-		CONFIG.savedPlantPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
-		CONFIG.seedPlacementMode = "Saved Position"
-		placementButton.Text = "Placement Mode: " .. CONFIG.seedPlacementMode
-		saveConfig()
-		setStatus("Saved current position for seed placement")
-	end
-end)
-makeCommandButton("Save Move Position", 12, function()
+makeToggle("Trowel Plants", "autoMovePlants", 3)
+makeCommandButton("Set Trowel Target", 4, function()
 	local root = getRoot()
 	if root then
 		CONFIG.movePlantPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
 		saveConfig()
-		setStatus("Saved current position for moved plants")
+		setStatus("Saved current position for trowel target")
 	end
 end)
-local waterModes = { "Farm Middle", "Selected Plant", "Growing Plants", "Custom Location" }
-makeCommandButton("Water Mode: " .. CONFIG.waterMode, 13, function()
-	local currentIndex = 1
-	for index, mode in ipairs(waterModes) do
-		if mode == CONFIG.waterMode then
-			currentIndex = index
-			break
-		end
-	end
-	CONFIG.waterMode = waterModes[(currentIndex % #waterModes) + 1]
-	saveConfig()
-	setStatus("Water mode: " .. CONFIG.waterMode)
-	buildUI()
-end)
-makeCommandButton("Save Water Location", 14, function()
-	local root = getRoot()
-	if root then
-		CONFIG.waterCustomPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
-		CONFIG.waterMode = "Custom Location"
-		saveConfig()
-		setStatus("Saved custom water location")
-		buildUI()
-	end
-end)
-local sprinklerModes = { "Farm Middle", "Near Plant", "Custom Location" }
-makeCommandButton("Sprinkler Mode: " .. CONFIG.sprinklerMode, 15, function()
-	local currentIndex = 1
-	for index, mode in ipairs(sprinklerModes) do
-		if mode == CONFIG.sprinklerMode then
-			currentIndex = index
-			break
-		end
-	end
-	CONFIG.sprinklerMode = sprinklerModes[(currentIndex % #sprinklerModes) + 1]
-	saveConfig()
-	setStatus("Sprinkler mode: " .. CONFIG.sprinklerMode)
-	buildUI()
-end)
-makeCommandButton("Save Sprinkler Location", 16, function()
-	local root = getRoot()
-	if root then
-		CONFIG.sprinklerCustomPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
-		CONFIG.sprinklerMode = "Custom Location"
-		saveConfig()
-		setStatus("Saved custom sprinkler location")
-		buildUI()
-	end
-end)
-makeCommandButton("Sprinkler Amount Override", 17, function()
-	local sprinklers = getSelectedSprinklers()
-	local sprinklerName = sprinklers[1]
-	if not sprinklerName then
-		setStatus("Select a sprinkler in Gear first")
-		return
-	end
-	local current = tonumber(sprinklerOverrides[sprinklerName]) or 1
-	current += 1
-	if current > 10 then
-		current = 1
-	end
-	sprinklerOverrides[sprinklerName] = current
-	saveConfig()
-	setStatus(("Sprinkler override: %s x%d"):format(sprinklerName, current))
-end)
-makeCommandButton("Underground Stacking: " .. (CONFIG.undergroundStacking and "ON" or "OFF"), 18, function()
-	CONFIG.undergroundStacking = not CONFIG.undergroundStacking
-	saveConfig()
-	setStatus("Underground stacking " .. (CONFIG.undergroundStacking and "enabled" or "disabled"))
-	buildUI()
-end)
-makeCommandButton(("Max Garden Plants: %d"):format(CONFIG.maxGardenPlants), 19, function()
-	CONFIG.maxGardenPlants += 50
-	if CONFIG.maxGardenPlants > 1000 then
-		CONFIG.maxGardenPlants = 100
-	end
-	saveConfig()
-	setStatus(("Max garden plants set to %d"):format(CONFIG.maxGardenPlants))
-	buildUI()
-end)
-makeToggle("Auto Sell Inventory", "autoSell", 20)
-makeToggle("Sell When Backpack Full", "sellWhenFull", 21)
+makeToggle("Auto Sell Inventory", "autoSell", 5)
 setBuildTab("Shops")
 makeSectionLabel("Shops", 1)
 makeToggle("Auto Buy Seeds", "autoBuySeeds", 2)
