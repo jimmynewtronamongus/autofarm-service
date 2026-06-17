@@ -2498,6 +2498,7 @@ function collectFruitEntryFast(entry, heavy)
 			else
 				teleportToPart(part, 2.5)
 			end
+			task.wait(0.08)
 		end
 	elseif part and not state.collectTeleport then
 		local root = getRoot()
@@ -2509,8 +2510,18 @@ function collectFruitEntryFast(entry, heavy)
 
 	local fired = false
 	if prompt then
+		local root = getRoot()
+		local maxDistance = (prompt and prompt.MaxActivationDistance) or 16
+		if part and root and (root.Position - part.Position).Magnitude > maxDistance + 4 then
+			stats.collectSkippedRange += 1
+			return false
+		end
 		fired = triggerPromptFast(prompt) or fired
-		task.wait(0.03)
+		task.wait(0.06)
+		if isLiveFruitEntry(entry) then
+			fired = triggerPromptFast(prompt) or fired
+			task.wait(0.04)
+		end
 	end
 
 	if target then
@@ -5180,8 +5191,9 @@ end
 
 function applyPlayerVisualSettings()
 	local changed = 0
+	local ownGui = playerGui:FindFirstChild("GardenAutomationGui")
 	for _, guiObject in ipairs(playerGui:GetDescendants()) do
-		if guiObject:IsA("GuiObject") then
+		if guiObject:IsA("GuiObject") and (not ownGui or not guiObject:IsDescendantOf(ownGui)) then
 			local text = string.lower(safeText(guiObject.Name))
 			pcall(function()
 				text = text .. " " .. string.lower(safeText(guiObject.Text))
@@ -5206,10 +5218,6 @@ function applyPlayerVisualSettings()
 	end
 	if state.headlessMode then
 		state.performanceMode = true
-		local gui = playerGui:FindFirstChild("GardenAutomationGui")
-		if gui then
-			gui.Enabled = false
-		end
 		task.spawn(enablePerformanceMode)
 	end
 	setStatus(("Player settings: hidden %d object(s)"):format(changed))
