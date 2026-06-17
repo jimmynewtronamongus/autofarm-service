@@ -24,8 +24,9 @@ CONFIG = {
 	mailInterval = 6.0,
 	petSellInterval = 5.0,
 	petBuyInterval = 1.5,
-	petWalkDistance = 8.0,
-	petWalkTimeout = 8.0,
+	petWalkDistance = 10.5,
+	petWalkTimeout = 12.0,
+	stockWebhookCooldown = 10.0,
 	cacheRefreshInterval = 25.0,
 	inventoryRefreshInterval = 1.0,
 	guiInventoryRefreshInterval = 30.0,
@@ -164,6 +165,7 @@ function loadConfig()
 		"webhookUrl",
 		"officialStockWebhookUrl",
 		"statsWebhookInterval",
+		"stockWebhookCooldown",
 	})
 	copyKnownValues(decoded.state, state, {
 		"fruitCollector",
@@ -221,6 +223,7 @@ saveConfig = function()
 			webhookUrl = CONFIG.webhookUrl,
 			officialStockWebhookUrl = CONFIG.officialStockWebhookUrl,
 			statsWebhookInterval = CONFIG.statsWebhookInterval,
+			stockWebhookCooldown = CONFIG.stockWebhookCooldown,
 		},
 		state = {
 			fruitCollector = state.fruitCollector,
@@ -414,15 +417,20 @@ function flushStockWebhookQueue()
 	end
 
 	local description = table.concat(sections, "\n\n")
-	local sent = sendWebhook("Stock update", description, nil)
+	local sent = sendWebhook("Stock update", description, nil, CONFIG.webhookUrl)
 	local officialSent = false
 	if canSendOfficialStockWebhook() then
 		officialSent = sendWebhook("Stock update", description, nil, CONFIG.officialStockWebhookUrl)
 	end
-	if sent or officialSent then
-		local now = os.clock()
+	local now = os.clock()
+	if sent then
 		for _, key in ipairs(keys) do
 			webhookSentAt[key] = now
+		end
+	end
+	if officialSent then
+		for _, key in ipairs(keys) do
+			webhookSentAt[key .. ":official"] = now
 		end
 	end
 end
@@ -481,8 +489,8 @@ function notifyStock(shopName, itemName, force)
 		return
 	end
 
-	if force or previousAmount == nil or previousAmount <= 0 then
-		if not webhookSentAt[key] or os.clock() - webhookSentAt[key] >= 45 then
+	if force or previousAmount == nil or previousAmount ~= stockAmount then
+		if not webhookSentAt[key] or os.clock() - webhookSentAt[key] >= CONFIG.stockWebhookCooldown then
 			queueStockWebhook(shopName, itemName, stockAmount, key)
 		end
 	end
@@ -4512,12 +4520,33 @@ function movePlantTarget(plant, targetPosition)
 	local variants = {
 		{ plant, targetPosition },
 		{ plant.Name, targetPosition },
+		{ plant, { Position = targetPosition } },
+		{ plant, { Target = targetPosition } },
+		{ plant, { TargetPosition = targetPosition } },
+		{ { Plant = plant, Position = targetPosition } },
+		{ { Plant = plant, Target = targetPosition } },
+		{ { Plant = plant, TargetPosition = targetPosition } },
 	}
 	local plantId = getInstancePacketId(plant)
 	if plantId ~= nil then
 		table.insert(variants, 1, { plantId, targetPosition })
 		table.insert(variants, { { Id = plantId, Position = targetPosition } })
 		table.insert(variants, { { PlantId = plantId, Position = targetPosition } })
+		table.insert(variants, { { UID = plantId, Position = targetPosition } })
+		table.insert(variants, { { Id = plantId, Target = targetPosition } })
+		table.insert(variants, { { PlantId = plantId, Target = targetPosition } })
+		table.insert(variants, { { Id = plantId, TargetPosition = targetPosition } })
+	end
+
+	local targetCFrame = CFrame.new(targetPosition)
+	table.insert(variants, { plant, targetCFrame })
+	table.insert(variants, { plant.Name, targetCFrame })
+	table.insert(variants, { { Plant = plant, CFrame = targetCFrame } })
+	table.insert(variants, { { Plant = plant, Pivot = targetCFrame } })
+	if plantId ~= nil then
+		table.insert(variants, { plantId, targetCFrame })
+		table.insert(variants, { { Id = plantId, CFrame = targetCFrame } })
+		table.insert(variants, { { PlantId = plantId, CFrame = targetCFrame } })
 	end
 
 	local actions = 0
@@ -4537,6 +4566,12 @@ function movePlantTarget(plant, targetPosition)
 	if typedInstanceOk then
 		actions += typedInstanceCount or 1
 	end
+	local typedInstanceCFrameOk, typedInstanceCFrameCount = sendTypedPacketArgVariants("MovePlant", { "Instance", "CFrame" }, {
+		{ plant, targetCFrame },
+	})
+	if typedInstanceCFrameOk then
+		actions += typedInstanceCFrameCount or 1
+	end
 
 	local typedStringVariants = {
 		{ plant.Name, targetPosition },
@@ -4547,6 +4582,16 @@ function movePlantTarget(plant, targetPosition)
 	local typedStringOk, typedStringCount = sendTypedPacketArgVariants("MovePlant", { "String", "Vector3" }, typedStringVariants)
 	if typedStringOk then
 		actions += typedStringCount or 1
+	end
+	local typedStringCFrameVariants = {
+		{ plant.Name, targetCFrame },
+	}
+	if plantId ~= nil then
+		table.insert(typedStringCFrameVariants, { tostring(plantId), targetCFrame })
+	end
+	local typedStringCFrameOk, typedStringCFrameCount = sendTypedPacketArgVariants("MovePlant", { "String", "CFrame" }, typedStringCFrameVariants)
+	if typedStringCFrameOk then
+		actions += typedStringCFrameCount or 1
 	end
 
 	local moveOk, moveCount = sendPacketArgVariants("MovePlant", variants)
@@ -4790,11 +4835,43 @@ function autoAcceptMail()
 	if sendExactPacket("MailboxOpenInbox") then
 		actions += 1
 	end
+	local openOk, openCount = sendPacketArgVariants("MailboxOpenInbox", {
+		{},
+		{ true },
+		{ "Inbox" },
+		{ localPlayer },
+		{ { Player = localPlayer } },
+	})
+	if openOk then
+		actions += openCount or 1
+	end
 	if sendExactPacket("MailboxClaim") then
 		actions += 1
 	end
+	local claimAllOk, claimAllCount = sendPacketArgVariants("MailboxClaim", {
+		{},
+		{ true },
+		{ "All" },
+		{ "Inbox" },
+		{ localPlayer },
+		{ { ClaimAll = true } },
+		{ { All = true } },
+		{ { Player = localPlayer } },
+	})
+	if claimAllOk then
+		actions += claimAllCount or 1
+	end
 	for index = 1, 50 do
 		if sendTypedPacketExact("MailboxClaim", { "NumberU8" }, index) then
+			actions += 1
+		end
+		if sendTypedPacketExact("MailboxClaim", { "NumberU16" }, index) then
+			actions += 1
+		end
+		if sendTypedPacketExact("MailboxClaim", { "NumberU32" }, index) then
+			actions += 1
+		end
+		if sendTypedPacketExact("MailboxClaim", { "String" }, tostring(index)) then
 			actions += 1
 		end
 		if sendExactPacket("MailboxClaim", index) then
@@ -4802,6 +4879,19 @@ function autoAcceptMail()
 		end
 		if sendExactPacket("MailboxClaim", tostring(index)) then
 			actions += 1
+		end
+		local indexOk, indexCount = sendPacketArgVariants("MailboxClaim", {
+			{ index },
+			{ tostring(index) },
+			{ { Index = index } },
+			{ { Id = index } },
+			{ { ID = index } },
+			{ { MailId = index } },
+			{ { MailID = index } },
+			{ { InboxIndex = index } },
+		})
+		if indexOk then
+			actions += indexCount or 1
 		end
 	end
 	task.wait(0.25)
@@ -5512,8 +5602,16 @@ end
 
 function selectedSellPetList()
 	local selected = {}
+	local seen = {}
 	for _, petName in ipairs(petNames) do
 		if selectedSellPets[petName] then
+			seen[petName] = true
+			table.insert(selected, petName)
+		end
+	end
+	for petName, enabled in pairs(selectedSellPets) do
+		if enabled and petName and petName ~= "" and not seen[petName] then
+			seen[petName] = true
 			table.insert(selected, petName)
 		end
 	end
@@ -5582,9 +5680,66 @@ function sellPetTool(info)
 		table.insert(variants, { info.name, info.id })
 	end
 
+	local actions = 0
+	local rawInstances = {}
+	if info.tool then
+		table.insert(rawInstances, info.tool)
+	end
+	local rawInstanceOk, rawInstanceCount = sendRawInstanceVariants("SellPet", rawInstances)
+	if rawInstanceOk then
+		actions += rawInstanceCount or 1
+	end
+	local rawSellItemInstanceOk, rawSellItemInstanceCount = sendRawInstanceVariants("SellItem", rawInstances)
+	if rawSellItemInstanceOk then
+		actions += rawSellItemInstanceCount or 1
+	end
+
+	local rawStrings = {}
+	local function addRawString(value)
+		if value ~= nil and tostring(value) ~= "" then
+			table.insert(rawStrings, tostring(value))
+		end
+	end
+	addRawString(info.id)
+	addRawString(info.name)
+	addRawString(info.tool and info.tool.Name or nil)
+	local rawStringOk, rawStringCount = sendRawStringVariants("SellPet", rawStrings)
+	if rawStringOk then
+		actions += rawStringCount or 1
+	end
+	local rawSellItemStringOk, rawSellItemStringCount = sendRawStringVariants("SellItem", rawStrings)
+	if rawSellItemStringOk then
+		actions += rawSellItemStringCount or 1
+	end
+
+	if info.tool then
+		local typedInstanceOk, typedInstanceCount = sendTypedPacketArgVariants("SellPet", { "Instance" }, {
+			{ info.tool },
+		})
+		if typedInstanceOk then
+			actions += typedInstanceCount or 1
+		end
+	end
+	local typedStringVariants = {}
+	for _, value in ipairs(rawStrings) do
+		if value ~= nil and tostring(value) ~= "" then
+			table.insert(typedStringVariants, { tostring(value) })
+		end
+	end
+	local typedStringOk, typedStringCount = sendTypedPacketArgVariants("SellPet", { "String" }, typedStringVariants)
+	if typedStringOk then
+		actions += typedStringCount or 1
+	end
+
 	local ok = sendPacketArgVariants("SellPet", variants)
+	if ok then
+		actions += 1
+	end
 	local itemOk = sendPacketArgVariants("SellItem", variants)
-	return ok or itemOk
+	if itemOk then
+		actions += 1
+	end
+	return actions > 0
 end
 
 function autoSellPets()
@@ -7047,9 +7202,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		timers.sellWhenFull = 0
 	end
 
-	local movementFeatureLocked = running.autoMovePlants or running.autoBuyPets
-
-	if state.autoMovePlants and timers.autoMovePlants >= 1.0 and not movementFeatureLocked then
+	if state.autoMovePlants and timers.autoMovePlants >= 1.0 then
 		if tryRun("autoMovePlants", autoMovePlants) then
 			timers.autoMovePlants = 0
 		end
@@ -7061,8 +7214,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		end
 	end
 
-	movementFeatureLocked = movementFeatureLocked or running.autoMovePlants
-	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval and not movementFeatureLocked then
+	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval then
 		if tryRun("autoBuyPets", buyPets) then
 			timers.autoBuyPets = 0
 		end
