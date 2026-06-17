@@ -13,7 +13,7 @@ localPlayer = Players.LocalPlayer
 playerGui = localPlayer:WaitForChild("PlayerGui")
 
 CONFIG = {
-	collectInterval = 0.25,
+	collectInterval = 0.8,
 	sellInterval = 12.0,
 	sellWhenFullInterval = 1.5,
 	schedulerInterval = 0.25,
@@ -27,11 +27,14 @@ CONFIG = {
 	cacheRefreshInterval = 25.0,
 	inventoryRefreshInterval = 1.0,
 	guiInventoryRefreshInterval = 30.0,
-	maxFruitCollectPerTick = 32,
-	maxFruitScanPerRoot = 1800,
-	fruitCacheRefreshInterval = 1.5,
-	maxFruitTargetsCached = 420,
-	maxFruitPromptFallbackPerTick = 32,
+	maxFruitCollectPerTick = 8,
+	maxFruitScanPerRoot = 550,
+	fruitCacheRefreshInterval = 3.0,
+	maxFruitTargetsCached = 140,
+	maxFruitPromptFallbackPerTick = 8,
+	deepPacketDiscovery = false,
+	packetDiscoveryCooldown = 60.0,
+	packetDiscoveryLimit = 1200,
 	maxSeedBuyPerTick = 3,
 	seedBuyRemoteRepeats = 4,
 	maxInventoryItems = 100,
@@ -1011,6 +1014,18 @@ local packetRemote
 local packetEntryCache = {}
 local packetObjectCache = {}
 local runtimePacketEntryCache = {}
+local packetRegistryTables
+local packetRequiresArguments = {
+	CollectFruit = true,
+	MovePlant = true,
+	PurchaseGear = true,
+	PurchaseSeed = true,
+	SellFruit = true,
+	SellItem = true,
+	SellPet = true,
+	WildPetCollected = true,
+	WildPetTame = true,
+}
 local packetSendMethodNames = {
 	"Fire",
 	"fire",
@@ -1033,6 +1048,15 @@ local packetSendMethodNames = {
 function tryPacketMethod(target, methodName, ...)
 	if type(target) ~= "table" and typeof(target) ~= "Instance" then
 		return false
+	end
+	if select("#", ...) > 0 and type(target) == "table" then
+		local writes
+		pcall(function()
+			writes = target.Writes
+		end)
+		if type(writes) == "table" and #writes == 0 then
+			return false
+		end
 	end
 	local method = target[methodName]
 	if type(method) ~= "function" then
@@ -1090,17 +1114,154 @@ function tryPacketEntry(entry, ...)
 	return false
 end
 
+function addPacketRegistryTable(registries, seen, value)
+	if type(value) ~= "table" or seen[value] then
+		return
+	end
+	seen[value] = true
+	table.insert(registries, value)
+end
+
+function getPacketRegistryTables()
+	if packetRegistryTables then
+		return packetRegistryTables
+	end
+
+	packetRegistryTables = {}
+	local seen = {}
+	local packet = getPacketModule()
+	local meta = type(packet) == "table" and getmetatable(packet) or nil
+	local constructor = type(meta) == "table" and rawget(meta, "__call") or nil
+
+	if type(constructor) == "function" then
+		if typeof(debug) == "table" and type(debug.getupvalue) == "function" then
+			for index = 1, 40 do
+				local ok, _, value = pcall(debug.getupvalue, constructor, index)
+				if not ok or value == nil then
+					break
+				end
+				addPacketRegistryTable(packetRegistryTables, seen, value)
+			end
+		elseif typeof(getupvalues) == "function" then
+			local ok, upvalues = pcall(getupvalues, constructor)
+			if ok and type(upvalues) == "table" then
+				for _, value in pairs(upvalues) do
+					addPacketRegistryTable(packetRegistryTables, seen, value)
+				end
+			end
+		end
+	end
+
+	return packetRegistryTables
+end
+
+function findDefinedPacketObject(packetName)
+	local remote = getPacketRemote()
+	local packetId = remote and remote:GetAttribute(packetName) or nil
+
+	for _, registry in ipairs(getPacketRegistryTables()) do
+		local candidates = {}
+		local namedCandidate
+		pcall(function()
+			namedCandidate = registry[packetName]
+		end)
+		if namedCandidate ~= nil then
+			table.insert(candidates, namedCandidate)
+		end
+		if packetId ~= nil then
+			local idCandidate
+			pcall(function()
+				idCandidate = registry[packetId]
+			end)
+			if idCandidate ~= nil then
+				table.insert(candidates, idCandidate)
+			end
+		end
+
+		for _, candidate in ipairs(candidates) do
+			if type(candidate) == "table" then
+				local nameMatches = false
+				pcall(function()
+					nameMatches = candidate.Name == packetName
+				end)
+				if nameMatches then
+					return candidate
+				end
+			end
+		end
+	end
+
+	return nil
+end
+
+function packetObjectHasNoWrites(object)
+	if type(object) ~= "table" then
+		return false
+	end
+	local writes
+	pcall(function()
+		writes = object.Writes
+	end)
+	return type(writes) == "table" and #writes == 0
+end
+
+function clearEmptyPacketObject(packetName, object)
+	local remote = getPacketRemote()
+	local packetId = remote and remote:GetAttribute(packetName) or nil
+	for _, registry in ipairs(getPacketRegistryTables()) do
+		pcall(function()
+			if registry[packetName] == object then
+				registry[packetName] = nil
+			end
+		end)
+		if packetId ~= nil then
+			pcall(function()
+				if registry[packetId] == object then
+					registry[packetId] = nil
+				end
+			end)
+		end
+	end
+end
+
 function buildPacketObject(packetName)
 	local packet = getPacketModule()
 	if not packet then
 		return nil
 	end
 
+	local defined = findDefinedPacketObject(packetName)
+	if defined then
+		return defined
+	end
+
 	local constructors = {}
 	if type(packet) == "function" then
 		table.insert(constructors, packet)
 	elseif type(packet) == "table" then
-		for _, key in ipairs({ "new", "New", "create", "Create", "get", "Get", "packet", "Packet", "fromName", "FromName" }) do
+		table.insert(constructors, function(name)
+			return packet(name)
+		end)
+		for _, key in ipairs({
+			"new",
+			"New",
+			"create",
+			"Create",
+			"get",
+			"Get",
+			"packet",
+			"Packet",
+			"fromName",
+			"FromName",
+			"define",
+			"Define",
+			"event",
+			"Event",
+			"remote",
+			"Remote",
+			"getPacket",
+			"GetPacket",
+		}) do
 			if type(packet[key]) == "function" then
 				table.insert(constructors, function(name)
 					return packet[key](packet, name)
@@ -1113,6 +1274,10 @@ function buildPacketObject(packetName)
 	for _, constructor in ipairs(constructors) do
 		local ok, object = pcall(constructor, packetName)
 		if ok and (type(object) == "table" or typeof(object) == "Instance") then
+			if packetRequiresArguments[packetName] and packetObjectHasNoWrites(object) then
+				clearEmptyPacketObject(packetName, object)
+				continue
+			end
 			return object
 		end
 	end
@@ -1305,7 +1470,8 @@ end
 function findRuntimePacketEntries(packetName)
 	local now = os.clock()
 	local cached = runtimePacketEntryCache[packetName]
-	if cached and now - cached.checkedAt < 8 then
+	local cooldown = CONFIG.deepPacketDiscovery and CONFIG.packetDiscoveryCooldown or 999999
+	if cached and now - cached.checkedAt < cooldown then
 		return cached.entries
 	end
 
@@ -1319,10 +1485,12 @@ function findRuntimePacketEntries(packetName)
 		addRuntimePacketCandidate(results, seen, findPacketEntry(packet, packetName))
 	end
 
-	if typeof(getgc) == "function" then
+	if CONFIG.deepPacketDiscovery == true and typeof(getgc) == "function" then
 		local ok, objects = pcall(getgc, true)
 		if ok and type(objects) == "table" then
+			local scanned = 0
 			for _, object in ipairs(objects) do
+				scanned += 1
 				if type(object) == "table" then
 					local entry
 					pcall(function()
@@ -1334,6 +1502,9 @@ function findRuntimePacketEntries(packetName)
 					end
 				elseif type(object) == "function" then
 					scanFunctionUpvaluesForPacket(results, seen, object, packetName, packetId)
+				end
+				if scanned >= CONFIG.packetDiscoveryLimit then
+					break
 				end
 			end
 		end
@@ -2679,8 +2850,7 @@ function sellToolByRemote(tool)
 
 	local soldItem = sendPacketArgVariants("SellItem", variants)
 	local soldFruit = sendPacketArgVariants("SellFruit", variants)
-	local soldPreview = sendPacketArgVariants("PreviewSellAll", variants)
-	return soldItem or soldFruit or soldPreview
+	return soldItem or soldFruit
 end
 
 function sellInventoryByRemote(sellableTools)
@@ -2708,10 +2878,6 @@ function sellInventoryByRemote(sellableTools)
 	local ok, count = sendPacketArgVariants("SellAll", sellAllVariants)
 	if ok then
 		actions += count
-	end
-	local previewOk, previewCount = sendPacketArgVariants("PreviewSellAll", sellAllVariants)
-	if previewOk then
-		actions += previewCount
 	end
 
 	for _, tool in ipairs(sellableTools or {}) do
@@ -2997,7 +3163,7 @@ end
 
 function isLikelyFruitTool(item)
 	if not item
-		or not item:IsA("Tool")
+		or not (item:IsA("Tool") or item:IsA("Configuration"))
 		or isInventorySeedTool(item)
 		or isKnownGearTool(item)
 		or isKnownPetTool(item)
@@ -4513,11 +4679,15 @@ function sellPetTool(info)
 	local variants = {
 		{ info.tool },
 		{ info.name },
+		{ info.tool and info.tool.Name or info.name },
+		{ { Name = info.name } },
+		{ { PetName = info.name } },
 	}
 	if info.id ~= nil then
 		table.insert(variants, 1, { info.id })
 		table.insert(variants, { { Id = info.id } })
 		table.insert(variants, { { PetId = info.id } })
+		table.insert(variants, { { ItemId = info.id } })
 		table.insert(variants, { { UID = info.id } })
 		table.insert(variants, { info.id, info.name })
 		table.insert(variants, { info.name, info.id })
@@ -5892,7 +6062,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	schedulerAccumulator = 0
 
 	local jobsStarted = 0
-	local maxJobsThisFrame = 3
+	local maxJobsThisFrame = 2
 	local function tryRun(key, callback)
 		if jobsStarted >= maxJobsThisFrame or running[key] then
 			return false
