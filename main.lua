@@ -34,6 +34,8 @@ CONFIG = {
 	sprinklerInterval = 8.0,
 	mailInterval = 6.0,
 	rainbowCollectInterval = 4.5,
+	promptSettleDelay = 0.18,
+	promptHoldDelay = 0.22,
 	petBuyInterval = 1.5,
 	cacheRefreshInterval = 25.0,
 	dropCacheRefreshInterval = 5.0,
@@ -2498,7 +2500,7 @@ function collectFruitEntryFast(entry, heavy)
 			else
 				teleportToPart(part, 2.5)
 			end
-			task.wait(0.08)
+			task.wait(CONFIG.promptSettleDelay)
 		end
 	elseif part and not state.collectTeleport then
 		local root = getRoot()
@@ -2576,7 +2578,7 @@ function triggerPrompt(prompt, skipTouch)
 
 	local ok = pcall(function()
 		prompt:InputHoldBegin()
-		task.wait(math.max(prompt.HoldDuration or 0, 0.08))
+		task.wait(math.max(prompt.HoldDuration or 0, CONFIG.promptHoldDelay))
 		prompt:InputHoldEnd()
 	end)
 
@@ -2587,7 +2589,7 @@ function triggerPrompt(prompt, skipTouch)
 	if virtualInputManager then
 		local keyOk = pcall(function()
 			virtualInputManager:SendKeyEvent(true, prompt.KeyboardKeyCode or Enum.KeyCode.E, false, game)
-			task.wait(0.05)
+			task.wait(CONFIG.promptHoldDelay)
 			virtualInputManager:SendKeyEvent(false, prompt.KeyboardKeyCode or Enum.KeyCode.E, false, game)
 		end)
 		if keyOk then
@@ -2636,6 +2638,7 @@ triggerPromptFast = function(prompt)
 
 	local ok = pcall(function()
 		prompt:InputHoldBegin()
+		task.wait(CONFIG.promptHoldDelay)
 		prompt:InputHoldEnd()
 	end)
 	fired = fired or ok
@@ -3241,7 +3244,7 @@ function collectFruit()
 			elseif state.collectTeleport then
 				failedTeleportHarvests += 1
 				fruitTargetCache.refreshedAt = 0
-				if failedTeleportHarvests >= 1 then
+				if failedTeleportHarvests >= 2 then
 					setStatus("Fruit collector: harvest failed after teleport, waiting before next target")
 					break
 				end
@@ -3987,7 +3990,7 @@ function autoCollectRainbowSeeds()
 				break
 			end
 
-			if not looksLikeGoldRainbowDrop(descendant) then
+			if not looksLikeGoldRainbowDrop(descendant) and not treeTextMatches(descendant, { "rainbow", "gold", "golden", "seed", "pack", "drop", "rain" }, 4) then
 				continue
 			end
 
@@ -4002,7 +4005,10 @@ function autoCollectRainbowSeeds()
 				"seed pack",
 			}, 3)
 
-			if descendant:IsA("ProximityPrompt") and descendant.Name ~= "StealPrompt" and matchesRainbowSeed then
+			if descendant:IsA("ProximityPrompt")
+				and descendant.Name ~= "StealPrompt"
+				and (matchesRainbowSeed or looksLikeGoldRainbowDrop(descendant.Parent or descendant))
+			then
 				table.insert(targets, descendant)
 			elseif descendant:IsA("BasePart")
 				and descendant.CanTouch
@@ -4041,14 +4047,16 @@ function autoCollectRainbowSeeds()
 		local model = target:IsA("ProximityPrompt") and target:FindFirstAncestorWhichIsA("Model") or nil
 		local moved = part and (model and teleportToModelOrPart(model, part, 3) or teleportToPart(part, 3))
 		if moved then
+			task.wait(CONFIG.promptSettleDelay)
 			if target:IsA("ProximityPrompt") then
 				if triggerPrompt(target, true) then
+					task.wait(CONFIG.promptSettleDelay)
 					checked += 1
 				end
 			elseif touchPart(target) then
+				task.wait(CONFIG.promptSettleDelay)
 				checked += 1
 			end
-			task.wait(0.05)
 		end
 	end
 
