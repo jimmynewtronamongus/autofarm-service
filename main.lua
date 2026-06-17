@@ -72,6 +72,7 @@ CONFIG = {
 	petSellMutationFilter = "",
 	petSellVariantFilter = "",
 	petSellExcludeVariantFilter = "",
+	keepAllPetVariants = true,
 	plantRadius = 18,
 	webhookUrl = "",
 	statsWebhookInterval = 180.0,
@@ -208,6 +209,7 @@ function loadConfig()
 		"petSellMutationFilter",
 		"petSellVariantFilter",
 		"petSellExcludeVariantFilter",
+		"keepAllPetVariants",
 		"plantRadius",
 		"webhookUrl",
 		"statsWebhookInterval",
@@ -286,6 +288,7 @@ saveConfig = function()
 			petSellMutationFilter = CONFIG.petSellMutationFilter,
 			petSellVariantFilter = CONFIG.petSellVariantFilter,
 			petSellExcludeVariantFilter = CONFIG.petSellExcludeVariantFilter,
+			keepAllPetVariants = CONFIG.keepAllPetVariants,
 			plantRadius = CONFIG.plantRadius,
 			webhookUrl = CONFIG.webhookUrl,
 			statsWebhookInterval = CONFIG.statsWebhookInterval,
@@ -6079,6 +6082,23 @@ function filterRejectsValue(filterText, value)
 	return false
 end
 
+function petInfoHasVariant(info)
+	if not info then
+		return false
+	end
+	local haystack = string.lower(table.concat({
+		tostring(info.variant or ""),
+		tostring(info.mutation or ""),
+		info.tool and tostring(info.tool.Name) or "",
+	}, " "))
+	for _, variant in ipairs(petVariantWords) do
+		if string.find(haystack, string.lower(variant), 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
 function getPetToolInfo(tool)
 	if not tool or not tool:IsA("Tool") then
 		return nil
@@ -6160,6 +6180,9 @@ function petSellInfoMatches(info)
 		return false
 	end
 	local variantText = info.variant .. " " .. info.tool.Name
+	if CONFIG.keepAllPetVariants and petInfoHasVariant(info) then
+		return false
+	end
 	return filterAllowsValue(CONFIG.petSellMutationFilter, info.mutation)
 		and filterAllowsValue(CONFIG.petSellVariantFilter, variantText)
 		and not filterRejectsValue(CONFIG.petSellExcludeVariantFilter, variantText)
@@ -7581,6 +7604,29 @@ local petSellLabel = make("TextLabel", {
 	LayoutOrder = 36,
 }, parent)
 
+local keepVariantsButton
+keepVariantsButton = make("TextButton", {
+	Name = "KeepAllPetVariants",
+	AutoButtonColor = false,
+	BackgroundColor3 = CONFIG.keepAllPetVariants and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(34, 41, 42),
+	BorderSizePixel = 0,
+	Font = Enum.Font.GothamSemibold,
+	Text = "Keep All Variants: " .. (CONFIG.keepAllPetVariants and "ON" or "OFF"),
+	TextColor3 = Color3.fromRGB(235, 244, 233),
+	TextSize = 9,
+	TextWrapped = true,
+	Size = UDim2.new(1, 0, 0, 18),
+	LayoutOrder = 37,
+}, parent)
+make("UICorner", { CornerRadius = UDim.new(0, 6) }, keepVariantsButton)
+keepVariantsButton.Activated:Connect(function()
+	CONFIG.keepAllPetVariants = not CONFIG.keepAllPetVariants
+	keepVariantsButton.Text = "Keep All Variants: " .. (CONFIG.keepAllPetVariants and "ON" or "OFF")
+	keepVariantsButton.BackgroundColor3 = CONFIG.keepAllPetVariants and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(34, 41, 42)
+	saveConfig()
+	setStatus("Pet sell keep all variants " .. (CONFIG.keepAllPetVariants and "enabled" or "disabled"))
+end)
+
 local mutationBox = make("TextBox", {
 	Name = "PetSellMutationFilter",
 	BackgroundColor3 = Color3.fromRGB(18, 23, 24),
@@ -7593,7 +7639,7 @@ local mutationBox = make("TextBox", {
 	TextSize = 9,
 	TextTruncate = Enum.TextTruncate.AtEnd,
 	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 37,
+	LayoutOrder = 38,
 }, parent)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, mutationBox)
 make("UIPadding", { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7) }, mutationBox)
@@ -7610,13 +7656,13 @@ local variantBox = make("TextBox", {
 	BorderSizePixel = 0,
 	ClearTextOnFocus = false,
 	Font = Enum.Font.Gotham,
-	PlaceholderText = "Only variants: any, Big, Shiny",
+	PlaceholderText = "Only variants (ignored when Keep All is ON)",
 	Text = CONFIG.petSellVariantFilter,
 	TextColor3 = Color3.fromRGB(242, 247, 239),
 	TextSize = 9,
 	TextTruncate = Enum.TextTruncate.AtEnd,
 	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 38,
+	LayoutOrder = 39,
 }, parent)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, variantBox)
 make("UIPadding", { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7) }, variantBox)
@@ -7627,33 +7673,13 @@ variantBox.FocusLost:Connect(function()
 	setStatus("Pet sell variant filter saved")
 end)
 
-local variantCycle = { "", "Big", "Huge", "Giant", "Rainbow", "Gold", "Golden", "Shiny", "Super" }
-local function nextVariantFilter(current)
-	local compactCurrent = compactName(current)
-	for index, variant in ipairs(variantCycle) do
-		if compactName(variant) == compactCurrent then
-			return variantCycle[(index % #variantCycle) + 1]
-		end
-	end
-	return variantCycle[1]
-end
-
-local includeVariantButton
-includeVariantButton = makeCommandButton("Only Variant: " .. (CONFIG.petSellVariantFilter ~= "" and CONFIG.petSellVariantFilter or "Any"), 39, function()
-	CONFIG.petSellVariantFilter = nextVariantFilter(CONFIG.petSellVariantFilter)
-	variantBox.Text = CONFIG.petSellVariantFilter
-	includeVariantButton.Text = "Only Variant: " .. (CONFIG.petSellVariantFilter ~= "" and CONFIG.petSellVariantFilter or "Any")
-	saveConfig()
-	setStatus("Pet sell only variant: " .. (CONFIG.petSellVariantFilter ~= "" and CONFIG.petSellVariantFilter or "Any"))
-end)
-
 local excludeVariantBox = make("TextBox", {
 	Name = "PetSellExcludeVariantFilter",
 	BackgroundColor3 = Color3.fromRGB(18, 23, 24),
 	BorderSizePixel = 0,
 	ClearTextOnFocus = false,
 	Font = Enum.Font.Gotham,
-	PlaceholderText = "Never sell variants: Rainbow, Shiny",
+	PlaceholderText = "Never sell variants (extra blocklist)",
 	Text = CONFIG.petSellExcludeVariantFilter,
 	TextColor3 = Color3.fromRGB(242, 247, 239),
 	TextSize = 9,
@@ -7670,15 +7696,6 @@ excludeVariantBox.FocusLost:Connect(function()
 	setStatus("Pet sell excluded variant filter saved")
 end)
 
-local excludeVariantButton
-excludeVariantButton = makeCommandButton("Never Variant: " .. (CONFIG.petSellExcludeVariantFilter ~= "" and CONFIG.petSellExcludeVariantFilter or "None"), 41, function()
-	CONFIG.petSellExcludeVariantFilter = nextVariantFilter(CONFIG.petSellExcludeVariantFilter)
-	excludeVariantBox.Text = CONFIG.petSellExcludeVariantFilter
-	excludeVariantButton.Text = "Never Variant: " .. (CONFIG.petSellExcludeVariantFilter ~= "" and CONFIG.petSellExcludeVariantFilter or "None")
-	saveConfig()
-	setStatus("Pet sell never variant: " .. (CONFIG.petSellExcludeVariantFilter ~= "" and CONFIG.petSellExcludeVariantFilter or "None"))
-end)
-
 local petSellRow = make("ScrollingFrame", {
 	Name = "PetSellSelector",
 	BackgroundTransparency = 1,
@@ -7687,7 +7704,7 @@ local petSellRow = make("ScrollingFrame", {
 	ScrollBarThickness = 3,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 38),
-	LayoutOrder = 43,
+	LayoutOrder = 42,
 }, parent)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(3, 3),
@@ -7700,7 +7717,7 @@ local petSellButtons = {}
 local petSellButtonCount = 0
 local petSellFilterText = ""
 
-makeSelectorSearch(parent, 42, "Search pets to sell", function(text)
+makeSelectorSearch(parent, 41, "Search pets to sell", function(text)
 	petSellFilterText = text
 	refreshSelectorFilter(petSellButtons, petNames, petSellFilterText, petSellRow, 2)
 end)
