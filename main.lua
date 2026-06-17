@@ -48,7 +48,6 @@ CONFIG = {
 	maxSeedBuyPerTick = 3,
 	seedBuyRemoteRepeats = 4,
 	shovelInterval = 0.35,
-	shovelHoldDuration = 3.1,
 	maxShovelPerTick = 1,
 	maxDropCollectPerTick = 3,
 	maxDropScanPerRoot = 300,
@@ -5097,7 +5096,7 @@ function getShovelPrompt(target)
 	return nil
 end
 
-function aimAndHoldPart(part, holdDuration, tool)
+function activateToolOnly(tool)
 	if tool and tool.Parent then
 		return pcall(function()
 			tool:Activate()
@@ -5134,7 +5133,7 @@ function shovelPlantTarget(plant)
 	end
 
 	if part then
-		fired = aimAndHoldPart(part, CONFIG.shovelHoldDuration, shovelTool) or fired
+		fired = activateToolOnly(shovelTool) or fired
 	end
 
 	for _, packetName in ipairs({
@@ -5170,7 +5169,7 @@ function shovelPlantTarget(plant)
 	end
 
 	if part then
-		fired = aimAndHoldPart(part, 0.35, shovelTool) or fired
+		fired = activateToolOnly(shovelTool) or fired
 	end
 
 	task.wait(0.12)
@@ -5304,10 +5303,7 @@ function useToolAtPosition(tool, position, holdSeconds)
 		return false
 	end
 
-	local ok = pcall(function()
-		tool:Activate()
-	end)
-	return ok
+	return activateToolOnly(tool)
 end
 
 function getPlantWaterTargets()
