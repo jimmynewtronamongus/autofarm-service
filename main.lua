@@ -6146,15 +6146,15 @@ function makeSelectorSearch(parent, order, placeholder, onChanged)
 		PlaceholderText = placeholder,
 		Text = "",
 		TextColor3 = Color3.fromRGB(242, 247, 239),
-		TextSize = 10,
+		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.new(1, 0, 0, 20),
+		Size = UDim2.new(1, 0, 0, 18),
 		LayoutOrder = order,
 	}, parent)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, box)
 	make("UIPadding", {
-		PaddingLeft = UDim.new(0, 9),
-		PaddingRight = UDim.new(0, 9),
+		PaddingLeft = UDim.new(0, 7),
+		PaddingRight = UDim.new(0, 7),
 	}, box)
 
 	box:GetPropertyChangedSignal("Text"):Connect(function()
@@ -6177,7 +6177,7 @@ function refreshSelectorFilter(buttons, names, query, row, columns)
 		end
 	end
 
-	row.CanvasSize = UDim2.fromOffset(0, math.max(1, math.ceil(visible / (columns or 2))) * 23)
+	row.CanvasSize = UDim2.fromOffset(0, math.max(1, math.ceil(visible / (columns or 2))) * 20)
 end
 
 function buildUI()
@@ -6204,7 +6204,7 @@ local panel = make("Frame", {
 	BackgroundColor3 = Color3.fromRGB(22, 28, 30),
 	BorderSizePixel = 0,
 	Position = UDim2.fromOffset(24, 280),
-	Size = UDim2.fromOffset(280, 430),
+	Size = UDim2.fromOffset(264, 390),
 }, gui)
 make("UICorner", { CornerRadius = UDim.new(0, 8) }, panel)
 make("UIStroke", { Color = Color3.fromRGB(81, 113, 91), Thickness = 1 }, panel)
@@ -6217,8 +6217,8 @@ local header = make("TextButton", {
 	Font = Enum.Font.GothamBold,
 	Text = "Garden Tools",
 	TextColor3 = Color3.fromRGB(246, 255, 242),
-	TextSize = 14,
-	Size = UDim2.new(1, 0, 0, 30),
+	TextSize = 12,
+	Size = UDim2.new(1, 0, 0, 24),
 }, panel)
 make("UICorner", { CornerRadius = UDim.new(0, 8) }, header)
 
@@ -6227,12 +6227,12 @@ local content = make("ScrollingFrame", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	CanvasSize = UDim2.fromOffset(0, 0),
-	Position = UDim2.fromOffset(8, 38),
-	ScrollBarThickness = 4,
-	Size = UDim2.new(1, -16, 1, -46),
+	Position = UDim2.fromOffset(6, 30),
+	ScrollBarThickness = 3,
+	Size = UDim2.new(1, -12, 1, -36),
 }, panel)
 local contentLayout = make("UIListLayout", {
-	Padding = UDim.new(0, 4),
+	Padding = UDim.new(0, 3),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, content)
 
@@ -6247,16 +6247,16 @@ local statusLabel = make("TextLabel", {
 	Font = Enum.Font.Gotham,
 	Text = state.lastStatus,
 	TextColor3 = Color3.fromRGB(201, 219, 202),
-	TextSize = 10,
+	TextSize = 9,
 	TextWrapped = true,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Size = UDim2.new(1, 0, 0, 28),
+	Size = UDim2.new(1, 0, 0, 22),
 	LayoutOrder = 99,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, statusLabel)
 make("UIPadding", {
-	PaddingLeft = UDim.new(0, 10),
-	PaddingRight = UDim.new(0, 10),
+	PaddingLeft = UDim.new(0, 7),
+	PaddingRight = UDim.new(0, 7),
 }, statusLabel)
 
 statusValue.Changed:Connect(function(value)
@@ -6273,9 +6273,9 @@ function makeToggle(label, key, order)
 		Font = Enum.Font.GothamSemibold,
 		Text = ("%s: %s"):format(label, enabled and "ON" or "OFF"),
 		TextColor3 = Color3.fromRGB(235, 244, 233),
-		TextSize = 11,
+		TextSize = 10,
 		TextWrapped = true,
-		Size = UDim2.new(1, 0, 0, 24),
+		Size = UDim2.new(1, 0, 0, 20),
 		LayoutOrder = order,
 	}, content)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
@@ -6326,9 +6326,9 @@ function makeSectionLabel(text, order)
 		Font = Enum.Font.GothamSemibold,
 		Text = text,
 		TextColor3 = Color3.fromRGB(174, 211, 178),
-		TextSize = 10,
+		TextSize = 9,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Size = UDim2.new(1, 0, 0, 12),
+		Size = UDim2.new(1, 0, 0, 10),
 		LayoutOrder = order,
 	}, content)
 end
@@ -6342,9 +6342,9 @@ function makeCommandButton(label, order, onClick)
 		Font = Enum.Font.GothamSemibold,
 		Text = label,
 		TextColor3 = Color3.fromRGB(235, 244, 233),
-		TextSize = 11,
+		TextSize = 10,
 		TextWrapped = true,
-		Size = UDim2.new(1, 0, 0, 24),
+		Size = UDim2.new(1, 0, 0, 20),
 		LayoutOrder = order,
 	}, content)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
@@ -6495,15 +6495,15 @@ local webhookBox = make("TextBox", {
 	PlaceholderText = "Webhook URL for selected stock/pets",
 	Text = CONFIG.webhookUrl,
 	TextColor3 = Color3.fromRGB(242, 247, 239),
-	TextSize = 10,
+	TextSize = 9,
 	TextTruncate = Enum.TextTruncate.AtEnd,
-	Size = UDim2.new(1, 0, 0, 24),
+	Size = UDim2.new(1, 0, 0, 20),
 	LayoutOrder = 34,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, webhookBox)
 make("UIPadding", {
-	PaddingLeft = UDim.new(0, 10),
-	PaddingRight = UDim.new(0, 10),
+	PaddingLeft = UDim.new(0, 7),
+	PaddingRight = UDim.new(0, 7),
 }, webhookBox)
 webhookBox.FocusLost:Connect(function()
 	CONFIG.webhookUrl = string.gsub(tostring(webhookBox.Text or ""), "^%s*(.-)%s*$", "%1")
@@ -6521,9 +6521,9 @@ local statsTitle = make("TextLabel", {
 	Font = Enum.Font.GothamSemibold,
 	Text = "Session Stats",
 	TextColor3 = Color3.fromRGB(221, 236, 216),
-	TextSize = 11,
+	TextSize = 9,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Size = UDim2.new(1, 0, 0, 12),
+	Size = UDim2.new(1, 0, 0, 10),
 	LayoutOrder = 35,
 }, content)
 
@@ -6531,18 +6531,18 @@ local statsFrame = make("Frame", {
 	Name = "Stats",
 	BackgroundColor3 = Color3.fromRGB(14, 18, 19),
 	BorderSizePixel = 0,
-	Size = UDim2.new(1, 0, 0, 94),
+	Size = UDim2.new(1, 0, 0, 74),
 	LayoutOrder = 36,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, statsFrame)
 make("UIPadding", {
-	PaddingTop = UDim.new(0, 4),
-	PaddingBottom = UDim.new(0, 4),
-	PaddingLeft = UDim.new(0, 8),
-	PaddingRight = UDim.new(0, 8),
+	PaddingTop = UDim.new(0, 3),
+	PaddingBottom = UDim.new(0, 3),
+	PaddingLeft = UDim.new(0, 6),
+	PaddingRight = UDim.new(0, 6),
 }, statsFrame)
 make("UIListLayout", {
-	Padding = UDim.new(0, 2),
+	Padding = UDim.new(0, 1),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, statsFrame)
 
@@ -6553,10 +6553,10 @@ function makeStatsLabel(key, order)
 		Font = Enum.Font.Gotham,
 		Text = "",
 		TextColor3 = Color3.fromRGB(201, 219, 202),
-		TextSize = 10,
+		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Size = UDim2.new(1, 0, 0, 12),
+		Size = UDim2.new(1, 0, 0, 9),
 		LayoutOrder = order,
 	}, statsFrame)
 	statsLabels[key] = label
@@ -6580,9 +6580,9 @@ local selectedSeedLabel = make("TextLabel", {
 	Font = Enum.Font.GothamSemibold,
 	Text = "Seeds to buy",
 	TextColor3 = Color3.fromRGB(221, 236, 216),
-	TextSize = 11,
+	TextSize = 9,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Size = UDim2.new(1, 0, 0, 12),
+	Size = UDim2.new(1, 0, 0, 10),
 	LayoutOrder = 24,
 }, content)
 
@@ -6591,14 +6591,14 @@ local seedRow = make("ScrollingFrame", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	CanvasSize = UDim2.fromOffset(0, 0),
-	ScrollBarThickness = 4,
+	ScrollBarThickness = 3,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
-	Size = UDim2.new(1, 0, 0, 54),
+	Size = UDim2.new(1, 0, 0, 42),
 	LayoutOrder = 26,
 }, content)
 make("UIGridLayout", {
-	CellPadding = UDim2.fromOffset(4, 4),
-	CellSize = UDim2.fromOffset(128, 20),
+	CellPadding = UDim2.fromOffset(3, 3),
+	CellSize = UDim2.fromOffset(120, 18),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, seedRow)
 
@@ -6642,9 +6642,9 @@ function makeSeedButton(seedName)
 		Font = Enum.Font.GothamSemibold,
 		Text = seedName,
 		TextColor3 = Color3.fromRGB(242, 247, 239),
-		TextSize = 10,
+		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(128, 20),
+		Size = UDim2.fromOffset(120, 18),
 		LayoutOrder = seedButtonCount,
 	}, seedRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
@@ -6744,9 +6744,9 @@ local shovelSeedLabel = make("TextLabel", {
 	Font = Enum.Font.GothamSemibold,
 	Text = "Seeds to shovel",
 	TextColor3 = Color3.fromRGB(221, 236, 216),
-	TextSize = 11,
+	TextSize = 9,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Size = UDim2.new(1, 0, 0, 12),
+	Size = UDim2.new(1, 0, 0, 10),
 	LayoutOrder = 27,
 }, content)
 
@@ -6755,14 +6755,14 @@ local shovelSeedRow = make("ScrollingFrame", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	CanvasSize = UDim2.fromOffset(0, 0),
-	ScrollBarThickness = 4,
+	ScrollBarThickness = 3,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
-	Size = UDim2.new(1, 0, 0, 54),
+	Size = UDim2.new(1, 0, 0, 42),
 	LayoutOrder = 28,
 }, content)
 make("UIGridLayout", {
-	CellPadding = UDim2.fromOffset(4, 4),
-	CellSize = UDim2.fromOffset(128, 20),
+	CellPadding = UDim2.fromOffset(3, 3),
+	CellSize = UDim2.fromOffset(120, 18),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, shovelSeedRow)
 
@@ -6805,9 +6805,9 @@ function makeShovelSeedButton(seedName)
 		Font = Enum.Font.GothamSemibold,
 		Text = seedName,
 		TextColor3 = Color3.fromRGB(242, 247, 239),
-		TextSize = 10,
+		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(128, 20),
+		Size = UDim2.fromOffset(120, 18),
 		LayoutOrder = shovelSeedButtonCount,
 	}, shovelSeedRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
@@ -6856,9 +6856,9 @@ local moveSeedLabel = make("TextLabel", {
 	Font = Enum.Font.GothamSemibold,
 	Text = "Plants to move",
 	TextColor3 = Color3.fromRGB(221, 236, 216),
-	TextSize = 11,
+	TextSize = 9,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Size = UDim2.new(1, 0, 0, 12),
+	Size = UDim2.new(1, 0, 0, 10),
 	LayoutOrder = 30,
 }, content)
 
@@ -6867,14 +6867,14 @@ local moveSeedRow = make("ScrollingFrame", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	CanvasSize = UDim2.fromOffset(0, 0),
-	ScrollBarThickness = 4,
+	ScrollBarThickness = 3,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
-	Size = UDim2.new(1, 0, 0, 54),
+	Size = UDim2.new(1, 0, 0, 42),
 	LayoutOrder = 32,
 }, content)
 make("UIGridLayout", {
-	CellPadding = UDim2.fromOffset(4, 4),
-	CellSize = UDim2.fromOffset(128, 20),
+	CellPadding = UDim2.fromOffset(3, 3),
+	CellSize = UDim2.fromOffset(120, 18),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, moveSeedRow)
 
@@ -6917,9 +6917,9 @@ function makeMoveSeedButton(seedName)
 		Font = Enum.Font.GothamSemibold,
 		Text = seedName,
 		TextColor3 = Color3.fromRGB(242, 247, 239),
-		TextSize = 10,
+		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(128, 20),
+		Size = UDim2.fromOffset(120, 18),
 		LayoutOrder = moveSeedButtonCount,
 	}, moveSeedRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
@@ -6968,9 +6968,9 @@ local selectedGearLabel = make("TextLabel", {
 	Font = Enum.Font.GothamSemibold,
 	Text = "Gear to buy",
 	TextColor3 = Color3.fromRGB(221, 236, 216),
-	TextSize = 11,
+	TextSize = 9,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Size = UDim2.new(1, 0, 0, 12),
+	Size = UDim2.new(1, 0, 0, 10),
 	LayoutOrder = 30,
 }, content)
 
@@ -6979,14 +6979,14 @@ local gearRow = make("ScrollingFrame", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	CanvasSize = UDim2.fromOffset(0, 0),
-	ScrollBarThickness = 4,
+	ScrollBarThickness = 3,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
-	Size = UDim2.new(1, 0, 0, 54),
+	Size = UDim2.new(1, 0, 0, 42),
 	LayoutOrder = 32,
 }, content)
 make("UIGridLayout", {
-	CellPadding = UDim2.fromOffset(4, 4),
-	CellSize = UDim2.fromOffset(128, 20),
+	CellPadding = UDim2.fromOffset(3, 3),
+	CellSize = UDim2.fromOffset(120, 18),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, gearRow)
 
@@ -7039,9 +7039,9 @@ function makeGearButton(gearName)
 		Font = Enum.Font.GothamSemibold,
 		Text = gearName,
 		TextColor3 = Color3.fromRGB(242, 247, 239),
-		TextSize = 10,
+		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(128, 20),
+		Size = UDim2.fromOffset(120, 18),
 		LayoutOrder = gearButtonCount,
 	}, gearRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
@@ -7125,9 +7125,9 @@ local selectedPetLabel = make("TextLabel", {
 	Font = Enum.Font.GothamSemibold,
 	Text = "Pets to buy",
 	TextColor3 = Color3.fromRGB(221, 236, 216),
-	TextSize = 11,
+	TextSize = 9,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Size = UDim2.new(1, 0, 0, 12),
+	Size = UDim2.new(1, 0, 0, 10),
 	LayoutOrder = 33,
 }, content)
 
@@ -7136,14 +7136,14 @@ local petRow = make("ScrollingFrame", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	CanvasSize = UDim2.fromOffset(0, 0),
-	ScrollBarThickness = 4,
+	ScrollBarThickness = 3,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
-	Size = UDim2.new(1, 0, 0, 54),
+	Size = UDim2.new(1, 0, 0, 42),
 	LayoutOrder = 35,
 }, content)
 make("UIGridLayout", {
-	CellPadding = UDim2.fromOffset(4, 4),
-	CellSize = UDim2.fromOffset(128, 20),
+	CellPadding = UDim2.fromOffset(3, 3),
+	CellSize = UDim2.fromOffset(120, 18),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, petRow)
 
@@ -7187,9 +7187,9 @@ function makePetButton(petName)
 		Font = Enum.Font.GothamSemibold,
 		Text = petName,
 		TextColor3 = Color3.fromRGB(242, 247, 239),
-		TextSize = 10,
+		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(128, 20),
+		Size = UDim2.fromOffset(120, 18),
 		LayoutOrder = petButtonCount,
 	}, petRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
