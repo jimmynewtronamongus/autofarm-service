@@ -6765,7 +6765,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	schedulerAccumulator = 0
 
 	local jobsStarted = 0
-	local maxJobsThisFrame = 2
+	local maxJobsThisFrame = 8
 	local function tryRun(key, callback)
 		if jobsStarted >= maxJobsThisFrame or running[key] then
 			return false
@@ -6833,22 +6833,13 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		timers.sellWhenFull = 0
 	end
 
-	local movementLocked = running.autoMovePlants
-		or running.autoBuyPets
-		or running.autoSellPets
-		or sellDue
-		or running.autoSell
-		or running.sellWhenFull
+	local movementFeatureLocked = running.autoMovePlants or running.autoBuyPets
 
-	if state.autoMovePlants and timers.autoMovePlants >= 1.0 and not movementLocked then
+	if state.autoMovePlants and timers.autoMovePlants >= 1.0 and not movementFeatureLocked then
 		if tryRun("autoMovePlants", autoMovePlants) then
 			timers.autoMovePlants = 0
 		end
 	end
-
-	movementLocked = movementLocked or running.autoMovePlants
-	local fruitMovementLocked = running.autoMovePlants
-		or (hasSellableInventory and inventoryFull and (sellDue or running.autoSell or running.sellWhenFull))
 
 	if state.autoAcceptMail and timers.autoAcceptMail >= CONFIG.mailInterval then
 		if tryRun("autoAcceptMail", autoAcceptMail) then
@@ -6856,20 +6847,21 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		end
 	end
 
-	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval and not movementLocked then
+	movementFeatureLocked = movementFeatureLocked or running.autoMovePlants
+	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval and not movementFeatureLocked then
 		if tryRun("autoBuyPets", buyPets) then
 			timers.autoBuyPets = 0
 		end
 	end
 
-	if state.autoSellPets and timers.autoSellPets >= CONFIG.petSellInterval and not movementLocked then
+	if state.autoSellPets and timers.autoSellPets >= CONFIG.petSellInterval then
 		if tryRun("autoSellPets", autoSellPets) then
 			timers.autoSellPets = 0
 		end
 	end
 
 	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
-		if fruitMovementLocked or os.clock() < fruitCollectionPausedUntil then
+		if os.clock() < fruitCollectionPausedUntil then
 			timers.fruitCollector = CONFIG.collectInterval
 		else
 			if tryRun("fruitCollector", collectFruit) then
@@ -6878,13 +6870,13 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		end
 	end
 
-	if state.autoBuySeeds and timers.autoBuySeeds >= CONFIG.buyInterval and not movementLocked then
+	if state.autoBuySeeds and timers.autoBuySeeds >= CONFIG.buyInterval then
 		if tryRun("autoBuySeeds", buySeed) then
 			timers.autoBuySeeds = 0
 		end
 	end
 
-	if state.autoBuyGear and timers.autoBuyGear >= CONFIG.buyInterval and not movementLocked then
+	if state.autoBuyGear and timers.autoBuyGear >= CONFIG.buyInterval then
 		if tryRun("autoBuyGear", buyGear) then
 			timers.autoBuyGear = 0
 		end
