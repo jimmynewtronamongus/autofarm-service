@@ -752,6 +752,20 @@ function stripVariantWords(name)
 	return trimText(result)
 end
 
+function getWildPetBaseName(name)
+	local text = tostring(name or "")
+	local fromSpawn = string.match(text, "^WildPet[_%s%-]+(.+)[_%s%-]+WildPet[_%s%-]+[%w%-]+$")
+		or string.match(text, "^WildPet[_%s%-]+(.+)$")
+	if fromSpawn and fromSpawn ~= "" then
+		text = fromSpawn
+	end
+	text = string.gsub(text, "[_%s%-]+WildPet[_%s%-]*[%w%-]*$", "")
+	text = string.gsub(text, "^WildPet[_%s%-]+", "")
+	text = string.gsub(text, "_", " ")
+	text = string.gsub(text, "%s+", " ")
+	return stripVariantWords(text)
+end
+
 function getGearImagesFolder()
 	local sharedModules = ReplicatedStorage:FindFirstChild("SharedModules")
 	return sharedModules and sharedModules:FindFirstChild("GearImages")
@@ -2048,13 +2062,15 @@ function refreshBuyPetNamesFromWildSpawns()
 		end
 
 		if model then
-			local petName = stripVariantWords(model.Name)
+			local petName = getWildPetBaseName(model.Name)
 			addUniqueName(buyPetNames, petName)
+			addUniqueName(petNames, petName)
 			notifyPetSpawn(petName)
 		end
 	end
 
 	table.sort(buyPetNames)
+	table.sort(petNames)
 end
 
 function valueMatchesLocalPlayer(value)
@@ -3028,19 +3044,25 @@ function triggerAnyPrompt(prompt)
 		return false
 	end
 
-	if typeof(fireproximityprompt) == "function" then
-		local fired = pcall(fireproximityprompt, prompt)
-			or pcall(fireproximityprompt, prompt, 0)
-			or pcall(fireproximityprompt, prompt, 1, true)
-		if fired then
-			return true
-		end
-	end
-
 	local holdSeconds = 0.05
 	pcall(function()
 		holdSeconds = math.clamp(tonumber(prompt.HoldDuration) or 0, 0, 2) + 0.05
 	end)
+	local fired = false
+	if typeof(fireproximityprompt) == "function" then
+		for _, args in ipairs({
+			{ prompt, holdSeconds, true },
+			{ prompt, math.max(1, holdSeconds), true },
+			{ prompt, 1, true },
+			{ prompt, 0, true },
+			{ prompt },
+		}) do
+			local ok = pcall(fireproximityprompt, unpackArgs(args))
+			fired = fired or ok
+			task.wait(0.04)
+		end
+	end
+
 	local began = pcall(function()
 		prompt:InputHoldBegin()
 	end)
@@ -3048,7 +3070,7 @@ function triggerAnyPrompt(prompt)
 	local ended = pcall(function()
 		prompt:InputHoldEnd()
 	end)
-	return began or ended
+	return fired or began or ended
 end
 
 function getTargetPart(target)
@@ -3950,9 +3972,17 @@ end
 
 function getSelectedPetList()
 	local selected = {}
+	local seen = {}
 
 	for _, petName in ipairs(petNames) do
 		if selectedPets[petName] then
+			seen[petName] = true
+			table.insert(selected, petName)
+		end
+	end
+	for petName, enabled in pairs(selectedPets) do
+		if enabled and petName and petName ~= "" and not seen[petName] then
+			seen[petName] = true
 			table.insert(selected, petName)
 		end
 	end
@@ -5242,6 +5272,7 @@ function getPetBuyAliases(petName, model, prompt)
 	addBuyAlias(aliases, seen, petName)
 	if model then
 		addBuyAlias(aliases, seen, model.Name)
+		addBuyAlias(aliases, seen, getWildPetBaseName(model.Name))
 	end
 	if prompt then
 		addBuyAlias(aliases, seen, prompt.Name)
@@ -5284,7 +5315,7 @@ end
 
 function getPetPurchaseInfo(petName, model, prompt)
 	return {
-		name = petName,
+		name = model and getWildPetBaseName(model.Name) or petName,
 		variant = getPetVariantText(model, prompt),
 		spawn = model and model.Name or "",
 	}
@@ -5332,7 +5363,11 @@ function walkToPetPrompt(model, prompt)
 		return false
 	end
 
-	local reached = walkToPosition(position, CONFIG.petWalkDistance, CONFIG.petWalkTimeout)
+	local stopDistance = CONFIG.petWalkDistance
+	pcall(function()
+		stopDistance = math.max(3, math.min(stopDistance, (tonumber(prompt.MaxActivationDistance) or stopDistance) - 1))
+	end)
+	local reached = walkToPosition(position, stopDistance, CONFIG.petWalkTimeout)
 	if reached then
 		task.wait(0.1)
 	end
@@ -5395,6 +5430,7 @@ function buyOnePet(petName)
 
 	local wildPetSpawns = getWildPetSpawns()
 	local petTerm = string.lower(string.gsub(petName, "%s+", ""))
+	local selectedTerm = compactName(petName)
 	local candidates = {}
 
 	for _, descendant in ipairs(getCachedDescendants("wildPets", wildPetSpawns)) do
@@ -5409,8 +5445,13 @@ function buyOnePet(petName)
 			end
 
 			local modelName = model and string.lower(string.gsub(model.Name, "%s+", "")) or ""
+			local baseName = model and getWildPetBaseName(model.Name) or ""
+			local baseTerm = compactName(baseName)
 			local isBuyPrompt = descendant.Name == "BuyPrompt" or textMatches(descendant, { "buy", "purchase", "adopt" })
-			local isPetPrompt = string.find(modelName, petTerm, 1, true) ~= nil or textMatches(descendant, { petName })
+			local isPetPrompt = string.find(modelName, petTerm, 1, true) ~= nil
+				or (selectedTerm ~= "" and string.find(baseTerm, selectedTerm, 1, true) ~= nil)
+				or (baseTerm ~= "" and string.find(selectedTerm, baseTerm, 1, true) ~= nil)
+				or textMatches(descendant, { petName, baseName })
 
 			if isBuyPrompt and isPetPrompt then
 				table.insert(candidates, {
@@ -6870,7 +6911,7 @@ if wildPetSpawnsForBuy then
 			model = descendant
 		end
 		if model then
-			local baseName = stripVariantWords(model.Name)
+			local baseName = getWildPetBaseName(model.Name)
 			addUniqueName(buyPetNames, baseName)
 			addUniqueName(petNames, baseName)
 			table.sort(buyPetNames)
@@ -6894,7 +6935,7 @@ if mapForPetBuy then
 					model = descendant
 				end
 				if model then
-					local baseName = stripVariantWords(model.Name)
+					local baseName = getWildPetBaseName(model.Name)
 					addUniqueName(buyPetNames, baseName)
 					addUniqueName(petNames, baseName)
 					table.sort(buyPetNames)
