@@ -6282,13 +6282,10 @@ function petSellInfoMatches(info)
 	if not matchedName then
 		return false
 	end
-	local variantText = info.variant .. " " .. info.tool.Name
 	if CONFIG.keepAllPetVariants and petInfoHasVariant(info) then
 		return false
 	end
-	return filterAllowsValue(CONFIG.petSellMutationFilter, info.mutation)
-		and filterAllowsValue(CONFIG.petSellVariantFilter, variantText)
-		and not filterRejectsValue(CONFIG.petSellExcludeVariantFilter, variantText)
+	return true
 end
 
 function getSellablePetTools()
@@ -7732,75 +7729,6 @@ keepVariantsButton.Activated:Connect(function()
 	setStatus("Pet sell keep all variants " .. (CONFIG.keepAllPetVariants and "enabled" or "disabled"))
 end)
 
-local mutationBox = make("TextBox", {
-	Name = "PetSellMutationFilter",
-	BackgroundColor3 = Color3.fromRGB(18, 23, 24),
-	BorderSizePixel = 0,
-	ClearTextOnFocus = false,
-	Font = Enum.Font.Gotham,
-	PlaceholderText = "Only mutations: any, Gold, Rainbow",
-	Text = CONFIG.petSellMutationFilter,
-	TextColor3 = Color3.fromRGB(242, 247, 239),
-	TextSize = 9,
-	TextTruncate = Enum.TextTruncate.AtEnd,
-	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 38,
-}, parent)
-make("UICorner", { CornerRadius = UDim.new(0, 6) }, mutationBox)
-make("UIPadding", { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7) }, mutationBox)
-mutationBox.FocusLost:Connect(function()
-	CONFIG.petSellMutationFilter = trimText(mutationBox.Text)
-	mutationBox.Text = CONFIG.petSellMutationFilter
-	saveConfig()
-	setStatus("Pet sell mutation filter saved")
-end)
-
-local variantBox = make("TextBox", {
-	Name = "PetSellVariantFilter",
-	BackgroundColor3 = Color3.fromRGB(18, 23, 24),
-	BorderSizePixel = 0,
-	ClearTextOnFocus = false,
-	Font = Enum.Font.Gotham,
-	PlaceholderText = "Only variants (ignored when Keep All is ON)",
-	Text = CONFIG.petSellVariantFilter,
-	TextColor3 = Color3.fromRGB(242, 247, 239),
-	TextSize = 9,
-	TextTruncate = Enum.TextTruncate.AtEnd,
-	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 39,
-}, parent)
-make("UICorner", { CornerRadius = UDim.new(0, 6) }, variantBox)
-make("UIPadding", { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7) }, variantBox)
-variantBox.FocusLost:Connect(function()
-	CONFIG.petSellVariantFilter = trimText(variantBox.Text)
-	variantBox.Text = CONFIG.petSellVariantFilter
-	saveConfig()
-	setStatus("Pet sell variant filter saved")
-end)
-
-local excludeVariantBox = make("TextBox", {
-	Name = "PetSellExcludeVariantFilter",
-	BackgroundColor3 = Color3.fromRGB(18, 23, 24),
-	BorderSizePixel = 0,
-	ClearTextOnFocus = false,
-	Font = Enum.Font.Gotham,
-	PlaceholderText = "Never sell variants (extra blocklist)",
-	Text = CONFIG.petSellExcludeVariantFilter,
-	TextColor3 = Color3.fromRGB(242, 247, 239),
-	TextSize = 9,
-	TextTruncate = Enum.TextTruncate.AtEnd,
-	Size = UDim2.new(1, 0, 0, 18),
-	LayoutOrder = 40,
-}, parent)
-make("UICorner", { CornerRadius = UDim.new(0, 6) }, excludeVariantBox)
-make("UIPadding", { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7) }, excludeVariantBox)
-excludeVariantBox.FocusLost:Connect(function()
-	CONFIG.petSellExcludeVariantFilter = trimText(excludeVariantBox.Text)
-	excludeVariantBox.Text = CONFIG.petSellExcludeVariantFilter
-	saveConfig()
-	setStatus("Pet sell excluded variant filter saved")
-end)
-
 local petSellRow = make("ScrollingFrame", {
 	Name = "PetSellSelector",
 	BackgroundTransparency = 1,
@@ -7809,7 +7737,7 @@ local petSellRow = make("ScrollingFrame", {
 	ScrollBarThickness = 3,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 38),
-	LayoutOrder = 42,
+	LayoutOrder = 39,
 }, parent)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(3, 3),
@@ -7822,7 +7750,7 @@ local petSellButtons = {}
 local petSellButtonCount = 0
 local petSellFilterText = ""
 
-makeSelectorSearch(parent, 41, "Search pets to sell", function(text)
+makeSelectorSearch(parent, 38, "Search pets to sell", function(text)
 	petSellFilterText = text
 	refreshSelectorFilter(petSellButtons, petNames, petSellFilterText, petSellRow, 2)
 end)
