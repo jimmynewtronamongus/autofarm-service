@@ -1140,6 +1140,94 @@ function sendRawStringPacket(packetName, value)
 	end)
 end
 
+function sendRawAnyStringPacket(packetName, value)
+	local text = tostring(value or "")
+	if text == "" or #text > 255 then
+		return false
+	end
+
+	return fireRawPacketBuffer(packetName, function(packetId)
+		local payloadBuffer = buffer.create(3 + #text)
+		buffer.writeu8(payloadBuffer, 0, packetId)
+		buffer.writeu8(payloadBuffer, 1, 11)
+		buffer.writeu8(payloadBuffer, 2, #text)
+		buffer.writestring(payloadBuffer, 3, text)
+		return payloadBuffer
+	end)
+end
+
+function sendRawStringNumberPacket(packetName, value, amount)
+	local text = tostring(value or "")
+	amount = tonumber(amount) or 1
+	if text == "" or #text > 255 or amount < 0 or amount > 255 then
+		return false
+	end
+
+	return fireRawPacketBuffer(packetName, function(packetId)
+		local payloadBuffer = buffer.create(3 + #text)
+		buffer.writeu8(payloadBuffer, 0, packetId)
+		buffer.writeu8(payloadBuffer, 1, #text)
+		buffer.writestring(payloadBuffer, 2, text)
+		buffer.writeu8(payloadBuffer, 2 + #text, amount)
+		return payloadBuffer
+	end)
+end
+
+function sendRawAnyStringNumberPacket(packetName, value, amount)
+	local text = tostring(value or "")
+	amount = tonumber(amount) or 1
+	if text == "" or #text > 255 or amount < 0 or amount > 255 then
+		return false
+	end
+
+	return fireRawPacketBuffer(packetName, function(packetId)
+		local payloadBuffer = buffer.create(5 + #text)
+		buffer.writeu8(payloadBuffer, 0, packetId)
+		buffer.writeu8(payloadBuffer, 1, 11)
+		buffer.writeu8(payloadBuffer, 2, #text)
+		buffer.writestring(payloadBuffer, 3, text)
+		buffer.writeu8(payloadBuffer, 3 + #text, 5)
+		buffer.writeu8(payloadBuffer, 4 + #text, amount)
+		return payloadBuffer
+	end)
+end
+
+function sendRawStringVariants(packetName, values)
+	local actions = 0
+	local seen = {}
+	for _, value in ipairs(values or {}) do
+		local text = tostring(value or "")
+		if text ~= "" and not seen[text] then
+			seen[text] = true
+			if sendRawStringPacket(packetName, text) then
+				actions += 1
+			end
+			if sendRawAnyStringPacket(packetName, text) then
+				actions += 1
+			end
+		end
+	end
+	return actions > 0, actions
+end
+
+function sendRawStringNumberVariants(packetName, values, amount)
+	local actions = 0
+	local seen = {}
+	for _, value in ipairs(values or {}) do
+		local text = tostring(value or "")
+		if text ~= "" and not seen[text] then
+			seen[text] = true
+			if sendRawStringNumberPacket(packetName, text, amount) then
+				actions += 1
+			end
+			if sendRawAnyStringNumberPacket(packetName, text, amount) then
+				actions += 1
+			end
+		end
+	end
+	return actions > 0, actions
+end
+
 function sendRawInstancePacket(packetName, instance)
 	if typeof(instance) ~= "Instance" then
 		return false
@@ -1150,6 +1238,36 @@ function sendRawInstancePacket(packetName, instance)
 		buffer.writeu8(payloadBuffer, 0, packetId)
 		return payloadBuffer
 	end, { instance })
+end
+
+function sendRawAnyInstancePacket(packetName, instance)
+	if typeof(instance) ~= "Instance" then
+		return false
+	end
+
+	return fireRawPacketBuffer(packetName, function(packetId)
+		local payloadBuffer = buffer.create(2)
+		buffer.writeu8(payloadBuffer, 0, packetId)
+		buffer.writeu8(payloadBuffer, 1, 13)
+		return payloadBuffer
+	end, { instance })
+end
+
+function sendRawInstanceVariants(packetName, instances)
+	local actions = 0
+	local seen = {}
+	for _, instance in ipairs(instances or {}) do
+		if typeof(instance) == "Instance" and not seen[instance] then
+			seen[instance] = true
+			if sendRawInstancePacket(packetName, instance) then
+				actions += 1
+			end
+			if sendRawAnyInstancePacket(packetName, instance) then
+				actions += 1
+			end
+		end
+	end
+	return actions > 0, actions
 end
 
 function firePacketRemote(packetName, ...)
@@ -4664,35 +4782,66 @@ function buySeed()
 	end
 end
 
-function buyOneGear(gearName)
-	local compact = string.gsub(tostring(gearName or ""), "%s+", "")
-	local underscored = string.gsub(tostring(gearName or ""), "%s+", "_")
-	local rawOk = sendRawStringPacket("PurchaseGear", gearName)
-		or sendRawStringPacket("PurchaseGear", underscored)
-		or sendRawStringPacket("PurchaseGear", compact)
-	local typedOk = sendTypedPacketArgVariants("PurchaseGear", { "String" }, {
-		{ gearName },
-		{ underscored },
-		{ compact },
-	})
-	local ok = sendPacketArgVariants("PurchaseGear", {
-		{ gearName },
-		{ gearName, 1 },
-		{ underscored },
-		{ underscored, 1 },
-		{ compact },
-		{ compact, 1 },
-		{ { Name = gearName } },
-		{ { Gear = gearName } },
-		{ { Item = gearName } },
-		{ { ItemName = gearName } },
-		{ { Name = gearName, Quantity = 1 } },
-	})
-	if rawOk or typedOk or ok then
-		return true, "Gear: " .. gearName
+function addBuyAlias(list, seen, value)
+	local text = tostring(value or "")
+	if text ~= "" and not seen[text] then
+		seen[text] = true
+		table.insert(list, text)
+	end
+end
+
+function getGearBuyAliases(gearName)
+	local aliases = {}
+	local seen = {}
+	local text = tostring(gearName or "")
+	addBuyAlias(aliases, seen, text)
+	addBuyAlias(aliases, seen, string.gsub(text, "%s+", "_"))
+	addBuyAlias(aliases, seen, string.gsub(text, "%s+", ""))
+
+	local frame = getGearFrame(text)
+	if frame then
+		addBuyAlias(aliases, seen, frame.Name)
+		addBuyAlias(aliases, seen, string.gsub(frame.Name, "%s+", "_"))
+		addBuyAlias(aliases, seen, string.gsub(frame.Name, "%s+", ""))
 	end
 
-	return false, "Gear: remote failed " .. gearName
+	local stockFolder = getStockItemsFolder and getStockItemsFolder("GearShop")
+	local stockItem = stockFolder and stockFolder:FindFirstChild(text)
+	if stockItem then
+		addBuyAlias(aliases, seen, stockItem.Name)
+	end
+
+	return aliases
+end
+
+function buyOneGear(gearName)
+	local aliases = getGearBuyAliases(gearName)
+	local primary = aliases[1] or tostring(gearName or "")
+	local typedVariants = {}
+	local typedQuantityVariants = {}
+	local packetVariants = {}
+	for _, alias in ipairs(aliases) do
+		table.insert(typedVariants, { alias })
+		table.insert(typedQuantityVariants, { alias, 1 })
+		table.insert(packetVariants, { alias })
+		table.insert(packetVariants, { alias, 1 })
+	end
+	table.insert(packetVariants, { { Name = primary } })
+	table.insert(packetVariants, { { Gear = primary } })
+	table.insert(packetVariants, { { Item = primary } })
+	table.insert(packetVariants, { { ItemName = primary } })
+	table.insert(packetVariants, { { Name = primary, Quantity = 1 } })
+
+	local rawNameOk = sendRawStringVariants("PurchaseGear", aliases)
+	local rawQuantityOk = sendRawStringNumberVariants("PurchaseGear", aliases, 1)
+	local typedOk = sendTypedPacketArgVariants("PurchaseGear", { "String" }, typedVariants)
+	local typedQuantityOk = sendTypedPacketArgVariants("PurchaseGear", { "String", "NumberU8" }, typedQuantityVariants)
+	local ok = sendPacketArgVariants("PurchaseGear", packetVariants)
+	if rawNameOk or rawQuantityOk or typedOk or typedQuantityOk or ok then
+		return true, "Gear: " .. primary
+	end
+
+	return false, "Gear: remote failed " .. primary
 end
 
 function buyGear()
@@ -4769,8 +4918,25 @@ function getPetSpawnId(model, prompt)
 		or (model and model.Name)
 end
 
-function buyPetRemote(petName, model, prompt)
+function getPetBuyAliases(petName, model, prompt)
+	local aliases = {}
+	local seen = {}
+	addBuyAlias(aliases, seen, petName)
+	if model then
+		addBuyAlias(aliases, seen, model.Name)
+	end
+	if prompt then
+		addBuyAlias(aliases, seen, prompt.Name)
+	end
 	local spawnId = getPetSpawnId(model, prompt)
+	if spawnId ~= nil then
+		addBuyAlias(aliases, seen, spawnId)
+	end
+	return aliases, spawnId
+end
+
+function buyPetRemote(petName, model, prompt)
+	local aliases, spawnId = getPetBuyAliases(petName, model, prompt)
 	local modelName = model and model.Name or petName
 	local instanceVariants = {}
 	if model then
@@ -4779,6 +4945,17 @@ function buyPetRemote(petName, model, prompt)
 	if prompt then
 		table.insert(instanceVariants, { prompt })
 	end
+	local rawInstances = {}
+	if model then
+		table.insert(rawInstances, model)
+	end
+	if prompt then
+		table.insert(rawInstances, prompt)
+	end
+	local rawTameOk = sendRawInstanceVariants("WildPetTame", rawInstances)
+	local rawCollectedOk = sendRawInstanceVariants("WildPetCollected", rawInstances)
+	local rawTameNameOk = sendRawStringVariants("WildPetTame", aliases)
+	local rawCollectedNameOk = sendRawStringVariants("WildPetCollected", aliases)
 	local typedTameOk = sendTypedPacketArgVariants("WildPetTame", { "Instance" }, instanceVariants)
 	local typedCollectedOk = sendTypedPacketArgVariants("WildPetCollected", { "Instance" }, instanceVariants)
 
@@ -4804,7 +4981,7 @@ function buyPetRemote(petName, model, prompt)
 
 	local tameOk = sendPacketArgVariants("WildPetTame", variants)
 	local collectedOk = sendPacketArgVariants("WildPetCollected", variants)
-	return typedTameOk or typedCollectedOk or tameOk or collectedOk
+	return rawTameOk or rawCollectedOk or rawTameNameOk or rawCollectedNameOk or typedTameOk or typedCollectedOk or tameOk or collectedOk
 end
 
 function buyOnePet(petName)
