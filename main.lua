@@ -1225,6 +1225,71 @@ function tableLooksLikePacketEntry(value, packetName, packetId)
 	return matched
 end
 
+function functionMentionsPacket(fn, packetName, packetId)
+	if type(fn) ~= "function" then
+		return false
+	end
+
+	if typeof(debug) == "table" and type(debug.getconstants) == "function" then
+		local ok, constants = pcall(debug.getconstants, fn)
+		if ok and type(constants) == "table" then
+			for _, constant in ipairs(constants) do
+				if packetFieldMatchesPacket(constant, packetName, packetId) then
+					return true
+				end
+			end
+		end
+	elseif typeof(getconstants) == "function" then
+		local ok, constants = pcall(getconstants, fn)
+		if ok and type(constants) == "table" then
+			for _, constant in ipairs(constants) do
+				if packetFieldMatchesPacket(constant, packetName, packetId) then
+					return true
+				end
+			end
+		end
+	end
+
+	return false
+end
+
+function scanFunctionUpvaluesForPacket(results, seen, fn, packetName, packetId)
+	if type(fn) ~= "function" then
+		return
+	end
+
+	local mentionsPacket = functionMentionsPacket(fn, packetName, packetId)
+	local function visitValue(value)
+		if type(value) == "table" then
+			local entry
+			pcall(function()
+				entry = value[packetName]
+			end)
+			addRuntimePacketCandidate(results, seen, entry)
+			if mentionsPacket or tableLooksLikePacketEntry(value, packetName, packetId) then
+				addRuntimePacketCandidate(results, seen, value)
+			end
+		end
+	end
+
+	if typeof(debug) == "table" and type(debug.getupvalue) == "function" then
+		for index = 1, 80 do
+			local ok, _, value = pcall(debug.getupvalue, fn, index)
+			if not ok or value == nil then
+				break
+			end
+			visitValue(value)
+		end
+	elseif typeof(getupvalues) == "function" then
+		local ok, upvalues = pcall(getupvalues, fn)
+		if ok and type(upvalues) == "table" then
+			for _, value in pairs(upvalues) do
+				visitValue(value)
+			end
+		end
+	end
+end
+
 function addRuntimePacketCandidate(results, seen, candidate)
 	if candidate == nil or seen[candidate] then
 		return
@@ -1267,6 +1332,8 @@ function findRuntimePacketEntries(packetName)
 					if tableLooksLikePacketEntry(object, packetName, packetId) then
 						addRuntimePacketCandidate(results, seen, object)
 					end
+				elseif type(object) == "function" then
+					scanFunctionUpvaluesForPacket(results, seen, object, packetName, packetId)
 				end
 			end
 		end
@@ -5825,7 +5892,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	schedulerAccumulator = 0
 
 	local jobsStarted = 0
-	local maxJobsThisFrame = 1
+	local maxJobsThisFrame = 3
 	local function tryRun(key, callback)
 		if jobsStarted >= maxJobsThisFrame or running[key] then
 			return false
