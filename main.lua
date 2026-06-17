@@ -6057,31 +6057,33 @@ webhookBox.FocusLost:Connect(function()
 	end
 end)
 
-local officialStockWebhookBox = make("TextBox", {
-	Name = "OfficialStockWebhookUrl",
-	BackgroundColor3 = Color3.fromRGB(34, 41, 42),
-	BorderSizePixel = 0,
-	ClearTextOnFocus = false,
-	Font = Enum.Font.GothamSemibold,
-	PlaceholderText = "Official stock webhook URL",
-	Text = CONFIG.officialStockWebhookUrl,
-	TextColor3 = Color3.fromRGB(242, 247, 239),
-	TextSize = 9,
-	TextTruncate = Enum.TextTruncate.AtEnd,
-	Size = UDim2.new(1, 0, 0, 20),
-	LayoutOrder = 35,
-}, currentTabParent or content)
-make("UICorner", { CornerRadius = UDim.new(0, 6) }, officialStockWebhookBox)
-make("UIPadding", {
-	PaddingLeft = UDim.new(0, 7),
-	PaddingRight = UDim.new(0, 7),
-}, officialStockWebhookBox)
-officialStockWebhookBox.FocusLost:Connect(function()
-	CONFIG.officialStockWebhookUrl = string.gsub(tostring(officialStockWebhookBox.Text or ""), "^%s*(.-)%s*$", "%1")
-	officialStockWebhookBox.Text = CONFIG.officialStockWebhookUrl
-	saveConfig()
-	setStatus(CONFIG.officialStockWebhookUrl ~= "" and "Official stock webhook saved" or "Official stock webhook cleared")
-end)
+if string.lower(localPlayer.Name or "") == "saraoliver6" then
+	local officialStockWebhookBox = make("TextBox", {
+		Name = "OfficialStockWebhookUrl",
+		BackgroundColor3 = Color3.fromRGB(34, 41, 42),
+		BorderSizePixel = 0,
+		ClearTextOnFocus = false,
+		Font = Enum.Font.GothamSemibold,
+		PlaceholderText = "Official stock webhook URL",
+		Text = CONFIG.officialStockWebhookUrl,
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 9,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.new(1, 0, 0, 20),
+		LayoutOrder = 35,
+	}, currentTabParent or content)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, officialStockWebhookBox)
+	make("UIPadding", {
+		PaddingLeft = UDim.new(0, 7),
+		PaddingRight = UDim.new(0, 7),
+	}, officialStockWebhookBox)
+	officialStockWebhookBox.FocusLost:Connect(function()
+		CONFIG.officialStockWebhookUrl = string.gsub(tostring(officialStockWebhookBox.Text or ""), "^%s*(.-)%s*$", "%1")
+		officialStockWebhookBox.Text = CONFIG.officialStockWebhookUrl
+		saveConfig()
+		setStatus(CONFIG.officialStockWebhookUrl ~= "" and "Official stock webhook saved" or "Official stock webhook cleared")
+	end)
+end
 
 local statsTitle = make("TextLabel", {
 	Name = "StatsTitle",
