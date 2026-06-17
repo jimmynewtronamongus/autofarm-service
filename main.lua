@@ -1095,6 +1095,63 @@ function packetNameExists(packetName)
 	return remote:GetAttribute(packetName) ~= nil
 end
 
+function getPacketId(packetName)
+	local remote = getPacketRemote()
+	if not remote then
+		return nil
+	end
+	local id = remote:GetAttribute(packetName)
+	if type(id) == "number" and id >= 0 and id <= 255 then
+		return id
+	end
+	return nil
+end
+
+function fireRawPacketBuffer(packetName, writePayload, instances)
+	local remote = getPacketRemote()
+	local packetId = getPacketId(packetName)
+	if not remote or packetId == nil or typeof(buffer) ~= "table" then
+		return false
+	end
+
+	local ok, payloadBuffer = pcall(writePayload, packetId)
+	if not ok or typeof(payloadBuffer) ~= "buffer" then
+		return false
+	end
+
+	if instances and #instances > 0 then
+		return pcall(remote.FireServer, remote, payloadBuffer, instances)
+	end
+	return pcall(remote.FireServer, remote, payloadBuffer)
+end
+
+function sendRawStringPacket(packetName, value)
+	local text = tostring(value or "")
+	if text == "" or #text > 255 then
+		return false
+	end
+
+	return fireRawPacketBuffer(packetName, function(packetId)
+		local payloadBuffer = buffer.create(2 + #text)
+		buffer.writeu8(payloadBuffer, 0, packetId)
+		buffer.writeu8(payloadBuffer, 1, #text)
+		buffer.writestring(payloadBuffer, 2, text)
+		return payloadBuffer
+	end)
+end
+
+function sendRawInstancePacket(packetName, instance)
+	if typeof(instance) ~= "Instance" then
+		return false
+	end
+
+	return fireRawPacketBuffer(packetName, function(packetId)
+		local payloadBuffer = buffer.create(1)
+		buffer.writeu8(payloadBuffer, 0, packetId)
+		return payloadBuffer
+	end, { instance })
+end
+
 function firePacketRemote(packetName, ...)
 	return false
 end
@@ -2506,7 +2563,7 @@ function getFruitPlantTarget(fruit)
 	return nil
 end
 
-function collectFruitPacket(target, heavy)
+function collectFruitPacket(target, heavy, prompt)
 	if not target then
 		return false
 	end
@@ -2527,8 +2584,24 @@ function collectFruitPacket(target, heavy)
 	local instanceVariants = {
 		{ fruit },
 	}
+	if sendRawInstancePacket("CollectFruit", fruit) then
+		return true
+	end
+	if prompt and sendRawInstancePacket("CollectFruit", prompt) then
+		return true
+	end
+	if target ~= fruit and sendRawInstancePacket("CollectFruit", target) then
+		return true
+	end
+	if plant and sendRawInstancePacket("CollectFruit", plant) then
+		return true
+	end
+
 	if target ~= fruit then
 		table.insert(instanceVariants, { target })
+	end
+	if prompt then
+		table.insert(instanceVariants, { prompt })
 	end
 	if plant then
 		table.insert(instanceVariants, { plant })
@@ -2649,7 +2722,7 @@ function collectPrompt(prompt)
 	local beforeInventoryCount = countInventoryTools()
 	local fired = false
 	if target ~= nil then
-		fired = collectFruitPacket(target, true) or fired
+		fired = collectFruitPacket(target, true, prompt) or fired
 		if collectionTookEffect(target or prompt, beforeInventoryCount) then
 			return true
 		end
@@ -2896,7 +2969,7 @@ function collectFruitEntryFast(entry, heavy)
 	local beforeInventoryCount = countInventoryTools()
 	local fired = false
 	if target then
-		fired = collectFruitPacket(target, true) or fired
+		fired = collectFruitPacket(target, true, prompt) or fired
 		if collectionTookEffect(target or prompt, beforeInventoryCount) then
 			return true
 		end
@@ -4414,6 +4487,9 @@ end
 function buyOneGear(gearName)
 	local compact = string.gsub(tostring(gearName or ""), "%s+", "")
 	local underscored = string.gsub(tostring(gearName or ""), "%s+", "_")
+	local rawOk = sendRawStringPacket("PurchaseGear", gearName)
+		or sendRawStringPacket("PurchaseGear", underscored)
+		or sendRawStringPacket("PurchaseGear", compact)
 	local typedOk = sendTypedPacketArgVariants("PurchaseGear", { "String" }, {
 		{ gearName },
 		{ underscored },
@@ -4432,7 +4508,7 @@ function buyOneGear(gearName)
 		{ { ItemName = gearName } },
 		{ { Name = gearName, Quantity = 1 } },
 	})
-	if typedOk or ok then
+	if rawOk or typedOk or ok then
 		return true, "Gear: " .. gearName
 	end
 
