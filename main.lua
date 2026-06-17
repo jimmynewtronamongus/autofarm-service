@@ -30,6 +30,9 @@ CONFIG = {
 	sellCooldown = 3.0,
 	sellResumeFreeSlots = 8,
 	buyInterval = 1.5,
+	waterInterval = 4.0,
+	sprinklerInterval = 8.0,
+	mailInterval = 6.0,
 	rainbowCollectInterval = 4.5,
 	petBuyInterval = 1.5,
 	cacheRefreshInterval = 25.0,
@@ -55,8 +58,12 @@ CONFIG = {
 	lowRaritySeedLimit = 10,
 	maxGardenPlants = 500,
 	seedPlacementMode = "Farm Corner",
+	waterMode = "Farm Middle",
+	sprinklerMode = "Farm Middle",
 	undergroundStacking = false,
 	savedPlantPosition = nil,
+	waterCustomPosition = nil,
+	sprinklerCustomPosition = nil,
 	selectedSeed = "",
 	plantRadius = 18,
 	webhookUrl = "",
@@ -76,9 +83,17 @@ state = {
 	sellWhenFull = true,
 	autoBuySeeds = false,
 	autoBuyGear = false,
+	autoWater = false,
+	waterOnlyGrowing = true,
+	autoSprinkler = false,
+	autoAcceptMail = false,
 	autoCollectRainbowSeeds = false,
 	autoBuyPets = false,
 	performanceMode = false,
+	hideGameButtons = false,
+	hidePlotIcons = false,
+	hideOwnPlants = false,
+	headlessMode = false,
 	lastStatus = "Ready",
 }
 
@@ -95,6 +110,7 @@ petNames = {}
 buyPetNames = {}
 
 selectedPets = {}
+sprinklerOverrides = {}
 
 plantPromptTextCache = setmetatable({}, { __mode = "k" })
 shovelPromptCache = setmetatable({}, { __mode = "k" })
@@ -162,12 +178,19 @@ function loadConfig()
 		"sellWhenFullInterval",
 		"sellResumeFreeSlots",
 		"buyInterval",
+		"waterInterval",
+		"sprinklerInterval",
+		"mailInterval",
 		"shovelInterval",
 		"lowRaritySeedLimit",
 		"maxGardenPlants",
 		"seedPlacementMode",
+		"waterMode",
+		"sprinklerMode",
 		"undergroundStacking",
 		"savedPlantPosition",
+		"waterCustomPosition",
+		"sprinklerCustomPosition",
 		"selectedSeed",
 		"plantRadius",
 		"webhookUrl",
@@ -182,9 +205,17 @@ function loadConfig()
 		"sellWhenFull",
 		"autoBuySeeds",
 		"autoBuyGear",
+		"autoWater",
+		"waterOnlyGrowing",
+		"autoSprinkler",
+		"autoAcceptMail",
 		"autoCollectRainbowSeeds",
 		"autoBuyPets",
 		"performanceMode",
+		"hideGameButtons",
+		"hidePlotIcons",
+		"hideOwnPlants",
+		"headlessMode",
 	})
 	if decoded.state and decoded.state.hidePlants == true then
 		state.performanceMode = true
@@ -194,6 +225,7 @@ function loadConfig()
 	selectedShovelSeeds = copyMap(decoded.selectedShovelSeeds)
 	selectedGears = copyMap(decoded.selectedGears)
 	selectedPets = copyMap(decoded.selectedPets)
+	sprinklerOverrides = type(decoded.sprinklerOverrides) == "table" and decoded.sprinklerOverrides or {}
 
 	return true
 end
@@ -216,12 +248,19 @@ saveConfig = function()
 			sellWhenFullInterval = CONFIG.sellWhenFullInterval,
 			sellResumeFreeSlots = CONFIG.sellResumeFreeSlots,
 			buyInterval = CONFIG.buyInterval,
+			waterInterval = CONFIG.waterInterval,
+			sprinklerInterval = CONFIG.sprinklerInterval,
+			mailInterval = CONFIG.mailInterval,
 			shovelInterval = CONFIG.shovelInterval,
 			lowRaritySeedLimit = CONFIG.lowRaritySeedLimit,
 			maxGardenPlants = CONFIG.maxGardenPlants,
 			seedPlacementMode = CONFIG.seedPlacementMode,
+			waterMode = CONFIG.waterMode,
+			sprinklerMode = CONFIG.sprinklerMode,
 			undergroundStacking = CONFIG.undergroundStacking,
 			savedPlantPosition = CONFIG.savedPlantPosition,
+			waterCustomPosition = CONFIG.waterCustomPosition,
+			sprinklerCustomPosition = CONFIG.sprinklerCustomPosition,
 			selectedSeed = CONFIG.selectedSeed,
 			plantRadius = CONFIG.plantRadius,
 			webhookUrl = CONFIG.webhookUrl,
@@ -236,14 +275,23 @@ saveConfig = function()
 			sellWhenFull = state.sellWhenFull,
 			autoBuySeeds = state.autoBuySeeds,
 			autoBuyGear = state.autoBuyGear,
+			autoWater = state.autoWater,
+			waterOnlyGrowing = state.waterOnlyGrowing,
+			autoSprinkler = state.autoSprinkler,
+			autoAcceptMail = state.autoAcceptMail,
 			autoCollectRainbowSeeds = state.autoCollectRainbowSeeds,
 			autoBuyPets = state.autoBuyPets,
 			performanceMode = state.performanceMode,
+			hideGameButtons = state.hideGameButtons,
+			hidePlotIcons = state.hidePlotIcons,
+			hideOwnPlants = state.hideOwnPlants,
+			headlessMode = state.headlessMode,
 		},
 		selectedSeeds = selectedSeeds,
 		selectedShovelSeeds = selectedShovelSeeds,
 		selectedGears = selectedGears,
 		selectedPets = selectedPets,
+		sprinklerOverrides = sprinklerOverrides,
 	}
 
 	local ok, encoded = pcall(function()
@@ -4943,6 +4991,230 @@ function autoShovel()
 	setStatus(("Auto shovel: tried %d/%d matching plant(s)"):format(actions, #targets))
 end
 
+function vectorFromConfigPosition(value)
+	if type(value) ~= "table" then
+		return nil
+	end
+	local x, y, z = tonumber(value.x), tonumber(value.y), tonumber(value.z)
+	if x and y and z then
+		return Vector3.new(x, y, z)
+	end
+	return nil
+end
+
+function getWateringCan()
+	for _, container in ipairs(getToolContainers()) do
+		if container then
+			for _, item in ipairs(container:GetChildren()) do
+				if item:IsA("Tool") and string.find(string.lower(item.Name), "watering can", 1, true) then
+					local humanoid = getHumanoid()
+					if humanoid and item.Parent ~= getCharacter() then
+						humanoid:EquipTool(item)
+					end
+					return item
+				end
+			end
+		end
+	end
+	return nil
+end
+
+function getPlantWaterTargets()
+	local roots = getOwnGardenRoots()
+	local targets = {}
+	local seen = {}
+	local selected = getSelectedSeedList()
+	local hasSelection = #selected > 0
+
+	for _, root in ipairs(roots) do
+		for _, descendant in ipairs(getCachedDescendants("waterPlants", root, CONFIG.cacheRefreshInterval)) do
+			if #targets >= 24 then
+				break
+			end
+			local plant = getPlantModelForShovel(descendant)
+			if plant and plant.Parent and not seen[plant] then
+				local plantName = getPlantNameForShovel(plant)
+				local selectedMatch = not hasSelection
+				if hasSelection then
+					for _, seedName in ipairs(selected) do
+						if string.find(string.lower(plantName), string.lower(seedName), 1, true) then
+							selectedMatch = true
+							break
+						end
+					end
+				end
+				local growing = treeTextMatches(plant, { "growing", "growth", "age", "progress", "water" }, 3)
+				local activeWaterEffect = treeTextMatches(plant, { "watered", "wet", "soaked", "hydrated" }, 3)
+				if selectedMatch and not activeWaterEffect and (not state.waterOnlyGrowing or growing) then
+					seen[plant] = true
+					table.insert(targets, plant)
+				end
+			end
+		end
+	end
+
+	return targets
+end
+
+function getWaterPosition()
+	if CONFIG.waterMode == "Custom Location" then
+		return vectorFromConfigPosition(CONFIG.waterCustomPosition) or (getRoot() and getRoot().Position)
+	elseif CONFIG.waterMode == "Selected Plant" then
+		local target = getPlantWaterTargets()[1]
+		local part = target and getTargetPart(target)
+		return part and part.Position or getOwnGardenAnchor() and getOwnGardenAnchor().Position
+	end
+	local anchor = getOwnGardenAnchor()
+	return anchor and anchor.Position or (getRoot() and getRoot().Position)
+end
+
+function autoWater()
+	if not isEnabled("autoWater") then
+		return
+	end
+	local tool = getWateringCan()
+	local positions = {}
+	if CONFIG.waterMode == "Selected Plant" or CONFIG.waterMode == "Growing Plants" then
+		for _, plant in ipairs(getPlantWaterTargets()) do
+			local part = getTargetPart(plant)
+			if part then
+				table.insert(positions, part.Position)
+			end
+			if #positions >= 8 then
+				break
+			end
+		end
+	else
+		local position = getWaterPosition()
+		if position then
+			table.insert(positions, position)
+		end
+	end
+
+	if #positions == 0 then
+		setStatus("Water: no target found")
+		return
+	end
+
+	local actions = 0
+	for _, position in ipairs(positions) do
+		if not isEnabled("autoWater") then
+			return
+		end
+		if tool then
+			pcall(function()
+				tool:Activate()
+			end)
+		end
+		if sendPacket("UseWateringCan", position) or sendPacket("UseWateringCan") then
+			actions += 1
+		end
+		task.wait(0.08)
+	end
+	setStatus(("Water: watered %d target(s)"):format(actions))
+end
+
+function getSprinklerPosition()
+	if CONFIG.sprinklerMode == "Custom Location" then
+		return vectorFromConfigPosition(CONFIG.sprinklerCustomPosition) or (getRoot() and getRoot().Position)
+	elseif CONFIG.sprinklerMode == "Near Plant" then
+		local target = getPlantWaterTargets()[1]
+		local part = target and getTargetPart(target)
+		return part and (part.Position + Vector3.new(2, 0, 0)) or getOwnGardenAnchor() and getOwnGardenAnchor().Position
+	end
+	local anchor = getOwnGardenAnchor()
+	return anchor and anchor.Position or (getRoot() and getRoot().Position)
+end
+
+function getSelectedSprinklers()
+	local selected = {}
+	for _, gearName in ipairs(getSelectedGearList()) do
+		if string.find(string.lower(gearName), "sprinkler", 1, true) then
+			table.insert(selected, gearName)
+		end
+	end
+	return selected
+end
+
+function autoPlaceSprinklers()
+	if not isEnabled("autoSprinkler") then
+		return
+	end
+	local position = getSprinklerPosition()
+	if not position then
+		setStatus("Sprinkler: no placement position")
+		return
+	end
+
+	local placed = 0
+	for _, sprinklerName in ipairs(getSelectedSprinklers()) do
+		local targetAmount = tonumber(sprinklerOverrides[sprinklerName]) or 1
+		for _ = 1, math.clamp(targetAmount, 1, 10) do
+			if not isEnabled("autoSprinkler") then
+				return
+			end
+			if sendPacket("PlaceSprinkler", sprinklerName, position) or sendPacket("PlaceSprinkler", position) then
+				placed += 1
+			end
+			task.wait(0.08)
+		end
+	end
+	setStatus(("Sprinkler: placed %d selected sprinkler(s)"):format(placed))
+end
+
+function autoAcceptMail()
+	if not isEnabled("autoAcceptMail") then
+		return
+	end
+	local actions = 0
+	for _, packetName in ipairs({ "MailboxClaim", "MailboxOpenInbox", "MailboxList" }) do
+		if sendPacket(packetName) then
+			actions += 1
+		end
+	end
+	if actions > 0 then
+		sendWebhook("Mail", "Auto accept mail checked incoming mailbox.", "mail:autoaccept")
+	end
+	setStatus(("Mail: auto accept checked (%d action(s))"):format(actions))
+end
+
+function applyPlayerVisualSettings()
+	local changed = 0
+	for _, guiObject in ipairs(playerGui:GetDescendants()) do
+		if guiObject:IsA("GuiObject") then
+			local text = string.lower(safeText(guiObject.Name))
+			pcall(function()
+				text = text .. " " .. string.lower(safeText(guiObject.Text))
+			end)
+			if state.hideGameButtons and (string.find(text, "button", 1, true) or string.find(text, "shop", 1, true) or string.find(text, "gift", 1, true)) then
+				guiObject.Visible = false
+				changed += 1
+			elseif state.hidePlotIcons and (string.find(text, "plot", 1, true) or string.find(text, "icon", 1, true)) then
+				guiObject.Visible = false
+				changed += 1
+			end
+		end
+	end
+	if state.hideOwnPlants or state.headlessMode then
+		for _, root in ipairs(getOwnGardenRoots()) do
+			for _, descendant in ipairs(root:GetDescendants()) do
+				if isOwnPlantVisual(descendant, getGardenPlotForInstance(descendant)) then
+					changed += hidePerformanceVisual(descendant, false)
+				end
+			end
+		end
+	end
+	if state.headlessMode then
+		state.performanceMode = true
+		local gui = playerGui:FindFirstChild("GardenAutomationGui")
+		if gui then
+			gui.Enabled = false
+		end
+		task.spawn(enablePerformanceMode)
+	end
+	setStatus(("Player settings: hidden %d object(s)"):format(changed))
+end
+
 function autoSell(force)
 	local stopKey = force and "sellWhenFull" or "autoSell"
 	local token = getStopToken(stopKey)
@@ -5293,6 +5565,7 @@ function buyPets()
 		stats.petsBought += bought
 		refreshInventoryStats()
 		updateStatsUI()
+		sendWebhook("Pet purchase", ("Bought `%d` selected pet(s)."):format(bought), "pets:bought")
 		setStatus(("Auto pets: verified %d purchase(s)"):format(bought))
 	else
 		setStatus(lastMessage)
@@ -5564,6 +5837,8 @@ function makeToggle(label, key, order)
 
 		if key == "performanceMode" and state[key] then
 			task.spawn(enablePerformanceMode)
+		elseif (key == "hideGameButtons" or key == "hidePlotIcons" or key == "hideOwnPlants" or key == "headlessMode") and state[key] then
+			task.spawn(applyPlayerVisualSettings)
 		end
 	end)
 end
@@ -5609,9 +5884,12 @@ makeToggle("Fruit Collector", "fruitCollector", 5)
 makeToggle("Teleport To Fruit", "collectTeleport", 6)
 makeToggle("Seed Placer", "seedPlacer", 7)
 makeToggle("Auto Shovel Plants", "autoShovel", 8)
+makeToggle("Auto Water", "autoWater", 9)
+makeToggle("Water Only Growing Plants", "waterOnlyGrowing", 10)
+makeToggle("Auto Sprinkler", "autoSprinkler", 11)
 local placementModes = { "Farm Corner", "Random", "Saved Position" }
 local placementButton
-placementButton = makeCommandButton("Placement Mode: " .. CONFIG.seedPlacementMode, 9, function()
+placementButton = makeCommandButton("Placement Mode: " .. CONFIG.seedPlacementMode, 12, function()
 	local currentIndex = 1
 	for index, mode in ipairs(placementModes) do
 		if mode == CONFIG.seedPlacementMode then
@@ -5624,7 +5902,7 @@ placementButton = makeCommandButton("Placement Mode: " .. CONFIG.seedPlacementMo
 	saveConfig()
 	setStatus("Seed placement mode: " .. CONFIG.seedPlacementMode)
 end)
-makeCommandButton("Save Plant Position", 10, function()
+makeCommandButton("Save Plant Position", 13, function()
 	local root = getRoot()
 	if root then
 		CONFIG.savedPlantPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
@@ -5634,13 +5912,77 @@ makeCommandButton("Save Plant Position", 10, function()
 		setStatus("Saved current position for seed placement")
 	end
 end)
-makeCommandButton("Underground Stacking: " .. (CONFIG.undergroundStacking and "ON" or "OFF"), 11, function()
+local waterModes = { "Farm Middle", "Selected Plant", "Growing Plants", "Custom Location" }
+makeCommandButton("Water Mode: " .. CONFIG.waterMode, 14, function()
+	local currentIndex = 1
+	for index, mode in ipairs(waterModes) do
+		if mode == CONFIG.waterMode then
+			currentIndex = index
+			break
+		end
+	end
+	CONFIG.waterMode = waterModes[(currentIndex % #waterModes) + 1]
+	saveConfig()
+	setStatus("Water mode: " .. CONFIG.waterMode)
+	buildUI()
+end)
+makeCommandButton("Save Water Location", 15, function()
+	local root = getRoot()
+	if root then
+		CONFIG.waterCustomPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
+		CONFIG.waterMode = "Custom Location"
+		saveConfig()
+		setStatus("Saved custom water location")
+		buildUI()
+	end
+end)
+local sprinklerModes = { "Farm Middle", "Near Plant", "Custom Location" }
+makeCommandButton("Sprinkler Mode: " .. CONFIG.sprinklerMode, 16, function()
+	local currentIndex = 1
+	for index, mode in ipairs(sprinklerModes) do
+		if mode == CONFIG.sprinklerMode then
+			currentIndex = index
+			break
+		end
+	end
+	CONFIG.sprinklerMode = sprinklerModes[(currentIndex % #sprinklerModes) + 1]
+	saveConfig()
+	setStatus("Sprinkler mode: " .. CONFIG.sprinklerMode)
+	buildUI()
+end)
+makeCommandButton("Save Sprinkler Location", 17, function()
+	local root = getRoot()
+	if root then
+		CONFIG.sprinklerCustomPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
+		CONFIG.sprinklerMode = "Custom Location"
+		saveConfig()
+		setStatus("Saved custom sprinkler location")
+		buildUI()
+	end
+end)
+makeCommandButton("Sprinkler Amount Override", 18, function()
+	local sprinklers = getSelectedSprinklers()
+	local sprinklerName = sprinklers[1]
+	if not sprinklerName then
+		setStatus("Select a sprinkler in Gear first")
+		return
+	end
+	local current = tonumber(sprinklerOverrides[sprinklerName]) or 1
+	current += 1
+	if current > 10 then
+		current = 1
+	end
+	sprinklerOverrides[sprinklerName] = current
+	saveConfig()
+	setStatus(("Sprinkler override: %s x%d"):format(sprinklerName, current))
+end)
+makeCommandButton("Underground Stacking: " .. (CONFIG.undergroundStacking and "ON" or "OFF"), 19, function()
 	CONFIG.undergroundStacking = not CONFIG.undergroundStacking
 	saveConfig()
 	setStatus("Underground stacking " .. (CONFIG.undergroundStacking and "enabled" or "disabled"))
 	buildUI()
 end)
-makeCommandButton(("Max Garden Plants: %d"):format(CONFIG.maxGardenPlants), 12, function()
+makeCommandButton(("Max Garden Plants: %d"):format(CONFIG.maxGardenPlants), 20, function()
 	CONFIG.maxGardenPlants += 50
 	if CONFIG.maxGardenPlants > 1000 then
 		CONFIG.maxGardenPlants = 100
@@ -5649,12 +5991,19 @@ makeCommandButton(("Max Garden Plants: %d"):format(CONFIG.maxGardenPlants), 12, 
 	setStatus(("Max garden plants set to %d"):format(CONFIG.maxGardenPlants))
 	buildUI()
 end)
-makeToggle("Auto Sell Inventory", "autoSell", 13)
-makeToggle("Sell When Backpack Full", "sellWhenFull", 14)
-makeSectionLabel("Shops", 15)
-makeToggle("Auto Buy Seeds", "autoBuySeeds", 16)
-makeToggle("Auto Buy Gear", "autoBuyGear", 17)
-makeToggle("Performance Mode", "performanceMode", 18)
+makeToggle("Auto Sell Inventory", "autoSell", 21)
+makeToggle("Sell When Backpack Full", "sellWhenFull", 22)
+makeSectionLabel("Shops", 23)
+makeToggle("Auto Buy Seeds", "autoBuySeeds", 24)
+makeToggle("Auto Buy Gear", "autoBuyGear", 25)
+makeToggle("Auto Accept Mail", "autoAcceptMail", 26)
+makeSectionLabel("Settings", 27)
+makeToggle("Performance Mode", "performanceMode", 28)
+makeToggle("Hide Game Buttons", "hideGameButtons", 29)
+makeToggle("Hide Plot Icons", "hidePlotIcons", 30)
+makeToggle("Hide Plants On Farm", "hideOwnPlants", 31)
+makeToggle("Headless Mode", "headlessMode", 32)
+makeCommandButton("Apply Player Settings", 33, applyPlayerVisualSettings)
 
 local webhookBox = make("TextBox", {
 	Name = "WebhookUrl",
@@ -5668,7 +6017,7 @@ local webhookBox = make("TextBox", {
 	TextSize = 10,
 	TextTruncate = Enum.TextTruncate.AtEnd,
 	Size = UDim2.new(1, 0, 0, 24),
-	LayoutOrder = 21,
+	LayoutOrder = 34,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, webhookBox)
 make("UIPadding", {
@@ -5694,7 +6043,7 @@ local statsTitle = make("TextLabel", {
 	TextSize = 11,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 12),
-	LayoutOrder = 22,
+	LayoutOrder = 35,
 }, content)
 
 local statsFrame = make("Frame", {
@@ -5702,7 +6051,7 @@ local statsFrame = make("Frame", {
 	BackgroundColor3 = Color3.fromRGB(14, 18, 19),
 	BorderSizePixel = 0,
 	Size = UDim2.new(1, 0, 0, 94),
-	LayoutOrder = 23,
+	LayoutOrder = 36,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, statsFrame)
 make("UIPadding", {
@@ -6377,6 +6726,9 @@ end
 buildUI()
 
 schedulePerformanceModeRestore()
+if state.headlessMode then
+	task.defer(applyPlayerVisualSettings)
+end
 
 timers = {
 	fruitCollector = 0,
@@ -6384,6 +6736,9 @@ timers = {
 	autoShovel = 0,
 	autoSell = 0,
 	sellWhenFull = 0,
+	autoWater = 0,
+	autoSprinkler = 0,
+	autoAcceptMail = 0,
 	autoBuySeeds = 0,
 	autoBuyGear = 0,
 	autoCollectRainbowSeeds = 0,
@@ -6458,6 +6813,9 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	timers.autoShovel = state.autoShovel and (timers.autoShovel + deltaTime) or 0
 	timers.autoSell = state.autoSell and (timers.autoSell + deltaTime) or 0
 	timers.sellWhenFull = state.sellWhenFull and (timers.sellWhenFull + deltaTime) or 0
+	timers.autoWater = state.autoWater and (timers.autoWater + deltaTime) or 0
+	timers.autoSprinkler = state.autoSprinkler and (timers.autoSprinkler + deltaTime) or 0
+	timers.autoAcceptMail = state.autoAcceptMail and (timers.autoAcceptMail + deltaTime) or 0
 	timers.autoBuySeeds = state.autoBuySeeds and (timers.autoBuySeeds + deltaTime) or 0
 	timers.autoBuyGear = state.autoBuyGear and (timers.autoBuyGear + deltaTime) or 0
 	timers.autoCollectRainbowSeeds = state.autoCollectRainbowSeeds and (timers.autoCollectRainbowSeeds + deltaTime) or 0
@@ -6518,6 +6876,24 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	movementLocked = movementLocked or running.autoShovel
 	local fruitMovementLocked = running.autoShovel
 		or (hasSellableInventory and inventoryFull and (sellDue or running.autoSell or running.sellWhenFull))
+
+	if state.autoAcceptMail and timers.autoAcceptMail >= CONFIG.mailInterval then
+		if tryRun("autoAcceptMail", autoAcceptMail) then
+			timers.autoAcceptMail = 0
+		end
+	end
+
+	if state.autoWater and timers.autoWater >= CONFIG.waterInterval and not movementLocked then
+		if tryRun("autoWater", autoWater) then
+			timers.autoWater = 0
+		end
+	end
+
+	if state.autoSprinkler and timers.autoSprinkler >= CONFIG.sprinklerInterval and not movementLocked then
+		if tryRun("autoSprinkler", autoPlaceSprinklers) then
+			timers.autoSprinkler = 0
+		end
+	end
 
 	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval and not movementLocked then
 		if tryRun("autoBuyPets", buyPets) then
