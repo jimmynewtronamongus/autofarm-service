@@ -2329,7 +2329,6 @@ function getTargetPart(target)
 end
 
 function collectPrompt(prompt)
-	local part = getPromptPart and getPromptPart(prompt)
 	local target = getCollectFruitTarget(prompt)
 	local beforeInventoryCount = countInventoryTools()
 	local fired = false
@@ -2340,21 +2339,7 @@ function collectPrompt(prompt)
 		end
 	end
 
-	if part and not state.collectTeleport and getPromptDistance(prompt) > (prompt.MaxActivationDistance or 10) then
-		stats.collectSkippedRange += 1
-		return fired
-	end
-
-	if part and state.collectTeleport then
-		teleportToPart(part, 2)
-	end
-
-	fired = triggerPrompt(prompt, true) or fired
-	if target ~= nil then
-		fired = collectFruitPacket(target, true) or fired
-	end
-
-	return collectionTookEffect(target or prompt, beforeInventoryCount) or fired
+	return fired
 end
 
 function getHarvestPromptInTarget(target)
@@ -2585,64 +2570,7 @@ function collectFruitEntryFast(entry, heavy)
 		end
 	end
 
-	local part = getPromptPart(prompt)
-
-	if part and state.collectTeleport then
-		local root = getRoot()
-		local maxDistance = (prompt and prompt.MaxActivationDistance) or 16
-		if not root or (root.Position - part.Position).Magnitude > math.max(maxDistance - 2, 6) then
-			local model = target and target:IsA("Model") and target or (target and target:FindFirstAncestorWhichIsA("Model"))
-			if model then
-				teleportToModelOrPart(model, part, 2.5)
-			else
-				teleportToPart(part, 2.5)
-			end
-			task.wait(CONFIG.promptSettleDelay)
-		end
-	elseif part and not state.collectTeleport then
-		local root = getRoot()
-		if root and (root.Position - part.Position).Magnitude > ((prompt and prompt.MaxActivationDistance) or 16) then
-			stats.collectSkippedRange += 1
-			return false
-		end
-	end
-
-	if prompt then
-		local root = getRoot()
-		local maxDistance = (prompt and prompt.MaxActivationDistance) or 16
-		if part and root and (root.Position - part.Position).Magnitude > maxDistance + 4 then
-			stats.collectSkippedRange += 1
-			return false
-		end
-		fired = triggerPromptReliable(prompt) or fired
-		task.wait(0.08)
-		if isLiveFruitEntry(entry) then
-			fired = triggerPromptReliable(prompt) or fired
-			task.wait(0.08)
-		end
-	end
-
-	if target then
-		fired = collectFruitPacket(target) or fired
-	end
-
-	if heavy and target then
-		fired = collectFruitPacket(target, true) or fired
-	end
-
-	if part and (heavy or state.collectTeleport) then
-		fired = touchPart(part, state.collectTeleport) or fired
-	end
-
-	if heavy and target and not fired then
-		fired = collectFruitPacket(target, true) or fired
-	end
-
-	if not fired then
-		return false
-	end
-
-	return collectionTookEffect(target or prompt, beforeInventoryCount) or fired
+	return fired
 end
 
 function triggerPrompt(prompt, skipTouch)
@@ -3462,11 +3390,11 @@ function collectFruit()
 				fallback += 1
 				fired += 1
 				failedTeleportHarvests = 0
-			elseif state.collectTeleport then
+			else
 				failedTeleportHarvests += 1
 				fruitTargetCache.refreshedAt = 0
 				if failedTeleportHarvests >= 2 then
-					setStatus("Fruit collector: harvest failed after teleport, waiting before next target")
+					setStatus("Fruit collector: remote harvest failed, waiting before next target")
 					break
 				end
 			end
@@ -3493,9 +3421,9 @@ function collectFruit()
 	updateStatsUI()
 	if fired == 0 and fallback == 0 then
 		fruitTargetCache.refreshedAt = 0
-		setStatus(("Fruit collector: found %d cached target(s), failed to trigger"):format(totalCached))
+		setStatus(("Fruit collector: found %d cached target(s), remote failed"):format(totalCached))
 	else
-		setStatus(("Fruit collector: prompt-only %d/%d, inventory +%d"):format(fallback, #targets, gained))
+		setStatus(("Fruit collector: remote %d/%d, inventory +%d"):format(fallback, #targets, gained))
 	end
 end
 
@@ -5749,133 +5677,33 @@ function autoAcceptMail()
 	local actions = 0
 	local beforeInventoryCount = countInventoryTools()
 
-	local mailboxPrompt = findMailboxPrompt()
-	if mailboxPrompt then
-		local part = getPromptPart(mailboxPrompt)
-		if part then
-			teleportToPart(part, 3)
-			task.wait(CONFIG.promptSettleDelay)
+	if sendExactPacket("MailboxList") then
+		actions += 1
+	end
+	if sendExactPacket("MailboxOpenInbox") then
+		actions += 1
+	end
+	if sendExactPacket("MailboxClaim") then
+		actions += 1
+	end
+	for index = 1, 50 do
+		if sendExactPacket("MailboxClaim", index) then
+			actions += 1
 		end
-		if triggerPromptReliable(mailboxPrompt) then
+		if sendExactPacket("MailboxClaim", tostring(index)) then
 			actions += 1
 		end
 	end
 	task.wait(0.25)
 
-	sendExactPacket("MailboxList")
-	sendExactPacket("MailboxOpenInbox")
-	task.wait(0.15)
-
-	actions += claimVisibleMailboxItems()
 	local afterInventoryCount = countInventoryTools()
 	local claimed = math.max((afterInventoryCount or 0) - (beforeInventoryCount or 0), 0)
-	if claimed == 0 and actions > 1 then
-		claimed = actions - 1
-	end
 	if claimed > 0 then
 		stats.mailClaimed += claimed
 		refreshInventoryStats(true)
 		updateStatsUI()
 	end
-	setStatus(("Mail: checked inbox, claimed %d item(s)"):format(claimed))
-end
-
-function findMailboxPrompt()
-	local bestPrompt
-	local bestDistance = math.huge
-	local root = getRoot()
-	local searchRoots = {}
-	if type(getOwnGardenRoots) == "function" then
-		for _, ownRoot in ipairs(getOwnGardenRoots()) do
-			table.insert(searchRoots, ownRoot)
-		end
-	end
-	table.insert(searchRoots, workspace:FindFirstChild("Gardens"))
-	table.insert(searchRoots, getMap())
-	table.insert(searchRoots, workspace)
-	for _, gardenRoot in ipairs(searchRoots) do
-		if gardenRoot then
-			for _, descendant in ipairs(gardenRoot:GetDescendants()) do
-				if descendant:IsA("ProximityPrompt") then
-					local text = string.lower((descendant.Name or "") .. " " .. (descendant.ActionText or "") .. " " .. (descendant.ObjectText or ""))
-					if string.find(text, "mailbox", 1, true) or (string.find(text, "mail", 1, true) and string.find(text, "view", 1, true)) then
-						local part = getPromptPart(descendant)
-						local distance = root and part and (root.Position - part.Position).Magnitude or 0
-						if distance < bestDistance then
-							bestPrompt = descendant
-							bestDistance = distance
-						end
-					end
-				end
-			end
-			if bestPrompt then
-				break
-			end
-		end
-	end
-	return bestPrompt
-end
-
-function getMailboxClaimId(instance)
-	local current = instance
-	while current and current ~= playerGui do
-		for _, key in ipairs({ "Id", "ID", "MailId", "MailID", "MessageId", "MessageID", "Guid", "UUID" }) do
-			local ok, value = pcall(function()
-				return current:GetAttribute(key)
-			end)
-			if ok and value ~= nil and tostring(value) ~= "" then
-				return value
-			end
-			local child = current:FindFirstChild(key)
-			if child and child:IsA("ValueBase") and child.Value ~= nil and tostring(child.Value) ~= "" then
-				return child.Value
-			end
-		end
-		current = current.Parent
-	end
-	return nil
-end
-
-function claimMailboxFromButton(button)
-	local claimed = 0
-	local id = getMailboxClaimId(button)
-	if id ~= nil then
-		local ok, count = sendExactPacket("MailboxClaim", id)
-		if ok then
-			claimed += count or 1
-		end
-	end
-	if activateButton(button) then
-		claimed += 1
-	end
-	return claimed
-end
-
-function claimVisibleMailboxItems()
-	local mailboxGui = playerGui:FindFirstChild("MailboxUI") or StarterGui:FindFirstChild("MailboxUI")
-	if not mailboxGui then
-		return 0
-	end
-
-	local actions = 0
-	local scanned = 0
-	for _, descendant in ipairs(mailboxGui:GetDescendants()) do
-		if scanned >= 80 then
-			break
-		end
-		scanned += 1
-		if descendant:IsA("GuiButton") and guiObjectVisible(descendant) then
-			local text = guiButtonText(descendant)
-			if string.find(text, "claim", 1, true)
-				or string.find(text, "accept", 1, true)
-				or string.find(text, "collect", 1, true)
-			then
-				actions += claimMailboxFromButton(descendant)
-				task.wait(0.08)
-			end
-		end
-	end
-	return actions
+	setStatus(("Mail: remote checked (%d action(s)), inventory +%d"):format(actions, claimed))
 end
 
 function applyPlayerVisualSettings()
@@ -5936,8 +5764,6 @@ function autoSell(force)
 
 	local beforeSheckles = refreshCurrencyStats(true)
 	local farmedBeforeSell = stats.shecklesFarmed or 0
-	local allowTeleport = force == true or (state.collectTeleport == true and inventoryFull == true)
-	local movedToSteven = false
 
 	for attempt = 1, CONFIG.maxSellAttempts do
 		if runStopped(stopKey, token) then
@@ -5954,26 +5780,6 @@ function autoSell(force)
 			local sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
 			if sold then
 				setStatus(("Sell: remote sold inventory (%d action(s))"):format(remoteActions))
-				break
-			end
-		end
-
-		if attempt == 1 or not movedToSteven then
-			movedToSteven = select(1, moveToStevenForSell(allowTeleport))
-		end
-
-		if runStopped(stopKey, token) then
-			return
-		end
-
-		if movedToSteven then
-			if runStopped(stopKey, token) then
-				return
-			end
-			sellViaStevenDialogue(false, stopKey, token, beforeInventoryCount, beforeSheckles)
-			task.wait(0.45)
-			local sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
-			if sold then
 				break
 			end
 		end
@@ -6010,7 +5816,7 @@ function autoSell(force)
 	end
 	updateStatsUI()
 	if not sold then
-		setStatus(("Sell failed: remote/NPC fallback made no change (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
+		setStatus(("Sell failed: remote made no change (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
 	else
 		setStatus(("Sell: inventory %d -> %d"):format(beforeInventoryCount, afterInventoryCount))
 	end
@@ -6022,42 +5828,7 @@ function buyOneSeed(seedName)
 		return true, "Seed: " .. seedName, remoteCount or 1
 	end
 
-	local seedFrame = getSeedFrame(seedName)
-
-	local clicked = false
-	if seedFrame then
-		local mainFrame = seedFrame:FindFirstChild("Main_Frame", true)
-		local rowButton = mainFrame and mainFrame:FindFirstChild("TextButton")
-		if rowButton and rowButton:IsA("GuiButton") and activateButton(rowButton) then
-			clicked = true
-			task.wait()
-		end
-
-		for _, buttonName in ipairs({ "Sheckles_Buy", "CashBuy", "Buy", "TextButton" }) do
-			local button = seedFrame:FindFirstChild(buttonName, true)
-			if button and button:IsA("GuiButton") and activateButton(button) then
-				clicked = true
-				task.wait()
-				break
-			end
-		end
-
-		if not clicked then
-			for _, descendant in ipairs(seedFrame:GetDescendants()) do
-				if descendant:IsA("GuiButton") and descendant ~= rowButton and activateButton(descendant) then
-					clicked = true
-					task.wait()
-					break
-				end
-			end
-		end
-	end
-
-	if clicked then
-		return true, "Seed: fallback " .. seedName, 1
-	else
-		return false, "Seed: failed " .. seedName, 0
-	end
+	return false, "Seed: remote failed " .. seedName, 0
 end
 
 function buySeed()
@@ -6118,38 +5889,7 @@ function buyOneGear(gearName)
 		return true, "Gear: " .. gearName
 	end
 
-	local gearFrame = getGearFrame(gearName)
-
-	local clicked = false
-	if gearFrame then
-		local mainFrame = gearFrame:FindFirstChild("Main_Frame", true)
-		local rowButton = mainFrame and mainFrame:FindFirstChild("TextButton")
-		if rowButton and rowButton:IsA("GuiButton") and activateButton(rowButton) then
-			clicked = true
-			task.wait(0.08)
-		end
-
-		for _, buttonName in ipairs({ "Sheckles_Buy", "CashBuy", "Buy", "TextButton" }) do
-			local button = gearFrame:FindFirstChild(buttonName, true)
-			if button and button:IsA("GuiButton") and activateButton(button) then
-				clicked = true
-				task.wait(0.04)
-			end
-		end
-
-		for _, descendant in ipairs(gearFrame:GetDescendants()) do
-			if descendant:IsA("GuiButton") and descendant ~= rowButton and activateButton(descendant) then
-				clicked = true
-				task.wait(0.04)
-			end
-		end
-	end
-
-	if clicked then
-		return true, "Gear: fallback " .. gearName
-	else
-		return false, "Gear: failed " .. gearName
-	end
+	return false, "Gear: remote failed " .. gearName
 end
 
 function buyGear()
