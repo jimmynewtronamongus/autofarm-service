@@ -64,6 +64,7 @@ CONFIG = {
 	sprinklerMode = "Farm Middle",
 	undergroundStacking = false,
 	savedPlantPosition = nil,
+	movePlantPosition = nil,
 	waterCustomPosition = nil,
 	sprinklerCustomPosition = nil,
 	selectedSeed = "",
@@ -88,6 +89,7 @@ state = {
 	autoWater = false,
 	waterOnlyGrowing = true,
 	autoSprinkler = false,
+	autoMovePlants = false,
 	autoAcceptMail = false,
 	autoCollectRainbowSeeds = false,
 	autoBuyPets = false,
@@ -102,6 +104,8 @@ state = {
 selectedSeeds = {}
 
 selectedShovelSeeds = {}
+
+selectedMoveSeeds = {}
 
 gearNames = {}
 
@@ -191,6 +195,7 @@ function loadConfig()
 		"sprinklerMode",
 		"undergroundStacking",
 		"savedPlantPosition",
+		"movePlantPosition",
 		"waterCustomPosition",
 		"sprinklerCustomPosition",
 		"selectedSeed",
@@ -210,6 +215,7 @@ function loadConfig()
 		"autoWater",
 		"waterOnlyGrowing",
 		"autoSprinkler",
+		"autoMovePlants",
 		"autoAcceptMail",
 		"autoCollectRainbowSeeds",
 		"autoBuyPets",
@@ -225,6 +231,7 @@ function loadConfig()
 
 	selectedSeeds = copyMap(decoded.selectedSeeds)
 	selectedShovelSeeds = copyMap(decoded.selectedShovelSeeds)
+	selectedMoveSeeds = copyMap(decoded.selectedMoveSeeds)
 	selectedGears = copyMap(decoded.selectedGears)
 	selectedPets = copyMap(decoded.selectedPets)
 	sprinklerOverrides = type(decoded.sprinklerOverrides) == "table" and decoded.sprinklerOverrides or {}
@@ -261,6 +268,7 @@ saveConfig = function()
 			sprinklerMode = CONFIG.sprinklerMode,
 			undergroundStacking = CONFIG.undergroundStacking,
 			savedPlantPosition = CONFIG.savedPlantPosition,
+			movePlantPosition = CONFIG.movePlantPosition,
 			waterCustomPosition = CONFIG.waterCustomPosition,
 			sprinklerCustomPosition = CONFIG.sprinklerCustomPosition,
 			selectedSeed = CONFIG.selectedSeed,
@@ -280,6 +288,7 @@ saveConfig = function()
 			autoWater = state.autoWater,
 			waterOnlyGrowing = state.waterOnlyGrowing,
 			autoSprinkler = state.autoSprinkler,
+			autoMovePlants = state.autoMovePlants,
 			autoAcceptMail = state.autoAcceptMail,
 			autoCollectRainbowSeeds = state.autoCollectRainbowSeeds,
 			autoBuyPets = state.autoBuyPets,
@@ -291,6 +300,7 @@ saveConfig = function()
 		},
 		selectedSeeds = selectedSeeds,
 		selectedShovelSeeds = selectedShovelSeeds,
+		selectedMoveSeeds = selectedMoveSeeds,
 		selectedGears = selectedGears,
 		selectedPets = selectedPets,
 		sprinklerOverrides = sprinklerOverrides,
@@ -312,6 +322,8 @@ local webhookSentAt = {}
 local stockLastAmounts = {}
 local stockWebhookQueue = {}
 local stockWebhookScheduled = false
+local activityWebhookQueue = {}
+local activityWebhookScheduled = false
 local getStockItemsFolder
 local getShopStockAmount
 local getShopPriceAmount
@@ -388,6 +400,10 @@ function listHasName(list, name)
 		end
 	end
 	return false
+end
+
+function compactName(value)
+	return string.gsub(string.lower(tostring(value or "")), "[^%w]", "")
 end
 
 function getStockFolderName(shopName)
@@ -477,6 +493,33 @@ function queueStockWebhook(shopName, itemName, stockAmount, key)
 	task.delay(1.25, flushStockWebhookQueue)
 end
 
+function flushActivityWebhookQueue()
+	activityWebhookScheduled = false
+	local queued = activityWebhookQueue
+	activityWebhookQueue = {}
+
+	if #queued == 0 then
+		return
+	end
+
+	sendWebhook("Activity update", table.concat(queued, "\n"), nil)
+end
+
+function queueActivityWebhook(line)
+	if CONFIG.webhookUrl == "" or not line or line == "" then
+		return false
+	end
+
+	table.insert(activityWebhookQueue, "- " .. tostring(line))
+	if activityWebhookScheduled then
+		return true
+	end
+
+	activityWebhookScheduled = true
+	task.delay(1.5, flushActivityWebhookQueue)
+	return true
+end
+
 function notifyStock(shopName, itemName, force)
 	local stockFolderName = getStockFolderName(shopName)
 	local stockAmount = getShopStockAmount(stockFolderName, itemName)
@@ -489,9 +532,7 @@ function notifyStock(shopName, itemName, force)
 		return
 	end
 
-	if (force or previousAmount == nil or previousAmount <= 0)
-		and (shouldNotifySelected(selectedSeeds, itemName) or shouldNotifySelected(selectedGears, itemName))
-	then
+	if force or previousAmount == nil or previousAmount <= 0 then
 		if not webhookSentAt[key] or os.clock() - webhookSentAt[key] >= 45 then
 			queueStockWebhook(shopName, itemName, stockAmount, key)
 		end
@@ -573,11 +614,7 @@ end
 
 function notifyPetSpawn(petName)
 	if shouldNotifySelected(selectedPets, petName) then
-		sendWebhook(
-			"Pet spawned",
-			petName .. " spawned in WildPetSpawns.",
-			"pet:" .. petName
-		)
+		queueActivityWebhook(("Pet spawned: `%s`"):format(petName))
 	end
 end
 
@@ -663,6 +700,9 @@ function countEnabledToggles()
 		"sellWhenFull",
 		"autoBuySeeds",
 		"autoBuyGear",
+		"autoWater",
+		"autoSprinkler",
+		"autoMovePlants",
 		"autoCollectRainbowSeeds",
 		"autoBuyPets",
 		"performanceMode",
@@ -2271,7 +2311,7 @@ function collectPrompt(prompt)
 		collectFruitPacket(target, true)
 	end
 
-	return collectionTookEffect(target or prompt, beforeInventoryCount)
+	return collectionTookEffect(target or prompt, beforeInventoryCount) or fired
 end
 
 function getHarvestPromptInTarget(target)
@@ -2524,11 +2564,11 @@ function collectFruitEntryFast(entry, heavy)
 			stats.collectSkippedRange += 1
 			return false
 		end
-		fired = triggerPromptFast(prompt) or fired
-		task.wait(0.06)
+		fired = triggerPromptReliable(prompt) or fired
+		task.wait(0.08)
 		if isLiveFruitEntry(entry) then
-			fired = triggerPromptFast(prompt) or fired
-			task.wait(0.04)
+			fired = triggerPromptReliable(prompt) or fired
+			task.wait(0.08)
 		end
 	end
 
@@ -2552,7 +2592,7 @@ function collectFruitEntryFast(entry, heavy)
 		return false
 	end
 
-	return collectionTookEffect(target or prompt, beforeInventoryCount)
+	return collectionTookEffect(target or prompt, beforeInventoryCount) or fired
 end
 
 function triggerPrompt(prompt, skipTouch)
@@ -2661,6 +2701,20 @@ triggerPromptFast = function(prompt)
 	end)
 
 	return fired
+end
+
+function triggerPromptReliable(prompt)
+	if not prompt or not prompt.Parent then
+		return false
+	end
+
+	if triggerPromptFast(prompt) then
+		task.wait(CONFIG.promptSettleDelay)
+		return true
+	end
+
+	task.wait(0.08)
+	return triggerPrompt(prompt, true)
 end
 
 function activateButton(button)
@@ -3338,17 +3392,24 @@ function findSeedTool(seedName, shouldEquip)
 	if not targetSeed or targetSeed == "" then
 		return nil
 	end
+	local targetCompact = compactName(targetSeed)
 
 	for _, container in ipairs({ character, backpack }) do
 		if container then
 			for _, item in ipairs(container:GetChildren()) do
+				local itemCompact = compactName(item.Name)
 				if item:IsA("Tool")
 					and isInventorySeedTool
 					and isInventorySeedTool(item)
-					and string.find(string.lower(item.Name), string.lower(targetSeed), 1, true)
+					and (
+						string.find(string.lower(item.Name), string.lower(targetSeed), 1, true)
+						or (targetCompact ~= "" and string.find(itemCompact, targetCompact, 1, true))
+						or (targetCompact ~= "" and string.find(itemCompact, compactName(targetSeed .. " Seed"), 1, true))
+					)
 				then
 					if shouldEquip and item.Parent ~= character and humanoid then
 						humanoid:EquipTool(item)
+						task.wait(0.05)
 					end
 					return item
 				end
@@ -3570,7 +3631,7 @@ function moveToOwnGarden()
 end
 
 function returnToGardenAfterSell()
-	if not (state.fruitCollector or state.seedPlacer or state.autoShovel or state.autoWater or state.autoSprinkler) then
+	if not (state.fruitCollector or state.seedPlacer or state.autoShovel or state.autoMovePlants or state.autoWater or state.autoSprinkler) then
 		return false
 	end
 
@@ -3599,6 +3660,7 @@ isInventorySeedTool = function(item)
 	end
 
 	local name = string.lower(item.Name)
+	local compact = compactName(item.Name)
 	for _, word in ipairs({ "kg", " lb", "fruit", "harvest", "picked", "mutation", "rainbow", "golden" }) do
 		if string.find(name, word, 1, true) then
 			return false
@@ -3609,8 +3671,38 @@ isInventorySeedTool = function(item)
 		return true
 	end
 
+	for _, key in ipairs({ "Seed", "SeedName", "ItemName", "Name" }) do
+		local ok, attribute = pcall(function()
+			return item:GetAttribute(key)
+		end)
+		if ok and attribute ~= nil and tostring(attribute) ~= "" then
+			local value = tostring(attribute)
+			if string.find(string.lower(value), "seed", 1, true) then
+				return true
+			end
+			for _, seedName in ipairs(seedNames) do
+				local seedCompact = compactName(seedName)
+				if seedCompact ~= "" and string.find(compactName(value), seedCompact, 1, true) then
+					return true
+				end
+			end
+		end
+
+		local child = item:FindFirstChild(key)
+		if child and child:IsA("ValueBase") and child.Value ~= nil then
+			local value = tostring(child.Value)
+			if string.find(string.lower(value), "seed", 1, true) then
+				return true
+			end
+		end
+	end
+
 	for _, seedName in ipairs(seedNames) do
-		if string.find(name, string.lower(seedName), 1, true) then
+		local seedCompact = compactName(seedName)
+		if string.find(name, string.lower(seedName), 1, true)
+			or (seedCompact ~= "" and string.find(compact, seedCompact, 1, true))
+			or (seedCompact ~= "" and string.find(compact, seedCompact .. "seed", 1, true))
+		then
 			return true
 		end
 	end
@@ -4146,7 +4238,7 @@ function autoCollectRainbowSeeds()
 		if moved then
 			task.wait(CONFIG.promptSettleDelay)
 			if target:IsA("ProximityPrompt") then
-				if triggerPrompt(target, true) then
+				if triggerPromptReliable(target) then
 					task.wait(CONFIG.promptSettleDelay)
 					checked += 1
 				end
@@ -4689,6 +4781,7 @@ function plantSeed()
 				local position = getSeedPlantPosition(placementIndex, gardenPosition)
 				if position then
 					attempts += tryPlantSeedRemote(seedName, position)
+					useToolAtPosition(tool, position, 0.25)
 				end
 
 				pcall(function()
@@ -4742,6 +4835,111 @@ function getSelectedShovelSeedList()
 	end
 
 	return getSortedSeedList(selected)
+end
+
+function getSelectedMoveSeedList()
+	local selected = {}
+	local seen = {}
+
+	for _, seedName in ipairs(seedNames) do
+		if selectedMoveSeeds[seedName] then
+			seen[seedName] = true
+			table.insert(selected, seedName)
+		end
+	end
+
+	for seedName, enabled in pairs(selectedMoveSeeds) do
+		if enabled and not seen[seedName] then
+			addUniqueName(seedNames, seedName)
+			seedPriority[seedName] = seedPriority[seedName] or getSeedMetadataValue(seedName)
+			table.insert(selected, seedName)
+		end
+	end
+
+	return getSortedSeedList(selected)
+end
+
+function getTrowelTool()
+	return getToolByWords({ "trowel" })
+end
+
+function movePlantTarget(plant, targetPosition)
+	if not plant or not plant.Parent or not targetPosition then
+		return false
+	end
+
+	plant = getPlantModelForShovel(plant)
+	if not plant or not plant.Parent then
+		return false
+	end
+
+	local part = getTargetPart(plant)
+	if part then
+		teleportToModelOrPart(plant:IsA("Model") and plant or nil, part, 3)
+		task.wait(0.1)
+	end
+
+	local tool = getTrowelTool()
+	if tool and part then
+		useToolAtPosition(tool, part.Position, 0.45)
+		task.wait(0.1)
+		useToolAtPosition(tool, targetPosition, 0.45)
+	end
+
+	return sendPacket("MovePlant", plant, targetPosition)
+		or sendPacket("MovePlant", plant.Name, targetPosition)
+		or sendPacket("TrowelPlant", plant, targetPosition)
+		or sendPacket("TrowelPlant", plant.Name, targetPosition)
+		or sendPacket("UseTrowel", plant, targetPosition)
+		or sendPacket("UseTrowel", targetPosition)
+		or tool ~= nil
+end
+
+function autoMovePlants()
+	if not isEnabled("autoMovePlants") then
+		return
+	end
+
+	local targetPosition = vectorFromConfigPosition(CONFIG.movePlantPosition)
+	if not targetPosition then
+		setStatus("Move plants: save a move position first")
+		return
+	end
+
+	local selected = getSelectedMoveSeedList()
+	if #selected == 0 then
+		setStatus("Move plants: select planted seed types first")
+		return
+	end
+
+	local moved = 0
+	local checked = 0
+	local seen = {}
+	for _, root in ipairs(getOwnGardenRoots()) do
+		for _, descendant in ipairs(getCachedDescendants("movePlants", root, CONFIG.cacheRefreshInterval)) do
+			if not isEnabled("autoMovePlants") then
+				return
+			end
+			if moved >= 2 or checked >= 60 then
+				break
+			end
+
+			local plant = getPlantModelForShovel(descendant)
+			if plant and not seen[plant] and plantMatchesShovelSelection(plant, selected) then
+				seen[plant] = true
+				checked += 1
+				if movePlantTarget(plant, targetPosition) then
+					moved += 1
+					task.wait(0.25)
+				end
+			end
+		end
+		if moved >= 2 or checked >= 60 then
+			break
+		end
+	end
+
+	setStatus(("Move plants: moved %d matching plant(s)"):format(moved))
 end
 
 function getShovelTool()
@@ -5153,6 +5351,59 @@ function getWateringCan()
 	return nil
 end
 
+function getToolByWords(words)
+	local character = getCharacter()
+	local humanoid = getHumanoid()
+	for _, container in ipairs(getToolContainers()) do
+		if container then
+			for _, item in ipairs(container:GetChildren()) do
+				if item:IsA("Tool") then
+					local lowered = string.lower(item.Name)
+					for _, word in ipairs(words) do
+						if string.find(lowered, string.lower(word), 1, true) then
+							if item.Parent ~= character and humanoid then
+								humanoid:EquipTool(item)
+								task.wait(0.05)
+							end
+							return item
+						end
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+function useToolAtPosition(tool, position, holdSeconds)
+	if not tool or not position then
+		return false
+	end
+
+	local root = getRoot()
+	if root and (root.Position - position).Magnitude > 20 then
+		root.CFrame = CFrame.new(position + Vector3.new(0, 4, 0))
+		task.wait(0.12)
+	end
+
+	local part = Instance.new("Part")
+	part.Name = "GardenToolsAimPoint"
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanTouch = false
+	part.Transparency = 1
+	part.Size = Vector3.new(1, 1, 1)
+	part.Position = position
+	part.Parent = workspace
+
+	local ok = aimAndHoldPart(part, holdSeconds or 0.35, tool)
+	pcall(function()
+		tool:Activate()
+	end)
+	part:Destroy()
+	return ok or true
+end
+
 function getPlantWaterTargets()
 	local roots = getOwnGardenRoots()
 	local targets = {}
@@ -5236,14 +5487,19 @@ function autoWater()
 			return
 		end
 		if tool then
-			pcall(function()
-				tool:Activate()
-			end)
+			useToolAtPosition(tool, position, 0.45)
 		end
-		if sendPacket("UseWateringCan", position) or sendPacket("UseWateringCan") then
+		if sendPacket("UseWateringCan", position)
+			or sendPacket("UseWateringCan", CFrame.new(position))
+			or sendPacket("WaterPlant", position)
+			or sendPacket("WaterPlant", CFrame.new(position))
+			or sendPacket("UseWateringCan")
+		then
+			actions += 1
+		elseif tool then
 			actions += 1
 		end
-		task.wait(0.08)
+		task.wait(0.12)
 	end
 	setStatus(("Water: watered %d target(s)"):format(actions))
 end
@@ -5270,6 +5526,31 @@ function getSelectedSprinklers()
 	return selected
 end
 
+function getSprinklerTool(sprinklerName)
+	local character = getCharacter()
+	local humanoid = getHumanoid()
+	local targetCompact = compactName(sprinklerName or "sprinkler")
+	for _, container in ipairs(getToolContainers()) do
+		if container then
+			for _, item in ipairs(container:GetChildren()) do
+				if item:IsA("Tool") then
+					local itemCompact = compactName(item.Name)
+					if string.find(string.lower(item.Name), "sprinkler", 1, true)
+						and (targetCompact == "sprinkler" or string.find(itemCompact, targetCompact, 1, true))
+					then
+						if item.Parent ~= character and humanoid then
+							humanoid:EquipTool(item)
+							task.wait(0.05)
+						end
+						return item
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
 function autoPlaceSprinklers()
 	if not isEnabled("autoSprinkler") then
 		return
@@ -5281,16 +5562,31 @@ function autoPlaceSprinklers()
 	end
 
 	local placed = 0
-	for _, sprinklerName in ipairs(getSelectedSprinklers()) do
+	local selectedSprinklers = getSelectedSprinklers()
+	if #selectedSprinklers == 0 then
+		table.insert(selectedSprinklers, "sprinkler")
+	end
+	for _, sprinklerName in ipairs(selectedSprinklers) do
 		local targetAmount = tonumber(sprinklerOverrides[sprinklerName]) or 1
 		for _ = 1, math.clamp(targetAmount, 1, 10) do
 			if not isEnabled("autoSprinkler") then
 				return
 			end
-			if sendPacket("PlaceSprinkler", sprinklerName, position) or sendPacket("PlaceSprinkler", position) then
+			local tool = getSprinklerTool(sprinklerName)
+			if tool then
+				useToolAtPosition(tool, position, 0.35)
+			end
+			if sendPacket("PlaceSprinkler", sprinklerName, position)
+				or sendPacket("PlaceSprinkler", sprinklerName, CFrame.new(position))
+				or sendPacket("PlaceSprinkler", position)
+				or sendPacket("PlaceGear", sprinklerName, position)
+				or sendPacket("UseGear", sprinklerName, position)
+			then
+				placed += 1
+			elseif tool then
 				placed += 1
 			end
-			task.wait(0.08)
+			task.wait(0.14)
 		end
 	end
 	setStatus(("Sprinkler: placed %d selected sprinkler(s)"):format(placed))
@@ -5307,7 +5603,7 @@ function autoAcceptMail()
 		end
 	end
 	if actions > 0 then
-		sendWebhook("Mail", "Auto accept mail checked incoming mailbox.", "mail:autoaccept")
+		queueActivityWebhook("Auto accept mail checked incoming mailbox.")
 	end
 	setStatus(("Mail: auto accept checked (%d action(s))"):format(actions))
 end
@@ -5669,7 +5965,7 @@ function buyOnePet(petName)
 
 				local root = getRoot()
 				local inRange = not root or not part or (root.Position - part.Position).Magnitude <= ((descendant.MaxActivationDistance or 10) + 4)
-				if inRange and triggerPrompt(descendant, true) then
+				if inRange and triggerPromptReliable(descendant) then
 					markPetSpawnHandled(model, descendant, 25)
 					return true, ("Auto pets: moved in range and bought %s"):format(petName)
 				end
@@ -5712,7 +6008,7 @@ function buyPets()
 		stats.petsBought += bought
 		refreshInventoryStats()
 		updateStatsUI()
-		sendWebhook("Pet purchase", ("Bought `%d` selected pet(s)."):format(bought), "pets:bought")
+		queueActivityWebhook(("Bought `%d` selected pet(s)."):format(bought))
 		setStatus(("Auto pets: verified %d purchase(s)"):format(bought))
 	else
 		setStatus(lastMessage)
@@ -5722,10 +6018,6 @@ end
 function getPetsFolder()
 	local assets = ReplicatedStorage:FindFirstChild("Assets")
 	return assets and assets:FindFirstChild("Pets")
-end
-
-function compactName(value)
-	return string.lower(string.gsub(tostring(value or ""), "[%s_%-]", ""))
 end
 
 function getPetModulesFolder()
@@ -6031,12 +6323,13 @@ makeToggle("Fruit Collector", "fruitCollector", 5)
 makeToggle("Teleport To Fruit", "collectTeleport", 6)
 makeToggle("Seed Placer", "seedPlacer", 7)
 makeToggle("Auto Shovel Plants", "autoShovel", 8)
-makeToggle("Auto Water", "autoWater", 9)
-makeToggle("Water Only Growing Plants", "waterOnlyGrowing", 10)
-makeToggle("Auto Sprinkler", "autoSprinkler", 11)
+makeToggle("Auto Move Plants", "autoMovePlants", 9)
+makeToggle("Auto Water", "autoWater", 10)
+makeToggle("Water Only Growing Plants", "waterOnlyGrowing", 11)
+makeToggle("Auto Sprinkler", "autoSprinkler", 12)
 local placementModes = { "Farm Corner", "Random", "Saved Position" }
 local placementButton
-placementButton = makeCommandButton("Placement Mode: " .. CONFIG.seedPlacementMode, 12, function()
+placementButton = makeCommandButton("Placement Mode: " .. CONFIG.seedPlacementMode, 13, function()
 	local currentIndex = 1
 	for index, mode in ipairs(placementModes) do
 		if mode == CONFIG.seedPlacementMode then
@@ -6049,7 +6342,7 @@ placementButton = makeCommandButton("Placement Mode: " .. CONFIG.seedPlacementMo
 	saveConfig()
 	setStatus("Seed placement mode: " .. CONFIG.seedPlacementMode)
 end)
-makeCommandButton("Save Plant Position", 13, function()
+makeCommandButton("Save Plant Position", 14, function()
 	local root = getRoot()
 	if root then
 		CONFIG.savedPlantPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
@@ -6059,8 +6352,16 @@ makeCommandButton("Save Plant Position", 13, function()
 		setStatus("Saved current position for seed placement")
 	end
 end)
+makeCommandButton("Save Move Position", 15, function()
+	local root = getRoot()
+	if root then
+		CONFIG.movePlantPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
+		saveConfig()
+		setStatus("Saved current position for moved plants")
+	end
+end)
 local waterModes = { "Farm Middle", "Selected Plant", "Growing Plants", "Custom Location" }
-makeCommandButton("Water Mode: " .. CONFIG.waterMode, 14, function()
+makeCommandButton("Water Mode: " .. CONFIG.waterMode, 16, function()
 	local currentIndex = 1
 	for index, mode in ipairs(waterModes) do
 		if mode == CONFIG.waterMode then
@@ -6073,7 +6374,7 @@ makeCommandButton("Water Mode: " .. CONFIG.waterMode, 14, function()
 	setStatus("Water mode: " .. CONFIG.waterMode)
 	buildUI()
 end)
-makeCommandButton("Save Water Location", 15, function()
+makeCommandButton("Save Water Location", 17, function()
 	local root = getRoot()
 	if root then
 		CONFIG.waterCustomPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
@@ -6084,7 +6385,7 @@ makeCommandButton("Save Water Location", 15, function()
 	end
 end)
 local sprinklerModes = { "Farm Middle", "Near Plant", "Custom Location" }
-makeCommandButton("Sprinkler Mode: " .. CONFIG.sprinklerMode, 16, function()
+makeCommandButton("Sprinkler Mode: " .. CONFIG.sprinklerMode, 18, function()
 	local currentIndex = 1
 	for index, mode in ipairs(sprinklerModes) do
 		if mode == CONFIG.sprinklerMode then
@@ -6097,7 +6398,7 @@ makeCommandButton("Sprinkler Mode: " .. CONFIG.sprinklerMode, 16, function()
 	setStatus("Sprinkler mode: " .. CONFIG.sprinklerMode)
 	buildUI()
 end)
-makeCommandButton("Save Sprinkler Location", 17, function()
+makeCommandButton("Save Sprinkler Location", 19, function()
 	local root = getRoot()
 	if root then
 		CONFIG.sprinklerCustomPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
@@ -6107,7 +6408,7 @@ makeCommandButton("Save Sprinkler Location", 17, function()
 		buildUI()
 	end
 end)
-makeCommandButton("Sprinkler Amount Override", 18, function()
+makeCommandButton("Sprinkler Amount Override", 20, function()
 	local sprinklers = getSelectedSprinklers()
 	local sprinklerName = sprinklers[1]
 	if not sprinklerName then
@@ -6123,13 +6424,13 @@ makeCommandButton("Sprinkler Amount Override", 18, function()
 	saveConfig()
 	setStatus(("Sprinkler override: %s x%d"):format(sprinklerName, current))
 end)
-makeCommandButton("Underground Stacking: " .. (CONFIG.undergroundStacking and "ON" or "OFF"), 19, function()
+makeCommandButton("Underground Stacking: " .. (CONFIG.undergroundStacking and "ON" or "OFF"), 21, function()
 	CONFIG.undergroundStacking = not CONFIG.undergroundStacking
 	saveConfig()
 	setStatus("Underground stacking " .. (CONFIG.undergroundStacking and "enabled" or "disabled"))
 	buildUI()
 end)
-makeCommandButton(("Max Garden Plants: %d"):format(CONFIG.maxGardenPlants), 20, function()
+makeCommandButton(("Max Garden Plants: %d"):format(CONFIG.maxGardenPlants), 22, function()
 	CONFIG.maxGardenPlants += 50
 	if CONFIG.maxGardenPlants > 1000 then
 		CONFIG.maxGardenPlants = 100
@@ -6138,19 +6439,15 @@ makeCommandButton(("Max Garden Plants: %d"):format(CONFIG.maxGardenPlants), 20, 
 	setStatus(("Max garden plants set to %d"):format(CONFIG.maxGardenPlants))
 	buildUI()
 end)
-makeToggle("Auto Sell Inventory", "autoSell", 21)
-makeToggle("Sell When Backpack Full", "sellWhenFull", 22)
-makeSectionLabel("Shops", 23)
-makeToggle("Auto Buy Seeds", "autoBuySeeds", 24)
-makeToggle("Auto Buy Gear", "autoBuyGear", 25)
-makeToggle("Auto Accept Mail", "autoAcceptMail", 26)
-makeSectionLabel("Settings", 27)
-makeToggle("Performance Mode", "performanceMode", 28)
-makeToggle("Hide Game Buttons", "hideGameButtons", 29)
-makeToggle("Hide Plot Icons", "hidePlotIcons", 30)
-makeToggle("Hide Plants On Farm", "hideOwnPlants", 31)
-makeToggle("Headless Mode", "headlessMode", 32)
-makeCommandButton("Apply Player Settings", 33, applyPlayerVisualSettings)
+makeToggle("Auto Sell Inventory", "autoSell", 23)
+makeToggle("Sell When Backpack Full", "sellWhenFull", 24)
+makeSectionLabel("Shops", 25)
+makeToggle("Auto Buy Seeds", "autoBuySeeds", 26)
+makeToggle("Auto Buy Gear", "autoBuyGear", 27)
+makeToggle("Auto Accept Mail", "autoAcceptMail", 28)
+makeSectionLabel("Settings", 29)
+makeToggle("Performance Mode", "performanceMode", 30)
+makeToggle("Headless Mode", "headlessMode", 31)
 
 local webhookBox = make("TextBox", {
 	Name = "WebhookUrl",
@@ -6514,6 +6811,118 @@ if shovelSeedStockItems then
 end
 end
 buildShovelSeedSelector()
+
+function buildMoveSeedSelector()
+local moveSeedLabel = make("TextLabel", {
+	Name = "MoveSeedLabel",
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold,
+	Text = "Plants to move",
+	TextColor3 = Color3.fromRGB(221, 236, 216),
+	TextSize = 11,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Size = UDim2.new(1, 0, 0, 12),
+	LayoutOrder = 30,
+}, content)
+
+local moveSeedRow = make("ScrollingFrame", {
+	Name = "MoveSeedSelector",
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	CanvasSize = UDim2.fromOffset(0, 0),
+	ScrollBarThickness = 4,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
+	Size = UDim2.new(1, 0, 0, 54),
+	LayoutOrder = 32,
+}, content)
+make("UIGridLayout", {
+	CellPadding = UDim2.fromOffset(4, 4),
+	CellSize = UDim2.fromOffset(128, 20),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, moveSeedRow)
+
+local moveSeedLayout = moveSeedRow:FindFirstChildOfClass("UIGridLayout")
+local moveSeedButtons = {}
+local moveSeedButtonCount = 0
+local moveSeedFilterText = ""
+
+makeSelectorSearch(content, 31, "Search plants to move", function(text)
+	moveSeedFilterText = text
+	refreshSelectorFilter(moveSeedButtons, seedNames, moveSeedFilterText, moveSeedRow, 2)
+end)
+
+function refreshMoveSeedButton(seedName)
+	local button = moveSeedButtons[seedName]
+	if not button then
+		return
+	end
+
+	local enabled = selectedMoveSeeds[seedName] == true
+	button.Text = (enabled and "[x] " or "[ ] ") .. seedName
+	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 89, 121) or Color3.fromRGB(52, 60, 54)
+end
+
+function refreshMoveSeedCanvas()
+	refreshSelectorFilter(moveSeedButtons, seedNames, moveSeedFilterText, moveSeedRow, 2)
+end
+
+function makeMoveSeedButton(seedName)
+	if moveSeedButtons[seedName] then
+		return
+	end
+
+	moveSeedButtonCount += 1
+	local button = make("TextButton", {
+		Name = "Move" .. seedName,
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = seedName,
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 10,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.fromOffset(128, 20),
+		LayoutOrder = moveSeedButtonCount,
+	}, moveSeedRow)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
+
+	moveSeedButtons[seedName] = button
+	refreshMoveSeedButton(seedName)
+	button.Visible = matchesSelectorFilter(seedName, moveSeedFilterText)
+
+	button.Activated:Connect(function()
+		selectedMoveSeeds[seedName] = not selectedMoveSeeds[seedName]
+		refreshMoveSeedButton(seedName)
+		saveConfig()
+		setStatus((selectedMoveSeeds[seedName] and "Will move " or "Stopped moving ") .. seedName)
+	end)
+
+	refreshMoveSeedCanvas()
+end
+
+for _, seedName in ipairs(seedNames) do
+	makeMoveSeedButton(seedName)
+end
+
+if moveSeedLayout then
+	moveSeedLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshMoveSeedCanvas)
+end
+refreshMoveSeedCanvas()
+
+local moveSeedStockItems = getStockItemsFolder("SeedShop")
+if moveSeedStockItems then
+	for _, item in ipairs(moveSeedStockItems:GetChildren()) do
+		makeMoveSeedButton(item.Name)
+	end
+
+	moveSeedStockItems.ChildAdded:Connect(function(item)
+		task.wait()
+		makeMoveSeedButton(item.Name)
+	end)
+end
+end
+buildMoveSeedSelector()
 
 function buildGearSelector()
 local selectedGearLabel = make("TextLabel", {
@@ -6885,6 +7294,7 @@ timers = {
 	sellWhenFull = 0,
 	autoWater = 0,
 	autoSprinkler = 0,
+	autoMovePlants = 0,
 	autoAcceptMail = 0,
 	autoBuySeeds = 0,
 	autoBuyGear = 0,
@@ -6962,6 +7372,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	timers.sellWhenFull = state.sellWhenFull and (timers.sellWhenFull + deltaTime) or 0
 	timers.autoWater = state.autoWater and (timers.autoWater + deltaTime) or 0
 	timers.autoSprinkler = state.autoSprinkler and (timers.autoSprinkler + deltaTime) or 0
+	timers.autoMovePlants = state.autoMovePlants and (timers.autoMovePlants + deltaTime) or 0
 	timers.autoAcceptMail = state.autoAcceptMail and (timers.autoAcceptMail + deltaTime) or 0
 	timers.autoBuySeeds = state.autoBuySeeds and (timers.autoBuySeeds + deltaTime) or 0
 	timers.autoBuyGear = state.autoBuyGear and (timers.autoBuyGear + deltaTime) or 0
@@ -7017,6 +7428,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 
 	local shovelDue = state.autoShovel and timers.autoShovel >= CONFIG.shovelInterval
 	local movementLocked = running.autoShovel
+		or running.autoMovePlants
 		or running.autoWater
 		or running.autoSprinkler
 		or running.autoCollectRainbowSeeds
@@ -7032,7 +7444,15 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	end
 
 	movementLocked = movementLocked or running.autoShovel
+	if state.autoMovePlants and timers.autoMovePlants >= 1.0 and not movementLocked then
+		if tryRun("autoMovePlants", autoMovePlants) then
+			timers.autoMovePlants = 0
+		end
+	end
+
+	movementLocked = movementLocked or running.autoMovePlants
 	local fruitMovementLocked = running.autoShovel
+		or running.autoMovePlants
 		or (hasSellableInventory and inventoryFull and (sellDue or running.autoSell or running.sellWhenFull))
 
 	if state.autoAcceptMail and timers.autoAcceptMail >= CONFIG.mailInterval then
