@@ -1962,7 +1962,12 @@ function shouldPauseFruitCollection()
 	end
 
 	local full = refreshInventoryStats(false)
-	return full == true
+	if full ~= true then
+		return false
+	end
+
+	invalidateSellableInventoryCache()
+	return #getSellableFruitTools(true) > 0
 end
 
 function updateStatsUI()
@@ -3224,6 +3229,11 @@ end
 function collectFruit()
 	if not isEnabled("fruitCollector") then
 		return
+	end
+
+	if state.sellWhenFull or state.autoSell then
+		invalidateSellableInventoryCache()
+		refreshInventoryStats(true)
 	end
 
 	local inventoryFull = shouldPauseFruitCollection()
@@ -6976,6 +6986,10 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	local hasSellableInventory = false
 	if state.sellWhenFull or state.autoSell then
 		inventoryFull = refreshInventoryStats(false)
+		if inventoryFull then
+			invalidateSellableInventoryCache()
+			inventoryFull = refreshInventoryStats(true)
+		end
 		hasSellableInventory = hasSellableFruitTools()
 		sellNeeded = inventoryFull and hasSellableInventory
 	end
