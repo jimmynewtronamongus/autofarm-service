@@ -33,6 +33,7 @@ CONFIG = {
 	waterInterval = 4.0,
 	sprinklerInterval = 8.0,
 	mailInterval = 6.0,
+	petSellInterval = 5.0,
 	rainbowCollectInterval = 4.5,
 	promptSettleDelay = 0.18,
 	promptHoldDelay = 0.22,
@@ -68,6 +69,9 @@ CONFIG = {
 	waterCustomPosition = nil,
 	sprinklerCustomPosition = nil,
 	selectedSeed = "",
+	petSellMutationFilter = "",
+	petSellVariantFilter = "",
+	petSellExcludeVariantFilter = "",
 	plantRadius = 18,
 	webhookUrl = "",
 	statsWebhookInterval = 180.0,
@@ -93,11 +97,11 @@ state = {
 	autoAcceptMail = false,
 	autoCollectRainbowSeeds = false,
 	autoBuyPets = false,
+	autoSellPets = false,
 	performanceMode = false,
 	hideGameButtons = false,
 	hidePlotIcons = false,
 	hideOwnPlants = false,
-	headlessMode = false,
 	lastStatus = "Ready",
 }
 
@@ -116,6 +120,7 @@ petNames = {}
 buyPetNames = {}
 
 selectedPets = {}
+selectedSellPets = {}
 sprinklerOverrides = {}
 
 plantPromptTextCache = setmetatable({}, { __mode = "k" })
@@ -187,6 +192,7 @@ function loadConfig()
 		"waterInterval",
 		"sprinklerInterval",
 		"mailInterval",
+		"petSellInterval",
 		"shovelInterval",
 		"lowRaritySeedLimit",
 		"maxGardenPlants",
@@ -199,6 +205,9 @@ function loadConfig()
 		"waterCustomPosition",
 		"sprinklerCustomPosition",
 		"selectedSeed",
+		"petSellMutationFilter",
+		"petSellVariantFilter",
+		"petSellExcludeVariantFilter",
 		"plantRadius",
 		"webhookUrl",
 		"statsWebhookInterval",
@@ -219,11 +228,11 @@ function loadConfig()
 		"autoAcceptMail",
 		"autoCollectRainbowSeeds",
 		"autoBuyPets",
+		"autoSellPets",
 		"performanceMode",
 		"hideGameButtons",
 		"hidePlotIcons",
 		"hideOwnPlants",
-		"headlessMode",
 	})
 	if decoded.state and decoded.state.hidePlants == true then
 		state.performanceMode = true
@@ -234,6 +243,7 @@ function loadConfig()
 	selectedMoveSeeds = copyMap(decoded.selectedMoveSeeds)
 	selectedGears = copyMap(decoded.selectedGears)
 	selectedPets = copyMap(decoded.selectedPets)
+	selectedSellPets = copyMap(decoded.selectedSellPets)
 	sprinklerOverrides = type(decoded.sprinklerOverrides) == "table" and decoded.sprinklerOverrides or {}
 
 	return true
@@ -260,6 +270,7 @@ saveConfig = function()
 			waterInterval = CONFIG.waterInterval,
 			sprinklerInterval = CONFIG.sprinklerInterval,
 			mailInterval = CONFIG.mailInterval,
+			petSellInterval = CONFIG.petSellInterval,
 			shovelInterval = CONFIG.shovelInterval,
 			lowRaritySeedLimit = CONFIG.lowRaritySeedLimit,
 			maxGardenPlants = CONFIG.maxGardenPlants,
@@ -272,6 +283,9 @@ saveConfig = function()
 			waterCustomPosition = CONFIG.waterCustomPosition,
 			sprinklerCustomPosition = CONFIG.sprinklerCustomPosition,
 			selectedSeed = CONFIG.selectedSeed,
+			petSellMutationFilter = CONFIG.petSellMutationFilter,
+			petSellVariantFilter = CONFIG.petSellVariantFilter,
+			petSellExcludeVariantFilter = CONFIG.petSellExcludeVariantFilter,
 			plantRadius = CONFIG.plantRadius,
 			webhookUrl = CONFIG.webhookUrl,
 			statsWebhookInterval = CONFIG.statsWebhookInterval,
@@ -292,17 +306,18 @@ saveConfig = function()
 			autoAcceptMail = state.autoAcceptMail,
 			autoCollectRainbowSeeds = state.autoCollectRainbowSeeds,
 			autoBuyPets = state.autoBuyPets,
+			autoSellPets = state.autoSellPets,
 			performanceMode = state.performanceMode,
 			hideGameButtons = state.hideGameButtons,
 			hidePlotIcons = state.hidePlotIcons,
 			hideOwnPlants = state.hideOwnPlants,
-			headlessMode = state.headlessMode,
 		},
 		selectedSeeds = selectedSeeds,
 		selectedShovelSeeds = selectedShovelSeeds,
 		selectedMoveSeeds = selectedMoveSeeds,
 		selectedGears = selectedGears,
 		selectedPets = selectedPets,
+		selectedSellPets = selectedSellPets,
 		sprinklerOverrides = sprinklerOverrides,
 	}
 
@@ -650,6 +665,9 @@ local stats = {
 	seedsBought = 0,
 	gearBought = 0,
 	petsBought = 0,
+	petsSold = 0,
+	mailClaimed = 0,
+	mailChecks = 0,
 	sheckles = 0,
 	startSheckles = nil,
 	shecklesFarmed = 0,
@@ -705,6 +723,7 @@ function countEnabledToggles()
 		"autoMovePlants",
 		"autoCollectRainbowSeeds",
 		"autoBuyPets",
+		"autoSellPets",
 		"performanceMode",
 	}) do
 		if state[key] then
@@ -1912,6 +1931,9 @@ function buildStatsSnapshot()
 		seedsBought = stats.seedsBought,
 		gearBought = stats.gearBought,
 		petsBought = stats.petsBought,
+		petsSold = stats.petsSold,
+		mailClaimed = stats.mailClaimed,
+		mailChecks = stats.mailChecks,
 		seedsPlanted = stats.seedsPlanted,
 		seedsShoveled = stats.seedsShoveled,
 		inventoryItems = stats.inventoryItems,
@@ -1928,6 +1950,8 @@ function buildStatsWebhookDescription(snapshot)
 		("Sheckles farmed since start: `+%s`"):format(formatNumber(snapshot.shecklesFarmed)),
 		("Fruit collected: `%s` (`%s/min`)"):format(formatNumber(snapshot.fruitCollected), formatNumber(snapshot.fruitRate)),
 		("Bought: `%s` seeds | `%s` gear | `%s` pets"):format(formatNumber(snapshot.seedsBought), formatNumber(snapshot.gearBought), formatNumber(snapshot.petsBought)),
+		("Mail: `%s` claimed across `%s` check(s)"):format(formatNumber(snapshot.mailClaimed), formatNumber(snapshot.mailChecks)),
+		("Pets sold: `%s`"):format(formatNumber(snapshot.petsSold)),
 		("Plants: `%s` placed | `%s` shoveled"):format(formatNumber(snapshot.seedsPlanted), formatNumber(snapshot.seedsShoveled)),
 		("Inventory: `%s/%s` (`%s` free)%s"):format(formatNumber(snapshot.inventoryItems), formatNumber(snapshot.inventoryCapacity), formatNumber(snapshot.freeSlots), snapshot.inventoryFull and " FULL" or ""),
 		("Enabled systems: `%d`"):format(snapshot.enabled),
@@ -2037,9 +2061,9 @@ function updateStatsUI()
 			elseif key == "planting" then
 				label.Text = ("Plants: %s placed | %s shoveled"):format(formatNumber(snapshot.seedsPlanted), formatNumber(snapshot.seedsShoveled))
 			elseif key == "shops" then
-				label.Text = ("Bought: %s seeds | %s gear | %s pets"):format(formatNumber(snapshot.seedsBought), formatNumber(snapshot.gearBought), formatNumber(snapshot.petsBought))
+				label.Text = ("Bought: %s seeds | %s gear | %s pets | Sold pets: %s"):format(formatNumber(snapshot.seedsBought), formatNumber(snapshot.gearBought), formatNumber(snapshot.petsBought), formatNumber(snapshot.petsSold))
 			elseif key == "limits" then
-				label.Text = ("Inventory: %s/%s (%s free)%s"):format(formatNumber(snapshot.inventoryItems), formatNumber(snapshot.inventoryCapacity), formatNumber(snapshot.freeSlots), snapshot.inventoryFull and " FULL" or "")
+				label.Text = ("Inv: %s/%s (%s free)%s | Mail: %s/%s"):format(formatNumber(snapshot.inventoryItems), formatNumber(snapshot.inventoryCapacity), formatNumber(snapshot.freeSlots), snapshot.inventoryFull and " FULL" or "", formatNumber(snapshot.mailClaimed), formatNumber(snapshot.mailChecks))
 			end
 		end
 	end
@@ -2220,7 +2244,10 @@ function collectFruitPacket(target, heavy)
 		current = current.Parent
 	end
 
-	if sendPacket("CollectFruit", fruit) then
+	if sendExactPacket("CollectFruit", fruit)
+		or sendExactPacket("CollectFruit", fruit.Name)
+		or sendPacket("CollectFruit", fruit)
+	then
 		return true
 	end
 
@@ -2229,6 +2256,18 @@ function collectFruitPacket(target, heavy)
 	end
 
 	local plant = getFruitPlantTarget(fruit)
+	if plant and sendExactPacket("CollectFruit", plant, fruit) then
+		return true
+	end
+
+	if plant and sendExactPacket("CollectFruit", plant.Name, fruit and fruit.Name) then
+		return true
+	end
+
+	if plant and sendExactPacket("CollectFruit", plant.Name, fruit) then
+		return true
+	end
+
 	if fruit and sendPacket("CollectFruit", fruit.Name) then
 		return true
 	end
@@ -2291,24 +2330,28 @@ end
 
 function collectPrompt(prompt)
 	local part = getPromptPart and getPromptPart(prompt)
-	if part and not state.collectTeleport and getPromptDistance(prompt) > (prompt.MaxActivationDistance or 10) then
-		stats.collectSkippedRange += 1
-		return false
-	end
-
 	local target = getCollectFruitTarget(prompt)
 	local beforeInventoryCount = countInventoryTools()
+	local fired = false
 	if target ~= nil then
-		collectFruitPacket(target)
+		fired = collectFruitPacket(target, true) or fired
+		if collectionTookEffect(target or prompt, beforeInventoryCount) then
+			return true
+		end
+	end
+
+	if part and not state.collectTeleport and getPromptDistance(prompt) > (prompt.MaxActivationDistance or 10) then
+		stats.collectSkippedRange += 1
+		return fired
 	end
 
 	if part and state.collectTeleport then
 		teleportToPart(part, 2)
 	end
 
-	triggerPrompt(prompt, true)
+	fired = triggerPrompt(prompt, true) or fired
 	if target ~= nil then
-		collectFruitPacket(target, true)
+		fired = collectFruitPacket(target, true) or fired
 	end
 
 	return collectionTookEffect(target or prompt, beforeInventoryCount) or fired
@@ -2533,6 +2576,15 @@ function collectFruitEntryFast(entry, heavy)
 		return false
 	end
 
+	local beforeInventoryCount = countInventoryTools()
+	local fired = false
+	if target then
+		fired = collectFruitPacket(target, true) or fired
+		if collectionTookEffect(target or prompt, beforeInventoryCount) then
+			return true
+		end
+	end
+
 	local part = getPromptPart(prompt)
 
 	if part and state.collectTeleport then
@@ -2555,8 +2607,6 @@ function collectFruitEntryFast(entry, heavy)
 		end
 	end
 
-	local beforeInventoryCount = countInventoryTools()
-	local fired = false
 	if prompt then
 		local root = getRoot()
 		local maxDistance = (prompt and prompt.MaxActivationDistance) or 16
@@ -3254,6 +3304,68 @@ end
 
 function sellThroughStevenFallback(allowTeleport)
 	return sellViaStevenDialogue(allowTeleport)
+end
+
+function getToolPacketId(tool)
+	if not tool then
+		return nil
+	end
+	for _, key in ipairs({ "Id", "ID", "UUID", "Guid", "FruitId", "ItemId" }) do
+		local ok, value = pcall(function()
+			return tool:GetAttribute(key)
+		end)
+		if ok and value ~= nil and tostring(value) ~= "" then
+			return value
+		end
+		local child = tool:FindFirstChild(key)
+		if child and child:IsA("ValueBase") and child.Value ~= nil and tostring(child.Value) ~= "" then
+			return child.Value
+		end
+	end
+	return nil
+end
+
+function sellToolByRemote(tool)
+	if not tool then
+		return false
+	end
+
+	local id = getToolPacketId(tool)
+	if id ~= nil then
+		if sendExactPacket("SellItem", id)
+			or sendExactPacket("SellFruit", id)
+			or sendPacket("SellItem", id)
+			or sendPacket("SellFruit", id)
+		then
+			return true
+		end
+	end
+
+	return sendExactPacket("SellItem", tool)
+		or sendExactPacket("SellFruit", tool)
+		or sendExactPacket("SellItem", tool.Name)
+		or sendExactPacket("SellFruit", tool.Name)
+		or sendPacket("SellItem", tool)
+		or sendPacket("SellFruit", tool)
+end
+
+function sellInventoryByRemote(sellableTools)
+	local actions = 0
+	if sendExactPacket("SellAll") or sendPacket("SellAll") then
+		actions += 1
+	end
+
+	if sendExactPacket("SellAll", "Fruit") or sendPacket("SellAll", "Fruit") then
+		actions += 1
+	end
+
+	for _, tool in ipairs(sellableTools or {}) do
+		if sellToolByRemote(tool) then
+			actions += 1
+		end
+	end
+
+	return actions
 end
 
 function moveToStevenForSell(allowTeleport)
@@ -5633,16 +5745,137 @@ function autoAcceptMail()
 	if not isEnabled("autoAcceptMail") then
 		return
 	end
+	stats.mailChecks += 1
 	local actions = 0
-	for _, packetName in ipairs({ "MailboxClaim", "MailboxOpenInbox", "MailboxList" }) do
-		if sendPacket(packetName) then
+	local beforeInventoryCount = countInventoryTools()
+
+	local mailboxPrompt = findMailboxPrompt()
+	if mailboxPrompt then
+		local part = getPromptPart(mailboxPrompt)
+		if part then
+			teleportToPart(part, 3)
+			task.wait(CONFIG.promptSettleDelay)
+		end
+		if triggerPromptReliable(mailboxPrompt) then
 			actions += 1
 		end
 	end
-	if actions > 0 then
-		queueActivityWebhook("Auto accept mail checked incoming mailbox.")
+	task.wait(0.25)
+
+	sendExactPacket("MailboxList")
+	sendExactPacket("MailboxOpenInbox")
+	task.wait(0.15)
+
+	actions += claimVisibleMailboxItems()
+	local afterInventoryCount = countInventoryTools()
+	local claimed = math.max((afterInventoryCount or 0) - (beforeInventoryCount or 0), 0)
+	if claimed == 0 and actions > 1 then
+		claimed = actions - 1
 	end
-	setStatus(("Mail: auto accept checked (%d action(s))"):format(actions))
+	if claimed > 0 then
+		stats.mailClaimed += claimed
+		refreshInventoryStats(true)
+		updateStatsUI()
+	end
+	setStatus(("Mail: checked inbox, claimed %d item(s)"):format(claimed))
+end
+
+function findMailboxPrompt()
+	local bestPrompt
+	local bestDistance = math.huge
+	local root = getRoot()
+	local searchRoots = {}
+	if type(getOwnGardenRoots) == "function" then
+		for _, ownRoot in ipairs(getOwnGardenRoots()) do
+			table.insert(searchRoots, ownRoot)
+		end
+	end
+	table.insert(searchRoots, workspace:FindFirstChild("Gardens"))
+	table.insert(searchRoots, getMap())
+	table.insert(searchRoots, workspace)
+	for _, gardenRoot in ipairs(searchRoots) do
+		if gardenRoot then
+			for _, descendant in ipairs(gardenRoot:GetDescendants()) do
+				if descendant:IsA("ProximityPrompt") then
+					local text = string.lower((descendant.Name or "") .. " " .. (descendant.ActionText or "") .. " " .. (descendant.ObjectText or ""))
+					if string.find(text, "mailbox", 1, true) or (string.find(text, "mail", 1, true) and string.find(text, "view", 1, true)) then
+						local part = getPromptPart(descendant)
+						local distance = root and part and (root.Position - part.Position).Magnitude or 0
+						if distance < bestDistance then
+							bestPrompt = descendant
+							bestDistance = distance
+						end
+					end
+				end
+			end
+			if bestPrompt then
+				break
+			end
+		end
+	end
+	return bestPrompt
+end
+
+function getMailboxClaimId(instance)
+	local current = instance
+	while current and current ~= playerGui do
+		for _, key in ipairs({ "Id", "ID", "MailId", "MailID", "MessageId", "MessageID", "Guid", "UUID" }) do
+			local ok, value = pcall(function()
+				return current:GetAttribute(key)
+			end)
+			if ok and value ~= nil and tostring(value) ~= "" then
+				return value
+			end
+			local child = current:FindFirstChild(key)
+			if child and child:IsA("ValueBase") and child.Value ~= nil and tostring(child.Value) ~= "" then
+				return child.Value
+			end
+		end
+		current = current.Parent
+	end
+	return nil
+end
+
+function claimMailboxFromButton(button)
+	local claimed = 0
+	local id = getMailboxClaimId(button)
+	if id ~= nil then
+		local ok, count = sendExactPacket("MailboxClaim", id)
+		if ok then
+			claimed += count or 1
+		end
+	end
+	if activateButton(button) then
+		claimed += 1
+	end
+	return claimed
+end
+
+function claimVisibleMailboxItems()
+	local mailboxGui = playerGui:FindFirstChild("MailboxUI") or StarterGui:FindFirstChild("MailboxUI")
+	if not mailboxGui then
+		return 0
+	end
+
+	local actions = 0
+	local scanned = 0
+	for _, descendant in ipairs(mailboxGui:GetDescendants()) do
+		if scanned >= 80 then
+			break
+		end
+		scanned += 1
+		if descendant:IsA("GuiButton") and guiObjectVisible(descendant) then
+			local text = guiButtonText(descendant)
+			if string.find(text, "claim", 1, true)
+				or string.find(text, "accept", 1, true)
+				or string.find(text, "collect", 1, true)
+			then
+				actions += claimMailboxFromButton(descendant)
+				task.wait(0.08)
+			end
+		end
+	end
+	return actions
 end
 
 function applyPlayerVisualSettings()
@@ -5663,7 +5896,7 @@ function applyPlayerVisualSettings()
 			end
 		end
 	end
-	if state.hideOwnPlants or state.headlessMode then
+	if state.hideOwnPlants then
 		for _, root in ipairs(getOwnGardenRoots()) do
 			for _, descendant in ipairs(root:GetDescendants()) do
 				if isOwnPlantVisual(descendant, getGardenPlotForInstance(descendant)) then
@@ -5671,10 +5904,6 @@ function applyPlayerVisualSettings()
 				end
 			end
 		end
-	end
-	if state.headlessMode then
-		state.performanceMode = true
-		task.spawn(enablePerformanceMode)
 	end
 	setStatus(("Player settings: hidden %d object(s)"):format(changed))
 end
@@ -5707,7 +5936,7 @@ function autoSell(force)
 
 	local beforeSheckles = refreshCurrencyStats(true)
 	local farmedBeforeSell = stats.shecklesFarmed or 0
-	local allowTeleport = force == true or state.autoSell == true or inventoryFull == true
+	local allowTeleport = force == true or (state.collectTeleport == true and inventoryFull == true)
 	local movedToSteven = false
 
 	for attempt = 1, CONFIG.maxSellAttempts do
@@ -5717,6 +5946,16 @@ function autoSell(force)
 		if #getSellableFruitTools(true) <= 0 then
 			setStatus("Sell: no sellable fruit in inventory")
 			return
+		end
+
+		local remoteActions = sellInventoryByRemote(getSellableFruitTools(true))
+		if remoteActions > 0 then
+			task.wait(0.45)
+			local sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
+			if sold then
+				setStatus(("Sell: remote sold inventory (%d action(s))"):format(remoteActions))
+				break
+			end
 		end
 
 		if attempt == 1 or not movedToSteven then
@@ -5866,6 +6105,15 @@ function buySeed()
 end
 
 function buyOneGear(gearName)
+	local exactOk = false
+	local exactActions = 0
+	exactOk, exactActions = sendExactPacket("PurchaseGear", gearName)
+	if not exactOk then
+		exactOk, exactActions = sendExactPacket("PurchaseGear", gearName, 1)
+	end
+	if exactOk and exactActions > 0 then
+		return true, "Gear: " .. gearName
+	end
 	if sendPacket("PurchaseGear", gearName) or sendPacket("PurchaseGear", gearName, 1) then
 		return true, "Gear: " .. gearName
 	end
@@ -6052,6 +6300,196 @@ function buyPets()
 	end
 end
 
+function splitFilterTerms(value)
+	local terms = {}
+	for term in string.gmatch(tostring(value or ""), "([^,]+)") do
+		term = trimText(term)
+		if term ~= "" then
+			table.insert(terms, string.lower(term))
+		end
+	end
+	return terms
+end
+
+function filterAllowsValue(filterText, value)
+	local terms = splitFilterTerms(filterText)
+	if #terms == 0 then
+		return true
+	end
+	local lowered = string.lower(tostring(value or ""))
+	for _, term in ipairs(terms) do
+		if term == "any" or term == "*" or string.find(lowered, term, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+function filterRejectsValue(filterText, value)
+	local terms = splitFilterTerms(filterText)
+	if #terms == 0 then
+		return false
+	end
+	local lowered = string.lower(tostring(value or ""))
+	for _, term in ipairs(terms) do
+		if term ~= "any" and term ~= "*" and string.find(lowered, term, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+function getPetToolInfo(tool)
+	if not tool or not tool:IsA("Tool") then
+		return nil
+	end
+
+	local name = tool:GetAttribute("PetName")
+		or tool:GetAttribute("Pet")
+		or tool:GetAttribute("Type")
+		or tool:GetAttribute("Name")
+		or stripVariantWords(tool.Name)
+	local variant = tool:GetAttribute("Variant")
+		or tool:GetAttribute("Size")
+		or tool:GetAttribute("Rarity")
+		or ""
+	local mutation = tool:GetAttribute("Mutation")
+		or tool:GetAttribute("Mutations")
+		or ""
+	local id = tool:GetAttribute("Id")
+		or tool:GetAttribute("ID")
+		or tool:GetAttribute("UUID")
+		or tool:GetAttribute("Guid")
+
+	for _, childName in ipairs({ "PetName", "Pet", "Type", "Variant", "Mutation", "Mutations", "Id", "ID", "UUID", "Guid" }) do
+		local child = tool:FindFirstChild(childName)
+		if child and child:IsA("ValueBase") then
+			if childName == "PetName" or childName == "Pet" or childName == "Type" then
+				name = name or child.Value
+			elseif childName == "Variant" then
+				variant = child.Value
+			elseif childName == "Mutation" or childName == "Mutations" then
+				mutation = child.Value
+			elseif id == nil then
+				id = child.Value
+			end
+		end
+	end
+
+	local baseName = stripVariantWords(name or tool.Name)
+	if not isKnownPetTool(tool) and not hasKnownPetBase(baseName) then
+		return nil
+	end
+
+	return {
+		tool = tool,
+		name = baseName,
+		variant = tostring(variant or ""),
+		mutation = tostring(mutation or ""),
+		id = id,
+	}
+end
+
+function selectedSellPetList()
+	local selected = {}
+	for _, petName in ipairs(petNames) do
+		if selectedSellPets[petName] then
+			table.insert(selected, petName)
+		end
+	end
+	return selected
+end
+
+function petSellInfoMatches(info)
+	if not info then
+		return false
+	end
+	local selected = selectedSellPetList()
+	if #selected == 0 then
+		return false
+	end
+	local matchedName = false
+	local wanted = compactName(info.name)
+	for _, petName in ipairs(selected) do
+		if compactName(petName) == wanted then
+			matchedName = true
+			break
+		end
+	end
+	if not matchedName then
+		return false
+	end
+	local variantText = info.variant .. " " .. info.tool.Name
+	return filterAllowsValue(CONFIG.petSellMutationFilter, info.mutation)
+		and filterAllowsValue(CONFIG.petSellVariantFilter, variantText)
+		and not filterRejectsValue(CONFIG.petSellExcludeVariantFilter, variantText)
+end
+
+function getSellablePetTools()
+	local tools = {}
+	for _, container in ipairs(getToolContainers()) do
+		if container then
+			for _, item in ipairs(container:GetChildren()) do
+				local info = getPetToolInfo(item)
+				if petSellInfoMatches(info) then
+					table.insert(tools, info)
+				end
+			end
+		end
+	end
+	return tools
+end
+
+function sellPetTool(info)
+	if not info then
+		return false
+	end
+
+	if info.id ~= nil and sendExactPacket("SellPet", info.id) then
+		return true
+	end
+	if sendExactPacket("SellPet", info.tool) then
+		return true
+	end
+	if sendExactPacket("SellPet", info.name) then
+		return true
+	end
+	if info.id ~= nil and sendExactPacket("SellPet", { Id = info.id }) then
+		return true
+	end
+	return false
+end
+
+function autoSellPets()
+	if not isEnabled("autoSellPets") then
+		return
+	end
+
+	local sold = 0
+	local petTools = getSellablePetTools()
+	for _, info in ipairs(petTools) do
+		if not isEnabled("autoSellPets") then
+			return
+		end
+		local before = countInventoryTools()
+		if sellPetTool(info) then
+			task.wait(0.2)
+			if not info.tool.Parent or countInventoryTools() < before then
+				sold += 1
+			end
+		end
+	end
+
+	if sold > 0 then
+		stats.petsSold += sold
+		refreshInventoryStats(true)
+		updateStatsUI()
+		setStatus(("Pet sell: sold %d selected pet(s)"):format(sold))
+	else
+		setStatus(#petTools == 0 and "Pet sell: no matching pets" or "Pet sell: sell packet made no change")
+	end
+end
+
 function getPetsFolder()
 	local assets = ReplicatedStorage:FindFirstChild("Assets")
 	return assets and assets:FindFirstChild("Pets")
@@ -6203,8 +6641,8 @@ local panel = make("Frame", {
 	AnchorPoint = Vector2.new(0, 0.5),
 	BackgroundColor3 = Color3.fromRGB(22, 28, 30),
 	BorderSizePixel = 0,
-	Position = UDim2.fromOffset(24, 280),
-	Size = UDim2.fromOffset(264, 390),
+	Position = UDim2.fromOffset(18, 250),
+	Size = UDim2.fromOffset(238, 350),
 }, gui)
 make("UICorner", { CornerRadius = UDim.new(0, 8) }, panel)
 make("UIStroke", { Color = Color3.fromRGB(81, 113, 91), Thickness = 1 }, panel)
@@ -6218,7 +6656,7 @@ local header = make("TextButton", {
 	Text = "Garden Tools",
 	TextColor3 = Color3.fromRGB(246, 255, 242),
 	TextSize = 12,
-	Size = UDim2.new(1, 0, 0, 24),
+	Size = UDim2.new(1, 0, 0, 22),
 }, panel)
 make("UICorner", { CornerRadius = UDim.new(0, 8) }, header)
 
@@ -6227,18 +6665,103 @@ local content = make("ScrollingFrame", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	CanvasSize = UDim2.fromOffset(0, 0),
-	Position = UDim2.fromOffset(6, 30),
+	Position = UDim2.fromOffset(5, 27),
 	ScrollBarThickness = 3,
-	Size = UDim2.new(1, -12, 1, -36),
+	Size = UDim2.new(1, -10, 1, -32),
 }, panel)
 local contentLayout = make("UIListLayout", {
-	Padding = UDim.new(0, 3),
+	Padding = UDim.new(0, 2),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, content)
 
 contentLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
 	content.CanvasSize = UDim2.fromOffset(0, contentLayout.AbsoluteContentSize.Y + 8)
 end)
+
+local tabButtons = {}
+local tabPages = {}
+local currentTabParent
+local activeTabName = "Farm"
+
+local tabBar = make("Frame", {
+	Name = "Tabs",
+	BackgroundTransparency = 1,
+	Size = UDim2.new(1, 0, 0, 22),
+	LayoutOrder = 1,
+}, content)
+make("UIListLayout", {
+	FillDirection = Enum.FillDirection.Horizontal,
+	Padding = UDim.new(0, 3),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, tabBar)
+
+local function refreshTabButtons()
+	for name, button in pairs(tabButtons) do
+		local active = name == activeTabName
+		button.BackgroundColor3 = active and Color3.fromRGB(58, 111, 67) or Color3.fromRGB(34, 41, 42)
+		button.TextColor3 = active and Color3.fromRGB(246, 255, 242) or Color3.fromRGB(201, 219, 202)
+	end
+	for name, page in pairs(tabPages) do
+		local active = name == activeTabName
+		page.Visible = active
+		local layout = page:FindFirstChildOfClass("UIListLayout")
+		if layout then
+			page.Size = active and UDim2.new(1, 0, 0, layout.AbsoluteContentSize.Y + 4) or UDim2.new(1, 0, 0, 0)
+		end
+	end
+end
+
+local function makeTab(name, order)
+	local button = make("TextButton", {
+		Name = name .. "Tab",
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(34, 41, 42),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = name,
+		TextColor3 = Color3.fromRGB(201, 219, 202),
+		TextSize = 9,
+		Size = UDim2.new(0.25, -3, 1, 0),
+		LayoutOrder = order,
+	}, tabBar)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
+	tabButtons[name] = button
+	button.Activated:Connect(function()
+		activeTabName = name
+		refreshTabButtons()
+		content.CanvasPosition = Vector2.new(0, 0)
+	end)
+
+	local page = make("Frame", {
+		Name = name .. "Page",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 1),
+		LayoutOrder = 10,
+		Visible = name == activeTabName,
+	}, content)
+	local pageLayout = make("UIListLayout", {
+		Padding = UDim.new(0, 2),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, page)
+	pageLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		if page.Visible then
+			page.Size = UDim2.new(1, 0, 0, pageLayout.AbsoluteContentSize.Y + 4)
+		end
+	end)
+	tabPages[name] = page
+	return page
+end
+
+makeTab("Farm", 1)
+makeTab("Shops", 2)
+makeTab("Pets", 3)
+makeTab("Settings", 4)
+currentTabParent = tabPages.Farm
+refreshTabButtons()
+
+local function setBuildTab(name)
+	currentTabParent = tabPages[name] or tabPages.Farm
+end
 
 local statusLabel = make("TextLabel", {
 	Name = "Status",
@@ -6250,8 +6773,8 @@ local statusLabel = make("TextLabel", {
 	TextSize = 9,
 	TextWrapped = true,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Size = UDim2.new(1, 0, 0, 22),
-	LayoutOrder = 99,
+	Size = UDim2.new(1, 0, 0, 20),
+	LayoutOrder = 2,
 }, content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, statusLabel)
 make("UIPadding", {
@@ -6273,11 +6796,11 @@ function makeToggle(label, key, order)
 		Font = Enum.Font.GothamSemibold,
 		Text = ("%s: %s"):format(label, enabled and "ON" or "OFF"),
 		TextColor3 = Color3.fromRGB(235, 244, 233),
-		TextSize = 10,
+		TextSize = 9,
 		TextWrapped = true,
-		Size = UDim2.new(1, 0, 0, 20),
+		Size = UDim2.new(1, 0, 0, 18),
 		LayoutOrder = order,
-	}, content)
+	}, currentTabParent or content)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
 
 	button.Activated:Connect(function()
@@ -6313,7 +6836,7 @@ function makeToggle(label, key, order)
 
 		if key == "performanceMode" and state[key] then
 			task.spawn(enablePerformanceMode)
-		elseif (key == "hideGameButtons" or key == "hidePlotIcons" or key == "hideOwnPlants" or key == "headlessMode") and state[key] then
+		elseif (key == "hideGameButtons" or key == "hidePlotIcons" or key == "hideOwnPlants") and state[key] then
 			task.spawn(applyPlayerVisualSettings)
 		end
 	end)
@@ -6330,7 +6853,7 @@ function makeSectionLabel(text, order)
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Size = UDim2.new(1, 0, 0, 10),
 		LayoutOrder = order,
-	}, content)
+	}, currentTabParent or content)
 end
 
 function makeCommandButton(label, order, onClick)
@@ -6342,31 +6865,34 @@ function makeCommandButton(label, order, onClick)
 		Font = Enum.Font.GothamSemibold,
 		Text = label,
 		TextColor3 = Color3.fromRGB(235, 244, 233),
-		TextSize = 10,
+		TextSize = 9,
 		TextWrapped = true,
-		Size = UDim2.new(1, 0, 0, 20),
+		Size = UDim2.new(1, 0, 0, 18),
 		LayoutOrder = order,
-	}, content)
+	}, currentTabParent or content)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
 	button.Activated:Connect(onClick)
 	return button
 end
 
+setBuildTab("Pets")
 makeSectionLabel("Priority", 1)
 makeToggle("Auto Buy Pets", "autoBuyPets", 2)
-makeToggle("Collect Gold/Rainbow Drops", "autoCollectRainbowSeeds", 3)
-makeSectionLabel("Farm", 4)
-makeToggle("Fruit Collector", "fruitCollector", 5)
-makeToggle("Teleport To Fruit", "collectTeleport", 6)
-makeToggle("Seed Placer", "seedPlacer", 7)
-makeToggle("Auto Shovel Plants", "autoShovel", 8)
-makeToggle("Auto Move Plants", "autoMovePlants", 9)
-makeToggle("Auto Water", "autoWater", 10)
-makeToggle("Water Only Growing Plants", "waterOnlyGrowing", 11)
-makeToggle("Auto Sprinkler", "autoSprinkler", 12)
+makeToggle("Auto Sell Pets", "autoSellPets", 3)
+makeToggle("Collect Gold/Rainbow Drops", "autoCollectRainbowSeeds", 4)
+setBuildTab("Farm")
+makeSectionLabel("Farm", 1)
+makeToggle("Fruit Collector", "fruitCollector", 2)
+makeToggle("Teleport To Fruit", "collectTeleport", 3)
+makeToggle("Seed Placer", "seedPlacer", 4)
+makeToggle("Auto Shovel Plants", "autoShovel", 5)
+makeToggle("Auto Move Plants", "autoMovePlants", 6)
+makeToggle("Auto Water", "autoWater", 7)
+makeToggle("Water Only Growing Plants", "waterOnlyGrowing", 8)
+makeToggle("Auto Sprinkler", "autoSprinkler", 9)
 local placementModes = { "Farm Corner", "Random", "Saved Position" }
 local placementButton
-placementButton = makeCommandButton("Placement Mode: " .. CONFIG.seedPlacementMode, 13, function()
+placementButton = makeCommandButton("Placement Mode: " .. CONFIG.seedPlacementMode, 10, function()
 	local currentIndex = 1
 	for index, mode in ipairs(placementModes) do
 		if mode == CONFIG.seedPlacementMode then
@@ -6379,7 +6905,7 @@ placementButton = makeCommandButton("Placement Mode: " .. CONFIG.seedPlacementMo
 	saveConfig()
 	setStatus("Seed placement mode: " .. CONFIG.seedPlacementMode)
 end)
-makeCommandButton("Save Plant Position", 14, function()
+makeCommandButton("Save Plant Position", 11, function()
 	local root = getRoot()
 	if root then
 		CONFIG.savedPlantPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
@@ -6389,7 +6915,7 @@ makeCommandButton("Save Plant Position", 14, function()
 		setStatus("Saved current position for seed placement")
 	end
 end)
-makeCommandButton("Save Move Position", 15, function()
+makeCommandButton("Save Move Position", 12, function()
 	local root = getRoot()
 	if root then
 		CONFIG.movePlantPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
@@ -6398,7 +6924,7 @@ makeCommandButton("Save Move Position", 15, function()
 	end
 end)
 local waterModes = { "Farm Middle", "Selected Plant", "Growing Plants", "Custom Location" }
-makeCommandButton("Water Mode: " .. CONFIG.waterMode, 16, function()
+makeCommandButton("Water Mode: " .. CONFIG.waterMode, 13, function()
 	local currentIndex = 1
 	for index, mode in ipairs(waterModes) do
 		if mode == CONFIG.waterMode then
@@ -6411,7 +6937,7 @@ makeCommandButton("Water Mode: " .. CONFIG.waterMode, 16, function()
 	setStatus("Water mode: " .. CONFIG.waterMode)
 	buildUI()
 end)
-makeCommandButton("Save Water Location", 17, function()
+makeCommandButton("Save Water Location", 14, function()
 	local root = getRoot()
 	if root then
 		CONFIG.waterCustomPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
@@ -6422,7 +6948,7 @@ makeCommandButton("Save Water Location", 17, function()
 	end
 end)
 local sprinklerModes = { "Farm Middle", "Near Plant", "Custom Location" }
-makeCommandButton("Sprinkler Mode: " .. CONFIG.sprinklerMode, 18, function()
+makeCommandButton("Sprinkler Mode: " .. CONFIG.sprinklerMode, 15, function()
 	local currentIndex = 1
 	for index, mode in ipairs(sprinklerModes) do
 		if mode == CONFIG.sprinklerMode then
@@ -6435,7 +6961,7 @@ makeCommandButton("Sprinkler Mode: " .. CONFIG.sprinklerMode, 18, function()
 	setStatus("Sprinkler mode: " .. CONFIG.sprinklerMode)
 	buildUI()
 end)
-makeCommandButton("Save Sprinkler Location", 19, function()
+makeCommandButton("Save Sprinkler Location", 16, function()
 	local root = getRoot()
 	if root then
 		CONFIG.sprinklerCustomPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
@@ -6445,7 +6971,7 @@ makeCommandButton("Save Sprinkler Location", 19, function()
 		buildUI()
 	end
 end)
-makeCommandButton("Sprinkler Amount Override", 20, function()
+makeCommandButton("Sprinkler Amount Override", 17, function()
 	local sprinklers = getSelectedSprinklers()
 	local sprinklerName = sprinklers[1]
 	if not sprinklerName then
@@ -6461,13 +6987,13 @@ makeCommandButton("Sprinkler Amount Override", 20, function()
 	saveConfig()
 	setStatus(("Sprinkler override: %s x%d"):format(sprinklerName, current))
 end)
-makeCommandButton("Underground Stacking: " .. (CONFIG.undergroundStacking and "ON" or "OFF"), 21, function()
+makeCommandButton("Underground Stacking: " .. (CONFIG.undergroundStacking and "ON" or "OFF"), 18, function()
 	CONFIG.undergroundStacking = not CONFIG.undergroundStacking
 	saveConfig()
 	setStatus("Underground stacking " .. (CONFIG.undergroundStacking and "enabled" or "disabled"))
 	buildUI()
 end)
-makeCommandButton(("Max Garden Plants: %d"):format(CONFIG.maxGardenPlants), 22, function()
+makeCommandButton(("Max Garden Plants: %d"):format(CONFIG.maxGardenPlants), 19, function()
 	CONFIG.maxGardenPlants += 50
 	if CONFIG.maxGardenPlants > 1000 then
 		CONFIG.maxGardenPlants = 100
@@ -6476,15 +7002,16 @@ makeCommandButton(("Max Garden Plants: %d"):format(CONFIG.maxGardenPlants), 22, 
 	setStatus(("Max garden plants set to %d"):format(CONFIG.maxGardenPlants))
 	buildUI()
 end)
-makeToggle("Auto Sell Inventory", "autoSell", 23)
-makeToggle("Sell When Backpack Full", "sellWhenFull", 24)
-makeSectionLabel("Shops", 25)
-makeToggle("Auto Buy Seeds", "autoBuySeeds", 26)
-makeToggle("Auto Buy Gear", "autoBuyGear", 27)
-makeToggle("Auto Accept Mail", "autoAcceptMail", 28)
-makeSectionLabel("Settings", 29)
-makeToggle("Performance Mode", "performanceMode", 30)
-makeToggle("Headless Mode", "headlessMode", 31)
+makeToggle("Auto Sell Inventory", "autoSell", 20)
+makeToggle("Sell When Backpack Full", "sellWhenFull", 21)
+setBuildTab("Shops")
+makeSectionLabel("Shops", 1)
+makeToggle("Auto Buy Seeds", "autoBuySeeds", 2)
+makeToggle("Auto Buy Gear", "autoBuyGear", 3)
+makeToggle("Auto Accept Mail", "autoAcceptMail", 4)
+setBuildTab("Settings")
+makeSectionLabel("Settings", 1)
+makeToggle("Performance Mode", "performanceMode", 2)
 
 local webhookBox = make("TextBox", {
 	Name = "WebhookUrl",
@@ -6499,7 +7026,7 @@ local webhookBox = make("TextBox", {
 	TextTruncate = Enum.TextTruncate.AtEnd,
 	Size = UDim2.new(1, 0, 0, 20),
 	LayoutOrder = 34,
-}, content)
+}, currentTabParent or content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, webhookBox)
 make("UIPadding", {
 	PaddingLeft = UDim.new(0, 7),
@@ -6525,7 +7052,7 @@ local statsTitle = make("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 10),
 	LayoutOrder = 35,
-}, content)
+}, currentTabParent or content)
 
 local statsFrame = make("Frame", {
 	Name = "Stats",
@@ -6533,7 +7060,7 @@ local statsFrame = make("Frame", {
 	BorderSizePixel = 0,
 	Size = UDim2.new(1, 0, 0, 74),
 	LayoutOrder = 36,
-}, content)
+}, currentTabParent or content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, statsFrame)
 make("UIPadding", {
 	PaddingTop = UDim.new(0, 3),
@@ -6574,6 +7101,7 @@ refreshInventoryStats()
 updateStatsUI()
 
 function buildSeedSelector()
+local parent = currentTabParent or content
 local selectedSeedLabel = make("TextLabel", {
 	Name = "SelectedSeedLabel",
 	BackgroundTransparency = 1,
@@ -6584,7 +7112,7 @@ local selectedSeedLabel = make("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 10),
 	LayoutOrder = 24,
-}, content)
+}, parent)
 
 local seedRow = make("ScrollingFrame", {
 	Name = "SeedSelector",
@@ -6595,10 +7123,10 @@ local seedRow = make("ScrollingFrame", {
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 42),
 	LayoutOrder = 26,
-}, content)
+}, parent)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(3, 3),
-	CellSize = UDim2.fromOffset(120, 18),
+	CellSize = UDim2.fromOffset(108, 16),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, seedRow)
 
@@ -6607,7 +7135,7 @@ local seedButtons = {}
 local seedButtonCount = 0
 local seedFilterText = ""
 
-makeSelectorSearch(content, 25, "Search seeds to buy", function(text)
+makeSelectorSearch(parent, 25, "Search seeds to buy", function(text)
 	seedFilterText = text
 	refreshSelectorFilter(seedButtons, seedNames, seedFilterText, seedRow, 2)
 end)
@@ -6644,7 +7172,7 @@ function makeSeedButton(seedName)
 		TextColor3 = Color3.fromRGB(242, 247, 239),
 		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(120, 18),
+		Size = UDim2.fromOffset(108, 16),
 		LayoutOrder = seedButtonCount,
 	}, seedRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
@@ -6735,9 +7263,11 @@ StarterGui.ChildAdded:Connect(function(child)
 	end
 end)
 end
+setBuildTab("Shops")
 buildSeedSelector()
 
 function buildShovelSeedSelector()
+local parent = currentTabParent or content
 local shovelSeedLabel = make("TextLabel", {
 	Name = "ShovelSeedLabel",
 	BackgroundTransparency = 1,
@@ -6748,7 +7278,7 @@ local shovelSeedLabel = make("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 10),
 	LayoutOrder = 27,
-}, content)
+}, parent)
 
 local shovelSeedRow = make("ScrollingFrame", {
 	Name = "ShovelSeedSelector",
@@ -6759,10 +7289,10 @@ local shovelSeedRow = make("ScrollingFrame", {
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 42),
 	LayoutOrder = 28,
-}, content)
+}, parent)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(3, 3),
-	CellSize = UDim2.fromOffset(120, 18),
+	CellSize = UDim2.fromOffset(108, 16),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, shovelSeedRow)
 
@@ -6771,7 +7301,7 @@ local shovelSeedButtons = {}
 local shovelSeedButtonCount = 0
 local shovelSeedFilterText = ""
 
-makeSelectorSearch(content, 29, "Search seeds to shovel", function(text)
+makeSelectorSearch(parent, 29, "Search seeds to shovel", function(text)
 	shovelSeedFilterText = text
 	refreshSelectorFilter(shovelSeedButtons, seedNames, shovelSeedFilterText, shovelSeedRow, 2)
 end)
@@ -6807,7 +7337,7 @@ function makeShovelSeedButton(seedName)
 		TextColor3 = Color3.fromRGB(242, 247, 239),
 		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(120, 18),
+		Size = UDim2.fromOffset(108, 16),
 		LayoutOrder = shovelSeedButtonCount,
 	}, shovelSeedRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
@@ -6847,9 +7377,11 @@ if shovelSeedStockItems then
 	end)
 end
 end
+setBuildTab("Farm")
 buildShovelSeedSelector()
 
 function buildMoveSeedSelector()
+local parent = currentTabParent or content
 local moveSeedLabel = make("TextLabel", {
 	Name = "MoveSeedLabel",
 	BackgroundTransparency = 1,
@@ -6860,7 +7392,7 @@ local moveSeedLabel = make("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 10),
 	LayoutOrder = 30,
-}, content)
+}, parent)
 
 local moveSeedRow = make("ScrollingFrame", {
 	Name = "MoveSeedSelector",
@@ -6871,10 +7403,10 @@ local moveSeedRow = make("ScrollingFrame", {
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 42),
 	LayoutOrder = 32,
-}, content)
+}, parent)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(3, 3),
-	CellSize = UDim2.fromOffset(120, 18),
+	CellSize = UDim2.fromOffset(108, 16),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, moveSeedRow)
 
@@ -6883,7 +7415,7 @@ local moveSeedButtons = {}
 local moveSeedButtonCount = 0
 local moveSeedFilterText = ""
 
-makeSelectorSearch(content, 31, "Search plants to move", function(text)
+makeSelectorSearch(parent, 31, "Search plants to move", function(text)
 	moveSeedFilterText = text
 	refreshSelectorFilter(moveSeedButtons, seedNames, moveSeedFilterText, moveSeedRow, 2)
 end)
@@ -6919,7 +7451,7 @@ function makeMoveSeedButton(seedName)
 		TextColor3 = Color3.fromRGB(242, 247, 239),
 		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(120, 18),
+		Size = UDim2.fromOffset(108, 16),
 		LayoutOrder = moveSeedButtonCount,
 	}, moveSeedRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
@@ -6959,9 +7491,11 @@ if moveSeedStockItems then
 	end)
 end
 end
+setBuildTab("Farm")
 buildMoveSeedSelector()
 
 function buildGearSelector()
+local parent = currentTabParent or content
 local selectedGearLabel = make("TextLabel", {
 	Name = "SelectedGearLabel",
 	BackgroundTransparency = 1,
@@ -6972,7 +7506,7 @@ local selectedGearLabel = make("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 10),
 	LayoutOrder = 30,
-}, content)
+}, parent)
 
 local gearRow = make("ScrollingFrame", {
 	Name = "GearSelector",
@@ -6983,10 +7517,10 @@ local gearRow = make("ScrollingFrame", {
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 42),
 	LayoutOrder = 32,
-}, content)
+}, parent)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(3, 3),
-	CellSize = UDim2.fromOffset(120, 18),
+	CellSize = UDim2.fromOffset(108, 16),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, gearRow)
 
@@ -6995,7 +7529,7 @@ local gearButtons = {}
 local gearButtonCount = 0
 local gearFilterText = ""
 
-makeSelectorSearch(content, 31, "Search gear to buy", function(text)
+makeSelectorSearch(parent, 31, "Search gear to buy", function(text)
 	gearFilterText = text
 	refreshSelectorFilter(gearButtons, gearNames, gearFilterText, gearRow, 2)
 end)
@@ -7041,7 +7575,7 @@ function makeGearButton(gearName)
 		TextColor3 = Color3.fromRGB(242, 247, 239),
 		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(120, 18),
+		Size = UDim2.fromOffset(108, 16),
 		LayoutOrder = gearButtonCount,
 	}, gearRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
@@ -7116,9 +7650,11 @@ playerGui.ChildAdded:Connect(function(child)
 	end
 end)
 end
+setBuildTab("Shops")
 buildGearSelector()
 
 function buildPetSelector()
+local parent = currentTabParent or content
 local selectedPetLabel = make("TextLabel", {
 	Name = "SelectedPetLabel",
 	BackgroundTransparency = 1,
@@ -7129,7 +7665,7 @@ local selectedPetLabel = make("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 10),
 	LayoutOrder = 33,
-}, content)
+}, parent)
 
 local petRow = make("ScrollingFrame", {
 	Name = "PetSelector",
@@ -7140,10 +7676,10 @@ local petRow = make("ScrollingFrame", {
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	Size = UDim2.new(1, 0, 0, 42),
 	LayoutOrder = 35,
-}, content)
+}, parent)
 make("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(3, 3),
-	CellSize = UDim2.fromOffset(120, 18),
+	CellSize = UDim2.fromOffset(108, 16),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, petRow)
 
@@ -7152,7 +7688,7 @@ local petButtons = {}
 local petButtonCount = 0
 local petFilterText = ""
 
-makeSelectorSearch(content, 34, "Search pets to buy", function(text)
+makeSelectorSearch(parent, 34, "Search pets to buy", function(text)
 	petFilterText = text
 	refreshSelectorFilter(petButtons, petNames, petFilterText, petRow, 2)
 end)
@@ -7189,7 +7725,7 @@ function makePetButton(petName)
 		TextColor3 = Color3.fromRGB(242, 247, 239),
 		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(120, 18),
+		Size = UDim2.fromOffset(108, 16),
 		LayoutOrder = petButtonCount,
 	}, petRow)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
@@ -7288,7 +7824,213 @@ if mapForPetBuy then
 	end)
 end
 end
+setBuildTab("Pets")
 buildPetSelector()
+
+function buildPetSellSelector()
+local parent = currentTabParent or content
+local petSellLabel = make("TextLabel", {
+	Name = "SellPetLabel",
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold,
+	Text = "Pets to sell",
+	TextColor3 = Color3.fromRGB(221, 236, 216),
+	TextSize = 9,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Size = UDim2.new(1, 0, 0, 10),
+	LayoutOrder = 36,
+}, parent)
+
+local mutationBox = make("TextBox", {
+	Name = "PetSellMutationFilter",
+	BackgroundColor3 = Color3.fromRGB(18, 23, 24),
+	BorderSizePixel = 0,
+	ClearTextOnFocus = false,
+	Font = Enum.Font.Gotham,
+	PlaceholderText = "Only mutations: any, Gold, Rainbow",
+	Text = CONFIG.petSellMutationFilter,
+	TextColor3 = Color3.fromRGB(242, 247, 239),
+	TextSize = 9,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+	Size = UDim2.new(1, 0, 0, 18),
+	LayoutOrder = 37,
+}, parent)
+make("UICorner", { CornerRadius = UDim.new(0, 6) }, mutationBox)
+make("UIPadding", { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7) }, mutationBox)
+mutationBox.FocusLost:Connect(function()
+	CONFIG.petSellMutationFilter = trimText(mutationBox.Text)
+	mutationBox.Text = CONFIG.petSellMutationFilter
+	saveConfig()
+	setStatus("Pet sell mutation filter saved")
+end)
+
+local variantBox = make("TextBox", {
+	Name = "PetSellVariantFilter",
+	BackgroundColor3 = Color3.fromRGB(18, 23, 24),
+	BorderSizePixel = 0,
+	ClearTextOnFocus = false,
+	Font = Enum.Font.Gotham,
+	PlaceholderText = "Only variants: any, Big, Shiny",
+	Text = CONFIG.petSellVariantFilter,
+	TextColor3 = Color3.fromRGB(242, 247, 239),
+	TextSize = 9,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+	Size = UDim2.new(1, 0, 0, 18),
+	LayoutOrder = 38,
+}, parent)
+make("UICorner", { CornerRadius = UDim.new(0, 6) }, variantBox)
+make("UIPadding", { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7) }, variantBox)
+variantBox.FocusLost:Connect(function()
+	CONFIG.petSellVariantFilter = trimText(variantBox.Text)
+	variantBox.Text = CONFIG.petSellVariantFilter
+	saveConfig()
+	setStatus("Pet sell variant filter saved")
+end)
+
+local variantCycle = { "", "Big", "Huge", "Giant", "Rainbow", "Gold", "Golden", "Shiny", "Super" }
+local function nextVariantFilter(current)
+	local compactCurrent = compactName(current)
+	for index, variant in ipairs(variantCycle) do
+		if compactName(variant) == compactCurrent then
+			return variantCycle[(index % #variantCycle) + 1]
+		end
+	end
+	return variantCycle[1]
+end
+
+local includeVariantButton
+includeVariantButton = makeCommandButton("Only Variant: " .. (CONFIG.petSellVariantFilter ~= "" and CONFIG.petSellVariantFilter or "Any"), 39, function()
+	CONFIG.petSellVariantFilter = nextVariantFilter(CONFIG.petSellVariantFilter)
+	variantBox.Text = CONFIG.petSellVariantFilter
+	includeVariantButton.Text = "Only Variant: " .. (CONFIG.petSellVariantFilter ~= "" and CONFIG.petSellVariantFilter or "Any")
+	saveConfig()
+	setStatus("Pet sell only variant: " .. (CONFIG.petSellVariantFilter ~= "" and CONFIG.petSellVariantFilter or "Any"))
+end)
+
+local excludeVariantBox = make("TextBox", {
+	Name = "PetSellExcludeVariantFilter",
+	BackgroundColor3 = Color3.fromRGB(18, 23, 24),
+	BorderSizePixel = 0,
+	ClearTextOnFocus = false,
+	Font = Enum.Font.Gotham,
+	PlaceholderText = "Never sell variants: Rainbow, Shiny",
+	Text = CONFIG.petSellExcludeVariantFilter,
+	TextColor3 = Color3.fromRGB(242, 247, 239),
+	TextSize = 9,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+	Size = UDim2.new(1, 0, 0, 18),
+	LayoutOrder = 40,
+}, parent)
+make("UICorner", { CornerRadius = UDim.new(0, 6) }, excludeVariantBox)
+make("UIPadding", { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7) }, excludeVariantBox)
+excludeVariantBox.FocusLost:Connect(function()
+	CONFIG.petSellExcludeVariantFilter = trimText(excludeVariantBox.Text)
+	excludeVariantBox.Text = CONFIG.petSellExcludeVariantFilter
+	saveConfig()
+	setStatus("Pet sell excluded variant filter saved")
+end)
+
+local excludeVariantButton
+excludeVariantButton = makeCommandButton("Never Variant: " .. (CONFIG.petSellExcludeVariantFilter ~= "" and CONFIG.petSellExcludeVariantFilter or "None"), 41, function()
+	CONFIG.petSellExcludeVariantFilter = nextVariantFilter(CONFIG.petSellExcludeVariantFilter)
+	excludeVariantBox.Text = CONFIG.petSellExcludeVariantFilter
+	excludeVariantButton.Text = "Never Variant: " .. (CONFIG.petSellExcludeVariantFilter ~= "" and CONFIG.petSellExcludeVariantFilter or "None")
+	saveConfig()
+	setStatus("Pet sell never variant: " .. (CONFIG.petSellExcludeVariantFilter ~= "" and CONFIG.petSellExcludeVariantFilter or "None"))
+end)
+
+local petSellRow = make("ScrollingFrame", {
+	Name = "PetSellSelector",
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	CanvasSize = UDim2.fromOffset(0, 0),
+	ScrollBarThickness = 3,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
+	Size = UDim2.new(1, 0, 0, 38),
+	LayoutOrder = 43,
+}, parent)
+make("UIGridLayout", {
+	CellPadding = UDim2.fromOffset(3, 3),
+	CellSize = UDim2.fromOffset(108, 16),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, petSellRow)
+
+local petSellLayout = petSellRow:FindFirstChildOfClass("UIGridLayout")
+local petSellButtons = {}
+local petSellButtonCount = 0
+local petSellFilterText = ""
+
+makeSelectorSearch(parent, 42, "Search pets to sell", function(text)
+	petSellFilterText = text
+	refreshSelectorFilter(petSellButtons, petNames, petSellFilterText, petSellRow, 2)
+end)
+
+function refreshPetSellButton(petName)
+	local button = petSellButtons[petName]
+	if not button then
+		return
+	end
+	local enabled = selectedSellPets[petName] == true
+	button.Text = (enabled and "[x] " or "[ ] ") .. petName
+	button.BackgroundColor3 = enabled and Color3.fromRGB(122, 65, 50) or Color3.fromRGB(52, 60, 54)
+end
+
+function refreshPetSellCanvas()
+	refreshSelectorFilter(petSellButtons, petNames, petSellFilterText, petSellRow, 2)
+end
+
+function makePetSellButton(petName)
+	if petSellButtons[petName] then
+		return
+	end
+	petSellButtonCount += 1
+	local button = make("TextButton", {
+		Name = "Sell" .. petName,
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = petName,
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 9,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.fromOffset(108, 16),
+		LayoutOrder = petSellButtonCount,
+	}, petSellRow)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
+	petSellButtons[petName] = button
+	refreshPetSellButton(petName)
+	button.Visible = matchesSelectorFilter(petName, petSellFilterText)
+	button.Activated:Connect(function()
+		selectedSellPets[petName] = not selectedSellPets[petName]
+		refreshPetSellButton(petName)
+		saveConfig()
+		setStatus((selectedSellPets[petName] and "Sell selected " or "Sell unselected ") .. petName)
+	end)
+	refreshPetSellCanvas()
+end
+
+for _, petName in ipairs(petNames) do
+	makePetSellButton(petName)
+end
+if petSellLayout then
+	petSellLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshPetSellCanvas)
+end
+refreshPetSellCanvas()
+
+local assetsForPetSell = ReplicatedStorage:FindFirstChild("Assets")
+local petsFolderForSell = assetsForPetSell and assetsForPetSell:FindFirstChild("Pets")
+if petsFolderForSell then
+	petsFolderForSell.ChildAdded:Connect(function(pet)
+		local baseName = stripVariantWords(pet.Name)
+		addUniqueName(petNames, baseName)
+		table.sort(petNames)
+		makePetSellButton(baseName)
+	end)
+end
+end
+setBuildTab("Pets")
+buildPetSellSelector()
 
 local dragStart
 local startPos
@@ -7319,9 +8061,6 @@ end
 buildUI()
 
 schedulePerformanceModeRestore()
-if state.headlessMode then
-	task.defer(applyPlayerVisualSettings)
-end
 
 timers = {
 	fruitCollector = 0,
@@ -7337,6 +8076,7 @@ timers = {
 	autoBuyGear = 0,
 	autoCollectRainbowSeeds = 0,
 	autoBuyPets = 0,
+	autoSellPets = 0,
 	stats = 0,
 	statsWebhook = 0,
 	guiInventoryFull = false,
@@ -7415,6 +8155,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	timers.autoBuyGear = state.autoBuyGear and (timers.autoBuyGear + deltaTime) or 0
 	timers.autoCollectRainbowSeeds = state.autoCollectRainbowSeeds and (timers.autoCollectRainbowSeeds + deltaTime) or 0
 	timers.autoBuyPets = state.autoBuyPets and (timers.autoBuyPets + deltaTime) or 0
+	timers.autoSellPets = state.autoSellPets and (timers.autoSellPets + deltaTime) or 0
 	timers.stats += deltaTime
 	timers.statsWebhook += deltaTime
 
@@ -7470,6 +8211,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		or running.autoSprinkler
 		or running.autoCollectRainbowSeeds
 		or running.autoBuyPets
+		or running.autoSellPets
 		or sellDue
 		or running.autoSell
 		or running.sellWhenFull
@@ -7513,6 +8255,12 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval and not movementLocked then
 		if tryRun("autoBuyPets", buyPets) then
 			timers.autoBuyPets = 0
+		end
+	end
+
+	if state.autoSellPets and timers.autoSellPets >= CONFIG.petSellInterval and not movementLocked then
+		if tryRun("autoSellPets", autoSellPets) then
+			timers.autoSellPets = 0
 		end
 	end
 
