@@ -2199,6 +2199,36 @@ function countInventoryTools()
 	return count
 end
 
+function isHarvestInventoryItem(item)
+	if not item then
+		return false
+	end
+	if item:IsA("Tool") then
+		return true
+	end
+	if item:IsA("Configuration") then
+		return item:GetAttribute("HarvestedFruit") == true
+			or item:GetAttribute("FruitProxy") == true
+			or item:GetAttribute("Fruit") ~= nil
+			or item:GetAttribute("FruitName") ~= nil
+	end
+	return false
+end
+
+function countHarvestInventoryItems()
+	local count = 0
+	for _, container in ipairs(getToolContainers()) do
+		if container then
+			for _, item in ipairs(container:GetChildren()) do
+				if isHarvestInventoryItem(item) then
+					count += 1
+				end
+			end
+		end
+	end
+	return count
+end
+
 function guiShowsInventoryFull()
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
 		if descendant:IsA("TextLabel") or descendant:IsA("TextButton") or descendant:IsA("TextBox") then
@@ -2748,7 +2778,7 @@ function collectFruitPacket(target, heavy, prompt)
 end
 
 function collectionTookEffect(target, beforeInventoryCount)
-	task.wait(0.12)
+	task.wait(0.25)
 
 	if target and not target.Parent then
 		return true
@@ -2758,7 +2788,7 @@ function collectionTookEffect(target, beforeInventoryCount)
 		return true
 	end
 
-	local afterInventoryCount = countInventoryTools()
+	local afterInventoryCount = countHarvestInventoryItems()
 	return beforeInventoryCount ~= nil and afterInventoryCount > beforeInventoryCount
 end
 
@@ -2769,6 +2799,8 @@ function triggerHarvestPrompt(prompt)
 
 	if typeof(fireproximityprompt) == "function" then
 		local ok = pcall(fireproximityprompt, prompt)
+			or pcall(fireproximityprompt, prompt, 0)
+			or pcall(fireproximityprompt, prompt, 1, true)
 		if ok then
 			return true
 		end
@@ -2804,7 +2836,7 @@ end
 
 function collectPrompt(prompt)
 	local target = getCollectFruitTarget(prompt)
-	local beforeInventoryCount = countInventoryTools()
+	local beforeInventoryCount = countHarvestInventoryItems()
 	local fired = false
 	if prompt then
 		fired = triggerHarvestPrompt(prompt) or fired
@@ -3100,7 +3132,7 @@ function collectFruitEntryFast(entry, heavy)
 	local target = entry.target
 	local prompt = entry.prompt
 
-	local beforeInventoryCount = countInventoryTools()
+	local beforeInventoryCount = countHarvestInventoryItems()
 	local fired = false
 	if prompt then
 		fired = triggerHarvestPrompt(prompt) or fired
@@ -3234,7 +3266,7 @@ function collectFruit()
 		return
 	end
 
-	local beforeInventoryCount = countInventoryTools()
+	local beforeInventoryCount = countHarvestInventoryItems()
 	local fired = 0
 	local fallback = 0
 	local fallbackLimit = CONFIG.maxFruitPromptFallbackPerTick
@@ -3265,10 +3297,6 @@ function collectFruit()
 			else
 				failedRemoteHarvests += 1
 				fruitTargetCache.refreshedAt = 0
-				if failedRemoteHarvests >= 2 then
-					setStatus("Fruit collector: remote harvest failed, waiting before next target")
-					break
-				end
 			end
 		end
 
@@ -3277,8 +3305,8 @@ function collectFruit()
 		end
 	end
 
-	task.wait(0.08)
-	local afterInventoryCount = countInventoryTools()
+	task.wait(0.12)
+	local afterInventoryCount = countHarvestInventoryItems()
 	local gained = math.max((afterInventoryCount or 0) - (beforeInventoryCount or 0), 0)
 	stats.fruitCollected += gained
 	stats.fruitTargetsChecked += totalCached
@@ -3288,14 +3316,17 @@ function collectFruit()
 	else
 		fruitTargetCache.noGainStreak = math.min(fruitTargetCache.noGainStreak + 1, 3)
 	end
+	if failedRemoteHarvests > 0 then
+		fruitTargetCache.refreshedAt = 0
+	end
 	pruneFruitTargetCache()
 	refreshInventoryStats()
 	updateStatsUI()
 	if fired == 0 and fallback == 0 then
 		fruitTargetCache.refreshedAt = 0
-		setStatus(("Fruit collector: found %d cached target(s), remote failed"):format(totalCached))
+		setStatus(("Fruit collector: tried %d/%d target(s), no harvest"):format(math.min(#targets, fallbackLimit), totalCached))
 	else
-		setStatus(("Fruit collector: remote %d/%d, inventory +%d"):format(fallback, #targets, gained))
+		setStatus(("Fruit collector: harvested %d/%d, inventory +%d"):format(fallback, #targets, gained))
 	end
 end
 
