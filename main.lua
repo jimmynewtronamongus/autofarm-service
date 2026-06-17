@@ -1015,6 +1015,7 @@ local packetEntryCache = {}
 local packetObjectCache = {}
 local runtimePacketEntryCache = {}
 local packetRegistryTables
+local unpackArgs = table.unpack or unpack
 local packetRequiresArguments = {
 	CollectFruit = true,
 	MovePlant = true,
@@ -1222,6 +1223,83 @@ function clearEmptyPacketObject(packetName, object)
 			end)
 		end
 	end
+end
+
+function getPacketTypeValue(typeName)
+	local packet = getPacketModule()
+	if type(packet) ~= "table" then
+		return nil
+	end
+	local ok, value = pcall(function()
+		return packet[typeName]
+	end)
+	return ok and value or nil
+end
+
+function buildTypedPacketObject(packetName, typeNames)
+	local packet = getPacketModule()
+	if type(packet) ~= "table" and type(packet) ~= "function" then
+		return nil
+	end
+
+	local defined = findDefinedPacketObject(packetName)
+	if defined and not packetObjectHasNoWrites(defined) then
+		return defined
+	end
+	if defined and packetObjectHasNoWrites(defined) then
+		clearEmptyPacketObject(packetName, defined)
+		packetObjectCache[packetName] = nil
+	end
+
+	local packetTypes = {}
+	for _, typeName in ipairs(typeNames or {}) do
+		local packetType = getPacketTypeValue(typeName)
+		if packetType == nil then
+			return nil
+		end
+		table.insert(packetTypes, packetType)
+	end
+
+	local ok, object
+	if type(packet) == "function" then
+		ok, object = pcall(packet, packetName, unpackArgs(packetTypes))
+	else
+		ok, object = pcall(function()
+			return packet(packetName, unpackArgs(packetTypes))
+		end)
+	end
+	if ok and type(object) == "table" and (#packetTypes == 0 or not packetObjectHasNoWrites(object)) then
+		packetObjectCache[packetName] = object
+		return object
+	end
+
+	return nil
+end
+
+function sendTypedPacketExact(packetName, typeNames, ...)
+	if not packetNameExists(packetName) then
+		return false
+	end
+	local object = buildTypedPacketObject(packetName, typeNames)
+	if not object then
+		return false
+	end
+	for _, methodName in ipairs(packetSendMethodNames) do
+		if tryPacketMethod(object, methodName, ...) then
+			return true
+		end
+	end
+	return false
+end
+
+function sendTypedPacketArgVariants(packetName, typeNames, variants)
+	local actions = 0
+	for _, args in ipairs(variants or {}) do
+		if sendTypedPacketExact(packetName, typeNames, unpackArgs(args)) then
+			actions += 1
+		end
+	end
+	return actions > 0, actions
 end
 
 function buildPacketObject(packetName)
@@ -1633,8 +1711,6 @@ function sendExactPacket(packetName, ...)
 
 	return actions > 0, actions
 end
-
-local unpackArgs = table.unpack or unpack
 
 function sendPacketArgVariants(packetName, variants)
 	local actions = 0
@@ -2448,6 +2524,20 @@ function collectFruitPacket(target, heavy)
 	local plant = getFruitPlantTarget(fruit)
 	local fruitId = getInstancePacketId(fruit)
 	local plantId = getInstancePacketId(plant)
+	local instanceVariants = {
+		{ fruit },
+	}
+	if target ~= fruit then
+		table.insert(instanceVariants, { target })
+	end
+	if plant then
+		table.insert(instanceVariants, { plant })
+	end
+	local typedOk = sendTypedPacketArgVariants("CollectFruit", { "Instance" }, instanceVariants)
+	if typedOk then
+		return true
+	end
+
 	local variants = {
 		{ fruit },
 		{ fruit.Name },
@@ -3384,6 +3474,10 @@ function purchaseSeedRemote(seedName)
 
 	for repeatIndex = 1, CONFIG.seedBuyRemoteRepeats do
 		for _, variant in ipairs(variants) do
+			if sendTypedPacketExact("PurchaseSeed", { "String" }, variant) then
+				bought += 1
+			end
+
 			if sendPacket("PurchaseSeed", variant) then
 				bought += 1
 			end
@@ -4131,6 +4225,9 @@ function autoAcceptMail()
 		actions += 1
 	end
 	for index = 1, 50 do
+		if sendTypedPacketExact("MailboxClaim", { "NumberU8" }, index) then
+			actions += 1
+		end
 		if sendExactPacket("MailboxClaim", index) then
 			actions += 1
 		end
@@ -4317,6 +4414,11 @@ end
 function buyOneGear(gearName)
 	local compact = string.gsub(tostring(gearName or ""), "%s+", "")
 	local underscored = string.gsub(tostring(gearName or ""), "%s+", "_")
+	local typedOk = sendTypedPacketArgVariants("PurchaseGear", { "String" }, {
+		{ gearName },
+		{ underscored },
+		{ compact },
+	})
 	local ok = sendPacketArgVariants("PurchaseGear", {
 		{ gearName },
 		{ gearName, 1 },
@@ -4330,7 +4432,7 @@ function buyOneGear(gearName)
 		{ { ItemName = gearName } },
 		{ { Name = gearName, Quantity = 1 } },
 	})
-	if ok then
+	if typedOk or ok then
 		return true, "Gear: " .. gearName
 	end
 
@@ -4414,6 +4516,16 @@ end
 function buyPetRemote(petName, model, prompt)
 	local spawnId = getPetSpawnId(model, prompt)
 	local modelName = model and model.Name or petName
+	local instanceVariants = {}
+	if model then
+		table.insert(instanceVariants, { model })
+	end
+	if prompt then
+		table.insert(instanceVariants, { prompt })
+	end
+	local typedTameOk = sendTypedPacketArgVariants("WildPetTame", { "Instance" }, instanceVariants)
+	local typedCollectedOk = sendTypedPacketArgVariants("WildPetCollected", { "Instance" }, instanceVariants)
+
 	local variants = {
 		{ petName },
 		{ modelName },
@@ -4436,7 +4548,7 @@ function buyPetRemote(petName, model, prompt)
 
 	local tameOk = sendPacketArgVariants("WildPetTame", variants)
 	local collectedOk = sendPacketArgVariants("WildPetCollected", variants)
-	return tameOk or collectedOk
+	return typedTameOk or typedCollectedOk or tameOk or collectedOk
 end
 
 function buyOnePet(petName)
