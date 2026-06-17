@@ -2508,6 +2508,7 @@ function collectFruitEntryFast(entry, heavy)
 		end
 	end
 
+	local beforeInventoryCount = countInventoryTools()
 	local fired = false
 	if prompt then
 		local root = getRoot()
@@ -2540,7 +2541,11 @@ function collectFruitEntryFast(entry, heavy)
 		fired = collectFruitPacket(target, true) or fired
 	end
 
-	return fired
+	if not fired then
+		return false
+	end
+
+	return collectionTookEffect(target or prompt, beforeInventoryCount)
 end
 
 function triggerPrompt(prompt, skipTouch)
@@ -3217,6 +3222,7 @@ function collectFruit()
 	end
 
 	local heavyFallback = fruitTargetCache.noGainStreak >= 1
+	local failedTeleportHarvests = 0
 	for index, entry in ipairs(targets) do
 		if not isEnabled("fruitCollector") then
 			return
@@ -3231,6 +3237,14 @@ function collectFruit()
 			if collectFruitEntryFast(entry, heavyFallback) then
 				fallback += 1
 				fired += 1
+				failedTeleportHarvests = 0
+			elseif state.collectTeleport then
+				failedTeleportHarvests += 1
+				fruitTargetCache.refreshedAt = 0
+				if failedTeleportHarvests >= 1 then
+					setStatus("Fruit collector: harvest failed after teleport, waiting before next target")
+					break
+				end
 			end
 		end
 
