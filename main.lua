@@ -1043,6 +1043,46 @@ function safeText(value)
 	return tostring(value)
 end
 
+local packetIdKeys = {
+	"Id",
+	"ID",
+	"UUID",
+	"Guid",
+	"UID",
+	"UniqueId",
+	"UniqueID",
+	"InstanceId",
+	"InstanceID",
+	"FruitId",
+	"FruitID",
+	"ItemId",
+	"ItemID",
+	"PetId",
+	"PetID",
+}
+
+function getInstancePacketId(instance)
+	if typeof(instance) ~= "Instance" then
+		return nil
+	end
+
+	for _, key in ipairs(packetIdKeys) do
+		local ok, value = pcall(function()
+			return instance:GetAttribute(key)
+		end)
+		if ok and value ~= nil and tostring(value) ~= "" then
+			return value
+		end
+
+		local child = instance:FindFirstChild(key)
+		if child and child:IsA("ValueBase") and child.Value ~= nil and tostring(child.Value) ~= "" then
+			return child.Value
+		end
+	end
+
+	return nil
+end
+
 local packetModule
 
 function getPacketModule()
@@ -1069,6 +1109,35 @@ local packetHookInstalled = false
 local sellCaptureActive = false
 local lastPacketBuffer
 local sellInventoryPacketBuffer
+local packetSendMethodNames = {
+	"Fire",
+	"fire",
+	"FireServer",
+	"fireServer",
+	"Send",
+	"send",
+	"SendToServer",
+	"sendToServer",
+	"SendServer",
+	"sendServer",
+	"Invoke",
+	"invoke",
+	"InvokeServer",
+	"invokeServer",
+	"Call",
+	"call",
+}
+
+function tryPacketMethod(target, methodName, ...)
+	if type(target) ~= "table" and typeof(target) ~= "Instance" then
+		return false
+	end
+	local method = target[methodName]
+	if type(method) ~= "function" then
+		return false
+	end
+	return pcall(method, target, ...) or pcall(method, ...)
+end
 
 function isPacketBuffer(value)
 	local valueType = typeof(value)
@@ -1188,11 +1257,9 @@ end
 
 function tryPacketEntry(entry, ...)
 	if type(entry) == "table" then
-		for _, methodName in ipairs({ "Fire", "FireServer", "Send", "SendToServer" }) do
-			if type(entry[methodName]) == "function" then
-				if pcall(entry[methodName], entry, ...) or pcall(entry[methodName], ...) then
-					return true
-				end
+		for _, methodName in ipairs(packetSendMethodNames) do
+			if tryPacketMethod(entry, methodName, ...) then
+				return true
 			end
 		end
 	elseif type(entry) == "function" then
@@ -1214,7 +1281,7 @@ function buildPacketObject(packetName)
 	if type(packet) == "function" then
 		table.insert(constructors, packet)
 	elseif type(packet) == "table" then
-		for _, key in ipairs({ "new", "New", "Create", "Packet" }) do
+		for _, key in ipairs({ "new", "New", "create", "Create", "get", "Get", "packet", "Packet", "fromName", "FromName" }) do
 			if type(packet[key]) == "function" then
 				table.insert(constructors, function(name)
 					return packet[key](packet, name)
@@ -1257,14 +1324,9 @@ function firePacketObject(packetName, ...)
 	end
 
 	local actions = 0
-	for _, methodName in ipairs({ "Fire", "FireServer", "Send", "SendToServer" }) do
-		if type(object[methodName]) == "function" then
-			if pcall(object[methodName], object, ...) then
-				actions += 1
-			end
-			if pcall(object[methodName], ...) then
-				actions += 1
-			end
+	for _, methodName in ipairs(packetSendMethodNames) do
+		if tryPacketMethod(object, methodName, ...) then
+			actions += 1
 		end
 	end
 
@@ -1320,7 +1382,7 @@ function sendPacket(packetName, ...)
 			return true
 		end
 
-		for _, methodName in ipairs({ "Fire", "FireServer", "Send", "SendToServer" }) do
+		for _, methodName in ipairs(packetSendMethodNames) do
 			if type(packet[methodName]) == "function" then
 				if pcall(packet[methodName], packet, packetName, ...) or pcall(packet[methodName], packetName, ...) then
 					return true
@@ -1362,7 +1424,7 @@ function sendExactPacket(packetName, ...)
 			actions += 1
 		end
 
-		for _, methodName in ipairs({ "Fire", "FireServer", "Send", "SendToServer" }) do
+		for _, methodName in ipairs(packetSendMethodNames) do
 			if type(packet[methodName]) == "function" then
 				if pcall(packet[methodName], packet, packetName, ...) then
 					actions += 1
@@ -1382,6 +1444,22 @@ function sendExactPacket(packetName, ...)
 		actions += 1
 	end
 
+	return actions > 0, actions
+end
+
+local unpackArgs = table.unpack or unpack
+
+function sendPacketArgVariants(packetName, variants)
+	local actions = 0
+	for _, args in ipairs(variants or {}) do
+		local exactOk, count = sendExactPacket(packetName, unpackArgs(args))
+		if exactOk then
+			actions += count or 1
+		end
+		if sendPacket(packetName, unpackArgs(args)) then
+			actions += 1
+		end
+	end
 	return actions > 0, actions
 end
 
@@ -2247,10 +2325,36 @@ function collectFruitPacket(target, heavy)
 		current = current.Parent
 	end
 
-	if sendExactPacket("CollectFruit", fruit)
-		or sendExactPacket("CollectFruit", fruit.Name)
-		or sendPacket("CollectFruit", fruit)
-	then
+	local plant = getFruitPlantTarget(fruit)
+	local fruitId = getInstancePacketId(fruit)
+	local plantId = getInstancePacketId(plant)
+	local variants = {
+		{ fruit },
+		{ fruit.Name },
+	}
+	if fruitId ~= nil then
+		table.insert(variants, { fruitId })
+		table.insert(variants, { { Id = fruitId } })
+		table.insert(variants, { { FruitId = fruitId } })
+		table.insert(variants, { { UID = fruitId } })
+	end
+	if target ~= fruit then
+		table.insert(variants, { target })
+		table.insert(variants, { target.Name })
+	end
+	if plant then
+		table.insert(variants, { plant, fruit })
+		table.insert(variants, { plant.Name, fruit.Name })
+		table.insert(variants, { plant.Name, fruit })
+		table.insert(variants, { plant, fruit.Name })
+		if plantId ~= nil then
+			table.insert(variants, { plantId, fruitId or fruit.Name })
+			table.insert(variants, { { PlantId = plantId, FruitId = fruitId or fruit.Name } })
+		end
+	end
+
+	local ok = sendPacketArgVariants("CollectFruit", variants)
+	if ok then
 		return true
 	end
 
@@ -2258,7 +2362,6 @@ function collectFruitPacket(target, heavy)
 		return false
 	end
 
-	local plant = getFruitPlantTarget(fruit)
 	if plant and sendExactPacket("CollectFruit", plant, fruit) then
 		return true
 	end
@@ -3238,22 +3341,7 @@ function sellThroughStevenFallback(allowTeleport)
 end
 
 function getToolPacketId(tool)
-	if not tool then
-		return nil
-	end
-	for _, key in ipairs({ "Id", "ID", "UUID", "Guid", "FruitId", "ItemId" }) do
-		local ok, value = pcall(function()
-			return tool:GetAttribute(key)
-		end)
-		if ok and value ~= nil and tostring(value) ~= "" then
-			return value
-		end
-		local child = tool:FindFirstChild(key)
-		if child and child:IsA("ValueBase") and child.Value ~= nil and tostring(child.Value) ~= "" then
-			return child.Value
-		end
-	end
-	return nil
+	return getInstancePacketId(tool)
 end
 
 function sellToolByRemote(tool)
@@ -3262,32 +3350,50 @@ function sellToolByRemote(tool)
 	end
 
 	local id = getToolPacketId(tool)
+	local variants = {
+		{ tool },
+		{ tool.Name },
+	}
 	if id ~= nil then
-		if sendExactPacket("SellItem", id)
-			or sendExactPacket("SellFruit", id)
-			or sendPacket("SellItem", id)
-			or sendPacket("SellFruit", id)
-		then
-			return true
-		end
+		table.insert(variants, 1, { id })
+		table.insert(variants, { { Id = id } })
+		table.insert(variants, { { ItemId = id } })
+		table.insert(variants, { { FruitId = id } })
+		table.insert(variants, { { UID = id } })
+		table.insert(variants, { id, tool.Name })
+		table.insert(variants, { tool.Name, id })
 	end
 
-	return sendExactPacket("SellItem", tool)
-		or sendExactPacket("SellFruit", tool)
-		or sendExactPacket("SellItem", tool.Name)
-		or sendExactPacket("SellFruit", tool.Name)
-		or sendPacket("SellItem", tool)
-		or sendPacket("SellFruit", tool)
+	local soldItem = sendPacketArgVariants("SellItem", variants)
+	local soldFruit = sendPacketArgVariants("SellFruit", variants)
+	return soldItem or soldFruit
 end
 
 function sellInventoryByRemote(sellableTools)
 	local actions = 0
-	if sendExactPacket("SellAll") or sendPacket("SellAll") then
-		actions += 1
+	local toolIds = {}
+	for _, tool in ipairs(sellableTools or {}) do
+		local id = getToolPacketId(tool)
+		if id ~= nil then
+			table.insert(toolIds, id)
+		end
 	end
-
-	if sendExactPacket("SellAll", "Fruit") or sendPacket("SellAll", "Fruit") then
-		actions += 1
+	local sellAllVariants = {
+		{},
+		{ "Fruit" },
+		{ "Fruits" },
+		{ "Inventory" },
+		{ "All" },
+		{ true },
+		{ sellableTools or {} },
+		{ toolIds },
+		{ { Type = "Fruit" } },
+		{ { Category = "Fruit" } },
+		{ { Items = toolIds } },
+	}
+	local ok, count = sendPacketArgVariants("SellAll", sellAllVariants)
+	if ok then
+		actions += count
 	end
 
 	for _, tool in ipairs(sellableTools or {}) do
@@ -6116,12 +6222,9 @@ function getPetToolInfo(tool)
 	local mutation = tool:GetAttribute("Mutation")
 		or tool:GetAttribute("Mutations")
 		or ""
-	local id = tool:GetAttribute("Id")
-		or tool:GetAttribute("ID")
-		or tool:GetAttribute("UUID")
-		or tool:GetAttribute("Guid")
+	local id = getToolPacketId(tool)
 
-	for _, childName in ipairs({ "PetName", "Pet", "Type", "Variant", "Mutation", "Mutations", "Id", "ID", "UUID", "Guid" }) do
+	for _, childName in ipairs({ "PetName", "Pet", "Type", "Variant", "Mutation", "Mutations", "Id", "ID", "UUID", "Guid", "UID", "UniqueId", "UniqueID", "PetId", "PetID" }) do
 		local child = tool:FindFirstChild(childName)
 		if child and child:IsA("ValueBase") then
 			if childName == "PetName" or childName == "Pet" or childName == "Type" then
@@ -6208,19 +6311,21 @@ function sellPetTool(info)
 		return false
 	end
 
-	if info.id ~= nil and sendExactPacket("SellPet", info.id) then
-		return true
+	local variants = {
+		{ info.tool },
+		{ info.name },
+	}
+	if info.id ~= nil then
+		table.insert(variants, 1, { info.id })
+		table.insert(variants, { { Id = info.id } })
+		table.insert(variants, { { PetId = info.id } })
+		table.insert(variants, { { UID = info.id } })
+		table.insert(variants, { info.id, info.name })
+		table.insert(variants, { info.name, info.id })
 	end
-	if sendExactPacket("SellPet", info.tool) then
-		return true
-	end
-	if sendExactPacket("SellPet", info.name) then
-		return true
-	end
-	if info.id ~= nil and sendExactPacket("SellPet", { Id = info.id }) then
-		return true
-	end
-	return false
+
+	local ok = sendPacketArgVariants("SellPet", variants)
+	return ok
 end
 
 function autoSellPets()
