@@ -3289,6 +3289,9 @@ function collectFruit()
 		invalidateSellableInventoryCache()
 		refreshInventoryStats(true)
 	end
+	if state.performanceMode then
+		restoreOwnGardenAutomationPrompts()
+	end
 
 	local inventoryFull = shouldPauseFruitCollection()
 	if inventoryFull then
@@ -4391,6 +4394,18 @@ function hidePerformanceTree(instance, hidePrompts)
 	return hidePerformanceVisual(instance, hidePrompts)
 end
 
+function hasAutomationPrompt(instance)
+	if not instance then
+		return false
+	end
+
+	if instance:IsA("ProximityPrompt") then
+		return true
+	end
+
+	return instance:FindFirstChildWhichIsA("ProximityPrompt", true) ~= nil
+end
+
 function hidePerformanceVisual(instance, hidePrompts)
 	if not instance or performanceState.hidden[instance] then
 		return 0
@@ -4398,6 +4413,10 @@ function hidePerformanceVisual(instance, hidePrompts)
 
 	local changed = 0
 	changed += disableLaggyEffect(instance)
+	if instance:IsA("ProximityPrompt") then
+		return changed
+	end
+
 	if instance:IsA("BasePart") then
 		performanceState.hidden[instance] = true
 		pcall(function()
@@ -4419,12 +4438,6 @@ function hidePerformanceVisual(instance, hidePrompts)
 		or instance:IsA("Handles")
 		or instance:IsA("ArcHandles")
 	then
-		performanceState.hidden[instance] = true
-		pcall(function()
-			instance.Enabled = false
-		end)
-		changed = 1
-	elseif hidePrompts and instance:IsA("ProximityPrompt") then
 		performanceState.hidden[instance] = true
 		pcall(function()
 			instance.Enabled = false
@@ -4501,6 +4514,29 @@ function hidePerformanceGardens()
 		task.wait()
 	end
 	return changed
+end
+
+function restoreOwnGardenAutomationPrompts()
+	local restored = 0
+	for _, root in ipairs(getOwnGardenRoots()) do
+		for _, descendant in ipairs(root:GetDescendants()) do
+			if descendant:IsA("ProximityPrompt")
+				and descendant.Name ~= "StealPrompt"
+				and isHarvestPrompt(descendant)
+			then
+				local ok = pcall(function()
+					if descendant.Enabled == false then
+						descendant.Enabled = true
+						restored += 1
+					end
+				end)
+				if not ok then
+					continue
+				end
+			end
+		end
+	end
+	return restored
 end
 
 function optimizePerformanceInstance(instance)
@@ -4665,6 +4701,7 @@ enablePerformanceMode = function()
 	if now - performanceState.lastGardenHideAt > 5 then
 		performanceState.lastGardenHideAt = now
 		changed += hidePerformanceGardens()
+		changed += restoreOwnGardenAutomationPrompts()
 	end
 
 	if not performanceState.fullScanDone and now - performanceState.lastTreeScanAt > 10 then
