@@ -48,7 +48,9 @@ CONFIG = {
 	petSellExcludeVariantFilter = "",
 	keepAllPetVariants = true,
 	webhookUrl = "",
+	officialStockWebhookUrl = "",
 	statsWebhookInterval = 180.0,
+	maxPetBuyPerTick = 1,
 }
 
 seedNames = {}
@@ -160,6 +162,7 @@ function loadConfig()
 		"petSellExcludeVariantFilter",
 		"keepAllPetVariants",
 		"webhookUrl",
+		"officialStockWebhookUrl",
 		"statsWebhookInterval",
 	})
 	copyKnownValues(decoded.state, state, {
@@ -216,6 +219,7 @@ saveConfig = function()
 			petSellExcludeVariantFilter = CONFIG.petSellExcludeVariantFilter,
 			keepAllPetVariants = CONFIG.keepAllPetVariants,
 			webhookUrl = CONFIG.webhookUrl,
+			officialStockWebhookUrl = CONFIG.officialStockWebhookUrl,
 			statsWebhookInterval = CONFIG.statsWebhookInterval,
 		},
 		state = {
@@ -269,13 +273,15 @@ function getRequestFunction()
 		or request
 end
 
-function sendWebhook(title, description, key)
-	if CONFIG.webhookUrl == "" then
+function sendWebhook(title, description, key, targetUrl)
+	local url = targetUrl or CONFIG.webhookUrl
+	if url == "" then
 		return false
 	end
 
 	local now = os.clock()
-	if key and webhookSentAt[key] and now - webhookSentAt[key] < 45 then
+	local throttleKey = key and ((targetUrl and targetUrl ~= CONFIG.webhookUrl) and (key .. ":secondary") or key)
+	if throttleKey and webhookSentAt[throttleKey] and now - webhookSentAt[throttleKey] < 45 then
 		return false
 	end
 
@@ -299,7 +305,7 @@ function sendWebhook(title, description, key)
 
 	local ok, response = pcall(function()
 		return requestFunction({
-			Url = CONFIG.webhookUrl,
+			Url = url,
 			Method = "POST",
 			Headers = {
 				["Content-Type"] = "application/json",
@@ -314,13 +320,17 @@ function sendWebhook(title, description, key)
 	end
 	local sent = ok and statusCode >= 200 and statusCode < 300
 
-	if sent and key then
-		webhookSentAt[key] = now
+	if sent and throttleKey then
+		webhookSentAt[throttleKey] = now
 	elseif not sent then
 		setStatus(("Webhook failed%s"):format(ok and (" (" .. tostring(statusCode) .. ")") or ""))
 	end
 
 	return sent
+end
+
+function canSendOfficialStockWebhook()
+	return CONFIG.officialStockWebhookUrl ~= "" and string.lower(localPlayer.Name or "") == "saraoliver6"
 end
 
 function shouldNotifySelected(map, name)
@@ -403,8 +413,13 @@ function flushStockWebhookQueue()
 		return
 	end
 
-	local sent = sendWebhook("Stock update", table.concat(sections, "\n\n"), nil)
-	if sent then
+	local description = table.concat(sections, "\n\n")
+	local sent = sendWebhook("Stock update", description, nil)
+	local officialSent = false
+	if canSendOfficialStockWebhook() then
+		officialSent = sendWebhook("Stock update", description, nil, CONFIG.officialStockWebhookUrl)
+	end
+	if sent or officialSent then
 		local now = os.clock()
 		for _, key in ipairs(keys) do
 			webhookSentAt[key] = now
@@ -615,10 +630,10 @@ setStatus = function(message)
 	local remoteIssue = string.find(lowered, "remote", 1, true)
 		or string.find(lowered, "failed", 1, true)
 		or string.find(lowered, "error", 1, true)
-		or string.find(lowered, "no verified", 1, true)
 		or string.find(lowered, "made no change", 1, true)
 	local noisyEmptyStatus = string.find(lowered, "no matching", 1, true)
 		or string.find(lowered, "no pets selected", 1, true)
+		or string.find(lowered, "no verified", 1, true)
 		or string.find(lowered, "no harvest targets found", 1, true)
 		or string.find(lowered, "no owned garden found", 1, true)
 		or string.find(lowered, "no valid harvest attempt", 1, true)
@@ -4549,6 +4564,19 @@ function movePlantTarget(plant, targetPosition)
 	return actions > 0
 end
 
+function plantReachedTargetOrMoved(plant, beforePosition, targetPosition)
+	local part = getTargetPart(plant)
+	if not part then
+		return false
+	end
+
+	local afterPosition = part.Position
+	if beforePosition and (afterPosition - beforePosition).Magnitude >= 1.5 then
+		return true
+	end
+	return targetPosition and (afterPosition - targetPosition).Magnitude <= 6
+end
+
 function autoMovePlants()
 	if not isEnabled("autoMovePlants") then
 		return
@@ -4582,7 +4610,12 @@ function autoMovePlants()
 			if plant and not seen[plant] and plantMatchesSelection(plant, selected) then
 				seen[plant] = true
 				checked += 1
+				local part = getTargetPart(plant)
+				local beforePosition = part and part.Position or nil
 				if movePlantTarget(plant, targetPosition) then
+					task.wait(0.7)
+				end
+				if plantReachedTargetOrMoved(plant, beforePosition, targetPosition) then
 					moved += 1
 					task.wait(0.25)
 				end
@@ -4593,7 +4626,13 @@ function autoMovePlants()
 		end
 	end
 
-	setStatus(("Move plants: moved %d matching plant(s)"):format(moved))
+	if moved > 0 then
+		setStatus(("Move plants: moved %d matching plant(s)"):format(moved))
+	elseif checked > 0 then
+		setStatus("Move plants: remote made no verified move")
+	else
+		setStatus("Move plants: no matching plants found")
+	end
 end
 
 function getPlantName(instance)
@@ -5124,6 +5163,43 @@ function getPetBuyAliases(petName, model, prompt)
 	return aliases, spawnId
 end
 
+function getPetVariantText(model, prompt)
+	for _, instance in ipairs({ model, prompt, prompt and prompt.Parent }) do
+		if instance then
+			for _, key in ipairs({ "Variant", "Mutation", "Mutations", "Rarity", "Tier" }) do
+				local ok, value = pcall(function()
+					return instance:GetAttribute(key)
+				end)
+				if ok and value ~= nil and tostring(value) ~= "" then
+					return tostring(value)
+				end
+
+				local child = instance:FindFirstChild(key)
+				if child and child:IsA("ValueBase") and child.Value ~= nil and tostring(child.Value) ~= "" then
+					return tostring(child.Value)
+				end
+			end
+		end
+	end
+
+	local haystack = string.lower(tostring(model and model.Name or ""))
+	for _, variant in ipairs(petVariantWords) do
+		if string.find(haystack, string.lower(variant), 1, true) then
+			return variant
+		end
+	end
+
+	return "Normal"
+end
+
+function getPetPurchaseInfo(petName, model, prompt)
+	return {
+		name = petName,
+		variant = getPetVariantText(model, prompt),
+		spawn = model and model.Name or "",
+	}
+end
+
 function getPetPromptPosition(model, prompt)
 	local part = getPromptPart(prompt) or getTargetPart(model)
 	return part and part.Position or nil
@@ -5229,6 +5305,7 @@ function buyOnePet(petName)
 
 	local wildPetSpawns = getWildPetSpawns()
 	local petTerm = string.lower(string.gsub(petName, "%s+", ""))
+	local candidates = {}
 
 	for _, descendant in ipairs(getCachedDescendants("wildPets", wildPetSpawns)) do
 		if not isEnabled("autoBuyPets") then
@@ -5246,20 +5323,34 @@ function buyOnePet(petName)
 			local isPetPrompt = string.find(modelName, petTerm, 1, true) ~= nil or textMatches(descendant, { petName })
 
 			if isBuyPrompt and isPetPrompt then
-				local walked = walkToPetPrompt(model, descendant)
-				local prompted = walked and triggerAnyPrompt(descendant)
-				local remoteRequested = buyPetRemote(petName, model, descendant)
-				if prompted or remoteRequested then
-					markPetSpawnHandled(model, descendant, prompted and 8 or 3)
-					local mode = prompted and "walk prompt" or "remote"
-					return true, ("Auto pets: %s requested %s"):format(mode, petName)
-				end
+				table.insert(candidates, {
+					model = model,
+					prompt = descendant,
+					distance = getPromptDistance(descendant),
+				})
 			end
 		end
 	end
 
+	table.sort(candidates, function(left, right)
+		return left.distance < right.distance
+	end)
+
+	for _, candidate in ipairs(candidates) do
+		local model = candidate.model
+		local prompt = candidate.prompt
+		local walked = walkToPetPrompt(model, prompt)
+		local prompted = walked and triggerAnyPrompt(prompt)
+		local remoteRequested = buyPetRemote(petName, model, prompt)
+		if prompted or remoteRequested then
+			markPetSpawnHandled(model, prompt, prompted and 4 or 2)
+			local mode = prompted and "walk prompt" or "remote"
+			return true, ("Auto pets: %s requested %s"):format(mode, petName), getPetPurchaseInfo(petName, model, prompt)
+		end
+	end
+
 	if buyPetRemote(petName) then
-		return true, ("Auto pets: remote requested %s"):format(petName)
+		return true, ("Auto pets: remote requested %s"):format(petName), getPetPurchaseInfo(petName)
 	end
 
 	return false, ("Auto pets: no matching remote target for %s"):format(petName)
@@ -5271,33 +5362,44 @@ function buyPets()
 	end
 
 	local bought = 0
+	local attempts = 0
 	local lastMessage = "Auto pets: no pets selected"
+	local boughtLines = {}
 
 	for _, petName in ipairs(getSelectedPetList()) do
 		if not isEnabled("autoBuyPets") then
 			return
 		end
+		if attempts >= CONFIG.maxPetBuyPerTick then
+			break
+		end
 
 		local beforeInventoryCount = countInventoryTools()
 		local beforeSheckles = refreshCurrencyStats(true)
-		local ok, message = buyOnePet(petName)
+		local ok, message, petInfo = buyOnePet(petName)
 		lastMessage = message
 		if ok then
 			local changed = purchaseChanged(beforeInventoryCount, beforeSheckles)
 			if changed then
 				bought += 1
+				if petInfo then
+					table.insert(boughtLines, ("Bought pet: `%s` | Variant: `%s`"):format(petInfo.name or petName, petInfo.variant or "Normal"))
+				end
 			else
 				lastMessage = "Auto pets: no verified purchase for " .. petName
 			end
 			task.wait(0.12)
 		end
+		attempts += 1
 	end
 
 	if bought > 0 then
 		stats.petsBought += bought
 		refreshInventoryStats()
 		updateStatsUI()
-		queueActivityWebhook(("Bought `%d` selected pet(s)."):format(bought))
+		for _, line in ipairs(boughtLines) do
+			queueActivityWebhook(line)
+		end
 		setStatus(("Auto pets: verified %d purchase(s)"):format(bought))
 	else
 		setStatus(lastMessage)
@@ -5955,6 +6057,32 @@ webhookBox.FocusLost:Connect(function()
 	end
 end)
 
+local officialStockWebhookBox = make("TextBox", {
+	Name = "OfficialStockWebhookUrl",
+	BackgroundColor3 = Color3.fromRGB(34, 41, 42),
+	BorderSizePixel = 0,
+	ClearTextOnFocus = false,
+	Font = Enum.Font.GothamSemibold,
+	PlaceholderText = "Official stock webhook URL",
+	Text = CONFIG.officialStockWebhookUrl,
+	TextColor3 = Color3.fromRGB(242, 247, 239),
+	TextSize = 9,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+	Size = UDim2.new(1, 0, 0, 20),
+	LayoutOrder = 35,
+}, currentTabParent or content)
+make("UICorner", { CornerRadius = UDim.new(0, 6) }, officialStockWebhookBox)
+make("UIPadding", {
+	PaddingLeft = UDim.new(0, 7),
+	PaddingRight = UDim.new(0, 7),
+}, officialStockWebhookBox)
+officialStockWebhookBox.FocusLost:Connect(function()
+	CONFIG.officialStockWebhookUrl = string.gsub(tostring(officialStockWebhookBox.Text or ""), "^%s*(.-)%s*$", "%1")
+	officialStockWebhookBox.Text = CONFIG.officialStockWebhookUrl
+	saveConfig()
+	setStatus(CONFIG.officialStockWebhookUrl ~= "" and "Official stock webhook saved" or "Official stock webhook cleared")
+end)
+
 local statsTitle = make("TextLabel", {
 	Name = "StatsTitle",
 	BackgroundTransparency = 1,
@@ -5964,7 +6092,7 @@ local statsTitle = make("TextLabel", {
 	TextSize = 9,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 10),
-	LayoutOrder = 35,
+	LayoutOrder = 36,
 }, currentTabParent or content)
 
 local statsFrame = make("Frame", {
@@ -5972,7 +6100,7 @@ local statsFrame = make("Frame", {
 	BackgroundColor3 = Color3.fromRGB(14, 18, 19),
 	BorderSizePixel = 0,
 	Size = UDim2.new(1, 0, 0, 74),
-	LayoutOrder = 36,
+	LayoutOrder = 37,
 }, currentTabParent or content)
 make("UICorner", { CornerRadius = UDim.new(0, 6) }, statsFrame)
 make("UIPadding", {
