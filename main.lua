@@ -611,6 +611,22 @@ setStatus = function(message)
 	local text = tostring(message)
 	local now = os.clock()
 	state.lastStatus = text
+	local lowered = string.lower(text)
+	local remoteIssue = string.find(lowered, "remote", 1, true)
+		or string.find(lowered, "failed", 1, true)
+		or string.find(lowered, "error", 1, true)
+		or string.find(lowered, "no verified", 1, true)
+		or string.find(lowered, "made no change", 1, true)
+	local noisyEmptyStatus = string.find(lowered, "no matching", 1, true)
+		or string.find(lowered, "no pets selected", 1, true)
+		or string.find(lowered, "no harvest targets found", 1, true)
+		or string.find(lowered, "no owned garden found", 1, true)
+		or string.find(lowered, "no valid harvest attempt", 1, true)
+		or string.find(lowered, "not found", 1, true)
+		or string.match(lowered, "no .- found") ~= nil
+	if noisyEmptyStatus and not remoteIssue then
+		return
+	end
 	if statusValue then
 		if now - lastStatusSetAt >= 0.8 then
 			lastStatusSetAt = now
@@ -1272,6 +1288,45 @@ function sendRawInstanceVariants(packetName, instances)
 		end
 	end
 	return actions > 0, actions
+end
+
+function writeVector3Payload(payloadBuffer, offset, value)
+	if typeof(value) ~= "Vector3" then
+		return false
+	end
+	buffer.writef32(payloadBuffer, offset, value.X)
+	buffer.writef32(payloadBuffer, offset + 4, value.Y)
+	buffer.writef32(payloadBuffer, offset + 8, value.Z)
+	return true
+end
+
+function sendRawInstanceVector3Packet(packetName, instance, position)
+	if typeof(instance) ~= "Instance" or typeof(position) ~= "Vector3" then
+		return false
+	end
+
+	return fireRawPacketBuffer(packetName, function(packetId)
+		local payloadBuffer = buffer.create(13)
+		buffer.writeu8(payloadBuffer, 0, packetId)
+		writeVector3Payload(payloadBuffer, 1, position)
+		return payloadBuffer
+	end, { instance })
+end
+
+function sendRawStringVector3Packet(packetName, value, position)
+	local text = tostring(value or "")
+	if text == "" or #text > 255 or typeof(position) ~= "Vector3" then
+		return false
+	end
+
+	return fireRawPacketBuffer(packetName, function(packetId)
+		local payloadBuffer = buffer.create(14 + #text)
+		buffer.writeu8(payloadBuffer, 0, packetId)
+		buffer.writeu8(payloadBuffer, 1, #text)
+		buffer.writestring(payloadBuffer, 2, text)
+		writeVector3Payload(payloadBuffer, 2 + #text, position)
+		return payloadBuffer
+	end)
 end
 
 function firePacketRemote(packetName, ...)
@@ -4439,13 +4494,59 @@ function movePlantTarget(plant, targetPosition)
 		useToolAtPosition(tool, targetPosition, 0.45)
 	end
 
-	return sendPacket("MovePlant", plant, targetPosition)
-		or sendPacket("MovePlant", plant.Name, targetPosition)
-		or sendPacket("TrowelPlant", plant, targetPosition)
-		or sendPacket("TrowelPlant", plant.Name, targetPosition)
-		or sendPacket("UseTrowel", plant, targetPosition)
-		or sendPacket("UseTrowel", targetPosition)
-		or tool ~= nil
+	local variants = {
+		{ plant, targetPosition },
+		{ plant.Name, targetPosition },
+	}
+	local plantId = getInstancePacketId(plant)
+	if plantId ~= nil then
+		table.insert(variants, 1, { plantId, targetPosition })
+		table.insert(variants, { { Id = plantId, Position = targetPosition } })
+		table.insert(variants, { { PlantId = plantId, Position = targetPosition } })
+	end
+
+	local actions = 0
+	if sendRawInstanceVector3Packet("MovePlant", plant, targetPosition) then
+		actions += 1
+	end
+	if sendRawStringVector3Packet("MovePlant", plant.Name, targetPosition) then
+		actions += 1
+	end
+	if plantId ~= nil and sendRawStringVector3Packet("MovePlant", plantId, targetPosition) then
+		actions += 1
+	end
+
+	local typedInstanceOk, typedInstanceCount = sendTypedPacketArgVariants("MovePlant", { "Instance", "Vector3" }, {
+		{ plant, targetPosition },
+	})
+	if typedInstanceOk then
+		actions += typedInstanceCount or 1
+	end
+
+	local typedStringVariants = {
+		{ plant.Name, targetPosition },
+	}
+	if plantId ~= nil then
+		table.insert(typedStringVariants, { tostring(plantId), targetPosition })
+	end
+	local typedStringOk, typedStringCount = sendTypedPacketArgVariants("MovePlant", { "String", "Vector3" }, typedStringVariants)
+	if typedStringOk then
+		actions += typedStringCount or 1
+	end
+
+	local moveOk, moveCount = sendPacketArgVariants("MovePlant", variants)
+	if moveOk then
+		actions += moveCount or 1
+	end
+
+	for _, packetName in ipairs({ "TrowelPlant", "UseTrowel" }) do
+		local ok, count = sendPacketArgVariants(packetName, variants)
+		if ok then
+			actions += count or 1
+		end
+	end
+
+	return actions > 0
 end
 
 function autoMovePlants()
