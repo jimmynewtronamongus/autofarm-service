@@ -3559,6 +3559,30 @@ function moveToOwnGarden()
 	return gardenPosition, nil
 end
 
+function returnToGardenAfterSell()
+	if not (state.fruitCollector or state.seedPlacer or state.autoShovel or state.autoWater or state.autoSprinkler) then
+		return false
+	end
+
+	local root = getRoot()
+	if not root then
+		return false
+	end
+
+	local anchor = getOwnGardenAnchor()
+	if not anchor then
+		return false
+	end
+
+	local gardenPosition = typeof(anchor) == "Vector3" and anchor or anchor.Position
+	if (root.Position - gardenPosition).Magnitude > 12 then
+		root.CFrame = CFrame.new(gardenPosition + Vector3.new(0, 4, 0))
+		task.wait(0.15)
+	end
+
+	return true
+end
+
 isInventorySeedTool = function(item)
 	if not item or not item:IsA("Tool") then
 		return false
@@ -5386,8 +5410,24 @@ function autoSell(force)
 	refreshInventoryStats(true)
 	invalidateSellableInventoryCache()
 	local afterInventoryCount = #getSellableFruitTools(true)
+	local sold = afterInventoryCount < beforeInventoryCount
+		or (afterSheckles and beforeSheckles and afterSheckles > beforeSheckles)
+	if sold then
+		fruitCollectionPausedUntil = 0
+		fruitTargetCache.refreshedAt = 0
+		if timers then
+			timers.sellWhenFull = 0
+			timers.autoSell = 0
+			timers.fruitCollector = CONFIG.collectInterval
+			timers.seedPlacer = CONFIG.plantInterval
+			timers.autoShovel = CONFIG.shovelInterval
+		end
+		if force then
+			returnToGardenAfterSell()
+		end
+	end
 	updateStatsUI()
-	if afterInventoryCount >= beforeInventoryCount and (not afterSheckles or not beforeSheckles or afterSheckles <= beforeSheckles) then
+	if not sold then
 		setStatus(("Sell failed: remote/NPC fallback made no change (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
 	else
 		setStatus(("Sell: inventory %d -> %d"):format(beforeInventoryCount, afterInventoryCount))
