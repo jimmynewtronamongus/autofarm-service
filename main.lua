@@ -8,11 +8,6 @@ ReplicatedStorage = game:GetService("ReplicatedStorage")
 RunService = game:GetService("RunService")
 StarterGui = game:GetService("StarterGui")
 UserInputService = game:GetService("UserInputService")
-virtualInputManager = nil
-
-pcall(function()
-	virtualInputManager = game:GetService("VirtualInputManager")
-end)
 
 localPlayer = Players.LocalPlayer
 playerGui = localPlayer:WaitForChild("PlayerGui")
@@ -2677,18 +2672,6 @@ function collectFruitEntryFast(entry, heavy)
 end
 
 function triggerPrompt(prompt, skipTouch)
-	local oldHoldDuration
-	local oldRequiresLineOfSight
-	local oldMaxActivationDistance
-	pcall(function()
-		oldHoldDuration = prompt.HoldDuration
-		oldRequiresLineOfSight = prompt.RequiresLineOfSight
-		oldMaxActivationDistance = prompt.MaxActivationDistance
-		prompt.HoldDuration = 0
-		prompt.RequiresLineOfSight = false
-		prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 20)
-	end)
-
 	local fired = false
 	if typeof(fireproximityprompt) == "function" then
 		fired = pcall(fireproximityprompt, prompt)
@@ -2706,29 +2689,6 @@ function triggerPrompt(prompt, skipTouch)
 		fired = true
 	end
 
-	if virtualInputManager then
-		local keyOk = pcall(function()
-			virtualInputManager:SendKeyEvent(true, prompt.KeyboardKeyCode or Enum.KeyCode.E, false, game)
-			task.wait(CONFIG.promptHoldDelay)
-			virtualInputManager:SendKeyEvent(false, prompt.KeyboardKeyCode or Enum.KeyCode.E, false, game)
-		end)
-		if keyOk then
-			fired = true
-		end
-	end
-
-	pcall(function()
-		if oldHoldDuration ~= nil then
-			prompt.HoldDuration = oldHoldDuration
-		end
-		if oldRequiresLineOfSight ~= nil then
-			prompt.RequiresLineOfSight = oldRequiresLineOfSight
-		end
-		if oldMaxActivationDistance ~= nil then
-			prompt.MaxActivationDistance = oldMaxActivationDistance
-		end
-	end)
-
 	return fired
 end
 
@@ -2736,18 +2696,6 @@ triggerPromptFast = function(prompt)
 	if not prompt or not prompt.Parent then
 		return false
 	end
-
-	local oldHoldDuration
-	local oldRequiresLineOfSight
-	local oldMaxActivationDistance
-	pcall(function()
-		oldHoldDuration = prompt.HoldDuration
-		oldRequiresLineOfSight = prompt.RequiresLineOfSight
-		oldMaxActivationDistance = prompt.MaxActivationDistance
-		prompt.HoldDuration = 0
-		prompt.RequiresLineOfSight = false
-		prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 24)
-	end)
 
 	local fired = false
 	if typeof(fireproximityprompt) == "function" then
@@ -2762,18 +2710,6 @@ triggerPromptFast = function(prompt)
 		prompt:InputHoldEnd()
 	end)
 	fired = fired or ok
-
-	pcall(function()
-		if oldHoldDuration ~= nil then
-			prompt.HoldDuration = oldHoldDuration
-		end
-		if oldRequiresLineOfSight ~= nil then
-			prompt.RequiresLineOfSight = oldRequiresLineOfSight
-		end
-		if oldMaxActivationDistance ~= nil then
-			prompt.MaxActivationDistance = oldMaxActivationDistance
-		end
-	end)
 
 	return fired
 end
@@ -2817,18 +2753,6 @@ function activateButton(button)
 		fired = true
 	end
 
-	local position = button.AbsolutePosition + button.AbsoluteSize / 2
-	if not virtualInputManager then
-		return fired
-	end
-
-	local ok = pcall(function()
-		virtualInputManager:SendMouseMoveEvent(position.X, position.Y, game)
-		virtualInputManager:SendMouseButtonEvent(position.X, position.Y, 0, true, game, 1)
-		task.wait(0.04)
-		virtualInputManager:SendMouseButtonEvent(position.X, position.Y, 0, false, game, 1)
-	end)
-
 	local activated = false
 	if button:IsA("GuiButton") then
 		activated = pcall(function()
@@ -2836,7 +2760,7 @@ function activateButton(button)
 		end)
 	end
 
-	return fired or ok or activated
+	return fired or activated
 end
 
 function clickButtonLight(button)
@@ -2844,17 +2768,7 @@ function clickButtonLight(button)
 		return false
 	end
 
-	local position = button.AbsolutePosition + button.AbsoluteSize / 2
 	local clicked = false
-	if virtualInputManager then
-		clicked = pcall(function()
-			virtualInputManager:SendMouseMoveEvent(position.X, position.Y, game)
-			virtualInputManager:SendMouseButtonEvent(position.X, position.Y, 0, true, game, 1)
-			task.wait(0.035)
-			virtualInputManager:SendMouseButtonEvent(position.X, position.Y, 0, false, game, 1)
-		end)
-	end
-
 	if button:IsA("GuiButton") then
 		clicked = pcall(function()
 			button:Activate()
@@ -4102,26 +4016,6 @@ function getSelectedPetList()
 end
 
 function touchPart(part, allowTouchOnly)
-	local root = getRoot()
-	if not root or not part or not part:IsA("BasePart") then
-		return false
-	end
-
-	if allowTouchOnly == nil then
-		allowTouchOnly = true
-	end
-
-	if typeof(firetouchinterest) == "function" then
-		pcall(firetouchinterest, root, part, 0)
-		task.wait()
-		pcall(firetouchinterest, root, part, 1)
-		return true
-	end
-
-	if not allowTouchOnly then
-		return false
-	end
-
 	return false
 end
 
@@ -5204,37 +5098,10 @@ function getShovelPrompt(target)
 end
 
 function aimAndHoldPart(part, holdDuration, tool)
-	if not part or not part:IsA("BasePart") then
-		return false
-	end
-
-	local camera = workspace.CurrentCamera
-	if not camera then
-		return false
-	end
-
-	pcall(function()
-		camera.CFrame = CFrame.lookAt(camera.CFrame.Position, part.Position)
-	end)
-
-	local viewportPoint, onScreen = camera:WorldToViewportPoint(part.Position)
-	if virtualInputManager and onScreen then
-		pcall(function()
-			virtualInputManager:SendMouseMoveEvent(viewportPoint.X, viewportPoint.Y, game)
-			virtualInputManager:SendMouseButtonEvent(viewportPoint.X, viewportPoint.Y, 0, true, game, 0)
-			local startedAt = os.clock()
-			while os.clock() - startedAt < (holdDuration or CONFIG.shovelHoldDuration) do
-				if tool and tool.Parent then
-					pcall(function()
-						tool:Activate()
-					end)
-				end
-				virtualInputManager:SendMouseMoveEvent(viewportPoint.X, viewportPoint.Y, game)
-				task.wait(0.18)
-			end
-			virtualInputManager:SendMouseButtonEvent(viewportPoint.X, viewportPoint.Y, 0, false, game, 0)
+	if tool and tool.Parent then
+		return pcall(function()
+			tool:Activate()
 		end)
-		return true
 	end
 
 	return false
@@ -5437,22 +5304,10 @@ function useToolAtPosition(tool, position, holdSeconds)
 		return false
 	end
 
-	local part = Instance.new("Part")
-	part.Name = "GardenToolsAimPoint"
-	part.Anchored = true
-	part.CanCollide = false
-	part.CanTouch = false
-	part.Transparency = 1
-	part.Size = Vector3.new(1, 1, 1)
-	part.Position = position
-	part.Parent = workspace
-
-	local ok = aimAndHoldPart(part, holdSeconds or 0.35, tool)
-	pcall(function()
+	local ok = pcall(function()
 		tool:Activate()
 	end)
-	part:Destroy()
-	return ok or true
+	return ok
 end
 
 function getPlantWaterTargets()
