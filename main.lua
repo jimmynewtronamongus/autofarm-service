@@ -3126,7 +3126,7 @@ end
 
 function collectFruitEntryFast(entry, heavy)
 	if not isLiveFruitEntry(entry) then
-		return false
+		return false, false
 	end
 
 	local target = entry.target
@@ -3137,17 +3137,17 @@ function collectFruitEntryFast(entry, heavy)
 	if prompt then
 		fired = triggerHarvestPrompt(prompt) or fired
 		if collectionTookEffect(target or prompt, beforeInventoryCount) then
-			return true
+			return true, true
 		end
 	end
 	if target then
 		fired = collectFruitPacket(target, true, prompt) or fired
 		if collectionTookEffect(target or prompt, beforeInventoryCount) then
-			return true
+			return true, true
 		end
 	end
 
-	return false
+	return false, fired
 end
 
 function sellSucceeded(beforeInventoryCount, beforeSheckles)
@@ -3279,6 +3279,7 @@ function collectFruit()
 
 	local heavyFallback = fruitTargetCache.noGainStreak >= 1
 	local failedRemoteHarvests = 0
+	local attemptedHarvests = 0
 	for index, entry in ipairs(targets) do
 		if not isEnabled("fruitCollector") then
 			return
@@ -3290,10 +3291,16 @@ function collectFruit()
 		end
 
 		if fallback < fallbackLimit and isLiveFruitEntry(entry) and entry.target then
-			if collectFruitEntryFast(entry, heavyFallback) then
+			local harvested, attempted = collectFruitEntryFast(entry, heavyFallback)
+			if attempted then
+				attemptedHarvests += 1
+			end
+			if harvested then
 				fallback += 1
 				fired += 1
 				failedRemoteHarvests = 0
+			elseif attempted then
+				fruitTargetCache.refreshedAt = 0
 			else
 				failedRemoteHarvests += 1
 				fruitTargetCache.refreshedAt = 0
@@ -3322,11 +3329,13 @@ function collectFruit()
 	pruneFruitTargetCache()
 	refreshInventoryStats()
 	updateStatsUI()
-	if fired == 0 and fallback == 0 then
+	if fired == 0 and fallback == 0 and attemptedHarvests == 0 then
 		fruitTargetCache.refreshedAt = 0
-		setStatus(("Fruit collector: tried %d/%d target(s), no harvest"):format(math.min(#targets, fallbackLimit), totalCached))
+		setStatus(("Fruit collector: found %d target(s), no valid harvest attempt"):format(totalCached))
+	elseif gained == 0 and attemptedHarvests > 0 then
+		setStatus(("Fruit collector: attempted %d/%d target(s), waiting for inventory update"):format(attemptedHarvests, totalCached))
 	else
-		setStatus(("Fruit collector: harvested %d/%d, inventory +%d"):format(fallback, #targets, gained))
+		setStatus(("Fruit collector: harvested %d/%d, inventory +%d"):format(math.max(fallback, gained), #targets, gained))
 	end
 end
 
