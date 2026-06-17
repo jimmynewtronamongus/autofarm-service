@@ -1076,6 +1076,12 @@ function getInstancePacketId(instance)
 		end
 	end
 
+	local nameId = string.match(instance.Name, "[%w]+_[%w%-]+_([%w%-]+)$")
+		or string.match(instance.Name, "([0-9a-fA-F]+%-[0-9a-fA-F]+%-[0-9a-fA-F]+%-[0-9a-fA-F]+%-[0-9a-fA-F]+)")
+	if nameId and nameId ~= "" then
+		return nameId
+	end
+
 	return nil
 end
 
@@ -1101,6 +1107,7 @@ end
 local packetRemote
 local packetEntryCache = {}
 local packetObjectCache = {}
+local runtimePacketEntryCache = {}
 local packetHookInstalled = false
 local sellCaptureActive = false
 local lastPacketBuffer
@@ -1228,26 +1235,6 @@ function packetNameExists(packetName)
 end
 
 function firePacketRemote(packetName, ...)
-	local remote = getPacketRemote()
-	if not remote then
-		return false
-	end
-
-	local id = remote:GetAttribute(packetName)
-	if id == nil then
-		return false
-	end
-	for _, firstArg in ipairs({ packetName, id }) do
-		if firstArg ~= nil then
-			local ok = pcall(function(...)
-				remote:FireServer(firstArg, ...)
-			end, ...)
-			if ok then
-				return true
-			end
-		end
-	end
-
 	return false
 end
 
@@ -1356,6 +1343,116 @@ function findPacketEntry(root, packetName, seen)
 	return nil
 end
 
+function packetFieldMatchesPacket(value, packetName, packetId)
+	if value == nil then
+		return false
+	end
+	if value == packetName then
+		return true
+	end
+	if packetId ~= nil and value == packetId then
+		return true
+	end
+	local text = tostring(value)
+	return text == packetName or (packetId ~= nil and text == tostring(packetId))
+end
+
+function tableLooksLikePacketEntry(value, packetName, packetId)
+	if type(value) ~= "table" then
+		return false
+	end
+
+	for _, key in ipairs({ "Name", "name", "_name", "PacketName", "packetName", "Id", "ID", "_id", "Identifier", "identifier" }) do
+		local ok, field = pcall(function()
+			return value[key]
+		end)
+		if ok and packetFieldMatchesPacket(field, packetName, packetId) then
+			return true
+		end
+	end
+
+	local matched = false
+	pcall(function()
+		local checked = 0
+		for key, field in pairs(value) do
+			checked += 1
+			if packetFieldMatchesPacket(key, packetName, packetId) or packetFieldMatchesPacket(field, packetName, packetId) then
+				matched = true
+				break
+			end
+			if checked >= 40 then
+				break
+			end
+		end
+	end)
+
+	return matched
+end
+
+function addRuntimePacketCandidate(results, seen, candidate)
+	if candidate == nil or seen[candidate] then
+		return
+	end
+	local candidateType = type(candidate)
+	if candidateType ~= "table" and candidateType ~= "function" then
+		return
+	end
+	seen[candidate] = true
+	table.insert(results, candidate)
+end
+
+function findRuntimePacketEntries(packetName)
+	local now = os.clock()
+	local cached = runtimePacketEntryCache[packetName]
+	if cached and now - cached.checkedAt < 8 then
+		return cached.entries
+	end
+
+	local results = {}
+	local seen = {}
+	local remote = getPacketRemote()
+	local packetId = remote and remote:GetAttribute(packetName) or nil
+
+	local packet = getPacketModule()
+	if type(packet) == "table" then
+		addRuntimePacketCandidate(results, seen, findPacketEntry(packet, packetName))
+	end
+
+	if typeof(getgc) == "function" then
+		local ok, objects = pcall(getgc, true)
+		if ok and type(objects) == "table" then
+			for _, object in ipairs(objects) do
+				if type(object) == "table" then
+					local entry
+					pcall(function()
+						entry = object[packetName]
+					end)
+					addRuntimePacketCandidate(results, seen, entry)
+					if tableLooksLikePacketEntry(object, packetName, packetId) then
+						addRuntimePacketCandidate(results, seen, object)
+					end
+				end
+			end
+		end
+	end
+
+	runtimePacketEntryCache[packetName] = {
+		checkedAt = now,
+		entries = results,
+	}
+	return results
+end
+
+function fireRuntimePacketEntries(packetName, ...)
+	local actions = 0
+	for _, entry in ipairs(findRuntimePacketEntries(packetName)) do
+		if tryPacketEntry(entry, ...) then
+			actions += 1
+		end
+	end
+	return actions > 0, actions
+end
+
 function sendPacket(packetName, ...)
 	if not packetNameExists(packetName) then
 		return false
@@ -1377,6 +1474,9 @@ function sendPacket(packetName, ...)
 		if tryPacketEntry(entry, ...) then
 			return true
 		end
+		if fireRuntimePacketEntries(packetName, ...) then
+			return true
+		end
 
 		for _, methodName in ipairs(packetSendMethodNames) do
 			if type(packet[methodName]) == "function" then
@@ -1392,6 +1492,10 @@ function sendPacket(packetName, ...)
 		end
 	end
 
+	if fireRuntimePacketEntries(packetName, ...) then
+		return true
+	end
+
 	return firePacketRemote(packetName, ...)
 end
 
@@ -1401,6 +1505,7 @@ function sendExactPacket(packetName, ...)
 	end
 
 	local actions = 0
+	local runtimeTried = false
 	local ok, count = firePacketObject(packetName, ...)
 	if ok then
 		actions += count or 1
@@ -1419,6 +1524,11 @@ function sendExactPacket(packetName, ...)
 		if entry ~= false and tryPacketEntry(entry, ...) then
 			actions += 1
 		end
+		local runtimeOk, runtimeCount = fireRuntimePacketEntries(packetName, ...)
+		runtimeTried = true
+		if runtimeOk then
+			actions += runtimeCount or 1
+		end
 
 		for _, methodName in ipairs(packetSendMethodNames) do
 			if type(packet[methodName]) == "function" then
@@ -1433,6 +1543,13 @@ function sendExactPacket(packetName, ...)
 	elseif type(packet) == "function" then
 		if pcall(packet, packetName, ...) then
 			actions += 1
+		end
+	end
+
+	if not runtimeTried then
+		local runtimeOk, runtimeCount = fireRuntimePacketEntries(packetName, ...)
+		if runtimeOk then
+			actions += runtimeCount or 1
 		end
 	end
 
@@ -1451,8 +1568,7 @@ function sendPacketArgVariants(packetName, variants)
 		local exactOk, count = sendExactPacket(packetName, unpackArgs(args))
 		if exactOk then
 			actions += count or 1
-		end
-		if sendPacket(packetName, unpackArgs(args)) then
+		elseif sendPacket(packetName, unpackArgs(args)) then
 			actions += 1
 		end
 	end
@@ -1698,6 +1814,17 @@ function getOwnGardenRoots()
 			end
 		elseif plotBelongsToLocalPlayer(plot) then
 			addOwnPlot(plot)
+		end
+	end
+
+	if #roots == 0 then
+		for _, plot in ipairs(gardens:GetChildren()) do
+			if plot:FindFirstChild("Plants") or plot:FindFirstChild("Fruits") then
+				addOwnPlot(plot)
+			end
+			if #roots >= 8 then
+				break
+			end
 		end
 	end
 
@@ -2287,6 +2414,9 @@ function getCollectFruitTarget(prompt)
 
 	while current and current ~= workspace do
 		if current.Parent and current.Parent.Name == "Fruits" then
+			return current
+		end
+		if current.Parent and current.Parent.Name == "Plants" then
 			return current
 		end
 		current = current.Parent
@@ -5849,8 +5979,7 @@ function buyPetRemote(petName, model, prompt)
 
 	local tameOk = sendPacketArgVariants("WildPetTame", variants)
 	local collectedOk = sendPacketArgVariants("WildPetCollected", variants)
-	local slotOk = sendPacketArgVariants("PetRequestPurchaseSlot", variants)
-	return tameOk or collectedOk or slotOk
+	return tameOk or collectedOk
 end
 
 function buyOnePet(petName)
