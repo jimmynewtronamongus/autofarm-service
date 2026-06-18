@@ -3537,19 +3537,36 @@ function collectFruitPacket(target, heavy, prompt)
 	return false
 end
 
-function collectionTookEffect(target, beforeInventoryCount)
-	task.wait(0.25)
+function collectionTookEffect(target, beforeInventoryCount, timeoutSeconds)
+	local deadline = os.clock() + (timeoutSeconds or 0.9)
+	while true do
+		task.wait(0.12)
 
-	if target and not target.Parent then
-		return true
+		if target and not target.Parent then
+			return true
+		end
+
+		if target and target.Parent and not target:IsDescendantOf(workspace) then
+			return true
+		end
+
+		local afterInventoryCount = countHarvestInventoryItems()
+		if beforeInventoryCount ~= nil and afterInventoryCount > beforeInventoryCount then
+			return true
+		end
+
+		if os.clock() >= deadline then
+			return false
+		end
 	end
+end
 
-	if target and target.Parent and not target:IsDescendantOf(workspace) then
-		return true
-	end
-
-	local afterInventoryCount = countHarvestInventoryItems()
-	return beforeInventoryCount ~= nil and afterInventoryCount > beforeInventoryCount
+function getPromptHoldSeconds(prompt, extra)
+	local holdSeconds = 0
+	pcall(function()
+		holdSeconds = tonumber(prompt.HoldDuration) or 0
+	end)
+	return math.clamp(holdSeconds, 0, 2) + (extra or 0.05)
 end
 
 function triggerHarvestPrompt(prompt)
@@ -3557,23 +3574,30 @@ function triggerHarvestPrompt(prompt)
 		return false
 	end
 
+	local holdSeconds = getPromptHoldSeconds(prompt, 0.08)
+	local fired = false
 	if typeof(fireproximityprompt) == "function" then
-		local ok = pcall(fireproximityprompt, prompt)
-			or pcall(fireproximityprompt, prompt, 0)
-			or pcall(fireproximityprompt, prompt, 1, true)
-		if ok then
-			return true
+		for _, args in ipairs({
+			{ prompt, holdSeconds, true },
+			{ prompt, math.max(1, holdSeconds), true },
+			{ prompt, 1, true },
+			{ prompt, 0, true },
+			{ prompt },
+		}) do
+			local ok = pcall(fireproximityprompt, unpackArgs(args))
+			fired = fired or ok
+			task.wait(0.03)
 		end
 	end
 
 	local began = pcall(function()
 		prompt:InputHoldBegin()
 	end)
-	task.wait(0.03)
+	task.wait(holdSeconds)
 	local ended = pcall(function()
 		prompt:InputHoldEnd()
 	end)
-	return began or ended
+	return fired or began or ended
 end
 
 function triggerAnyPrompt(prompt)
@@ -3641,13 +3665,13 @@ function collectPrompt(prompt)
 	local fired = false
 	if prompt then
 		fired = triggerHarvestPrompt(prompt) or fired
-		if collectionTookEffect(target or prompt, beforeInventoryCount) then
+		if collectionTookEffect(target or prompt, beforeInventoryCount, 1.2) then
 			return true
 		end
 	end
 	if target ~= nil then
 		fired = collectFruitPacket(target, true, prompt) or fired
-		if collectionTookEffect(target or prompt, beforeInventoryCount) then
+		if collectionTookEffect(target or prompt, beforeInventoryCount, 1.0) then
 			return true
 		end
 	end
@@ -3940,13 +3964,13 @@ function collectFruitEntryFast(entry, heavy, verifyEach)
 	local fired = false
 	if prompt then
 		fired = triggerHarvestPrompt(prompt) or fired
-		if verifyEach and collectionTookEffect(target or prompt, beforeInventoryCount) then
+		if verifyEach and collectionTookEffect(target or prompt, beforeInventoryCount, 0.75) then
 			return true, true
 		end
 	end
 	if target then
 		fired = collectFruitPacket(target, true, prompt) or fired
-		if verifyEach and collectionTookEffect(target or prompt, beforeInventoryCount) then
+		if verifyEach and collectionTookEffect(target or prompt, beforeInventoryCount, 0.75) then
 			return true, true
 		end
 	end
@@ -4119,6 +4143,7 @@ function collectFruit()
 		fruitTargetCache.noGainStreak = 0
 	else
 		fruitTargetCache.noGainStreak = math.min(fruitTargetCache.noGainStreak + 1, 3)
+		fruitTargetCache.refreshedAt = 0
 	end
 	if failedRemoteHarvests > 0 then
 		fruitTargetCache.refreshedAt = 0
