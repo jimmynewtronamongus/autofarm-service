@@ -843,6 +843,7 @@ local pendingStatusMessage
 local lastStatsUIUpdateAt = 0
 local schedulerAccumulator = 0
 local lastStatsWebhookAt = 0
+local lastHarvestPromptRestoreAt = 0
 
 local stats = {
 	fruitTargetsChecked = 0,
@@ -3478,9 +3479,6 @@ function addFruitTarget(targets, seenTargets, prompt, target)
 	if not target then
 		return
 	end
-	if not fruitAllowedByWeight(target) then
-		return
-	end
 
 	local key = target or prompt
 	if seenTargets[key] then
@@ -3664,6 +3662,9 @@ function collectFruitEntryFast(entry, heavy, verifyEach)
 
 	local target = entry.target
 	local prompt = entry.prompt
+	if target and not fruitAllowedByWeight(target) and (not prompt or not fruitAllowedByWeight(prompt)) then
+		return false, false
+	end
 
 	local beforeInventoryCount = verifyEach and countHarvestInventoryItems() or nil
 	local fired = false
@@ -3754,7 +3755,9 @@ function collectFruit()
 		return
 	end
 
-	if state.performanceMode then
+	local now = os.clock()
+	if state.performanceMode or now - lastHarvestPromptRestoreAt >= 2 then
+		lastHarvestPromptRestoreAt = now
 		restoreOwnGardenAutomationPrompts()
 	end
 
@@ -3768,6 +3771,7 @@ function collectFruit()
 	local targets, totalCached = getFruitTargetBatch(roots)
 
 	if #targets == 0 then
+		restoreOwnGardenAutomationPrompts()
 		fruitTargetCache.refreshedAt = 0
 		targets = rebuildFruitTargetCache(roots, true)
 		totalCached = #targets
