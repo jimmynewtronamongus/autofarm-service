@@ -6195,7 +6195,7 @@ function buyPets()
 	end
 
 	local bought = 0
-	local attempts = 0
+	local attempted = 0
 	local lastMessage = "Auto pets: no pets selected"
 	local boughtLines = {}
 	local skippedUnavailable = {}
@@ -6207,11 +6207,12 @@ function buyPets()
 			return
 		end
 		if petIsAvailableForBuy(petName, availablePets) then
-			if attempts >= CONFIG.maxPetBuyPerTick then
+			if bought >= CONFIG.maxPetBuyPerTick then
 				break
 			end
 
 			local ok, message, petInfo = buyOnePet(petName)
+			attempted += 1
 			lastMessage = message
 			if ok then
 				bought += 1
@@ -6220,7 +6221,6 @@ function buyPets()
 				end
 				task.wait(0.12)
 			end
-			attempts += 1
 		else
 			table.insert(skippedUnavailable, petName)
 			lastMessage = ("Auto pets: %s is selected but not currently spawned"):format(petName)
@@ -6237,7 +6237,7 @@ function buyPets()
 		setStatus(("Auto pets: verified %d purchase(s)"):format(bought))
 	elseif #selectedList == 0 then
 		setStatus("Auto pets: no pets selected")
-	elseif attempts == 0 and #skippedUnavailable > 0 then
+	elseif attempted == 0 and #skippedUnavailable > 0 then
 		setStatus(("Auto pets: selected pet(s) not spawned: %s"):format(table.concat(skippedUnavailable, ", ")))
 	else
 		setStatus(lastMessage)
