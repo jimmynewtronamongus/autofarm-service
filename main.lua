@@ -3484,18 +3484,10 @@ function triggerAnyPrompt(prompt)
 	pcall(function()
 		holdSeconds = math.clamp(tonumber(prompt.HoldDuration) or 0, 0, 2) + 0.05
 	end)
-	local fired = false
 	if typeof(fireproximityprompt) == "function" then
-		for _, args in ipairs({
-			{ prompt, holdSeconds, true },
-			{ prompt, math.max(1, holdSeconds), true },
-			{ prompt, 1, true },
-			{ prompt, 0, true },
-			{ prompt },
-		}) do
-			local ok = pcall(fireproximityprompt, unpackArgs(args))
-			fired = fired or ok
-			task.wait(0.04)
+		local fired = pcall(fireproximityprompt, prompt, holdSeconds, true)
+		if fired then
+			return true
 		end
 	end
 
@@ -3506,7 +3498,7 @@ function triggerAnyPrompt(prompt)
 	local ended = pcall(function()
 		prompt:InputHoldEnd()
 	end)
-	return fired or began or ended
+	return began or ended
 end
 
 function getTargetPart(target)
@@ -4955,24 +4947,25 @@ end
 
 function movePlantTarget(plant, targetPosition)
 	if not plant or not plant.Parent or not targetPosition then
-		return false
+		return false, "invalid plant target"
 	end
 
 	plant = getPlantModel(plant)
 	if not plant or not plant.Parent then
-		return false
+		return false, "plant model unavailable"
 	end
 
 	local tool = getTrowelTool()
 	if not tool then
-		return false
+		return false, "no trowel found in inventory"
 	end
 
 	local plantId = getInstancePacketId(plant)
 	if plantId == nil then
-		return false
+		return false, "plant UUID unavailable"
 	end
 	plantId = tostring(plantId)
+	local plantKey = tostring(plant.Name)
 
 	local character = getCharacter()
 	local humanoid = getHumanoid()
@@ -4981,20 +4974,36 @@ function movePlantTarget(plant, targetPosition)
 		task.wait(0.08)
 	end
 
-	local typedOk = sendTypedPacketArgVariants("MovePlant", { "String", "Vector3" }, {
+	local actions = 0
+	local typedStringOk, typedStringCount = sendTypedPacketArgVariants("MovePlant", { "String", "Vector3" }, {
+		{ plantKey, targetPosition },
 		{ plantId, targetPosition },
-		{ plant.Name, targetPosition },
 	})
-	if typedOk then
-		return true
+	if typedStringOk then
+		actions += typedStringCount or 1
+	end
+	local typedInstanceOk, typedInstanceCount = sendTypedPacketArgVariants("MovePlant", { "Instance", "Vector3" }, {
+		{ plant, targetPosition },
+	})
+	if typedInstanceOk then
+		actions += typedInstanceCount or 1
+	end
+	if sendPacket("MovePlant", plantKey, targetPosition) then
+		actions += 1
 	end
 	if sendPacket("MovePlant", plantId, targetPosition) then
-		return true
+		actions += 1
 	end
-	if sendPacket("MovePlant", plant.Name, targetPosition) then
-		return true
+	if sendPacket("MovePlant", plant, targetPosition) then
+		actions += 1
 	end
-	return sendRawStringVector3Packet("MovePlant", plantId, targetPosition)
+	if actions == 0 and sendRawStringVector3Packet("MovePlant", plantKey, targetPosition) then
+		actions += 1
+	end
+	if actions == 0 and sendRawStringVector3Packet("MovePlant", plantId, targetPosition) then
+		actions += 1
+	end
+	return actions > 0, actions > 0 and ("%d MovePlant request(s)"):format(actions) or "MovePlant packet unavailable"
 end
 
 function plantReachedTargetOrMoved(plant, beforePosition, targetPosition)
@@ -5038,6 +5047,8 @@ function autoMovePlants()
 	local moved = 0
 	local checked = 0
 	local seen = {}
+	local requested = 0
+	local lastFailure = "no matching plants found"
 	for _, root in ipairs(getOwnGardenRoots()) do
 		for _, descendant in ipairs(getCachedDescendants("movePlants", root, CONFIG.cacheRefreshInterval)) do
 			if not isEnabled("autoMovePlants") then
@@ -5057,8 +5068,12 @@ function autoMovePlants()
 				if beforePosition and (beforePosition - plantTargetPosition).Magnitude <= 2.5 then
 					continue
 				end
-				if movePlantTarget(plant, plantTargetPosition) then
+				local sent, detail = movePlantTarget(plant, plantTargetPosition)
+				if sent then
+					requested += 1
 					task.wait(0.7)
+				else
+					lastFailure = detail or lastFailure
 				end
 				if plantReachedTargetOrMoved(plant, beforePosition, plantTargetPosition) then
 					moved += 1
@@ -5073,8 +5088,10 @@ function autoMovePlants()
 
 	if moved > 0 then
 		setStatus(("Move plants: moved %d matching plant(s)"):format(moved))
+	elseif requested > 0 then
+		setStatus(("Move plants: sent %d request(s), server made no move"):format(requested))
 	elseif checked > 0 then
-		setStatus("Move plants: remote made no verified move")
+		setStatus("Move plants: " .. lastFailure)
 	else
 		setStatus("Move plants: no matching plants found")
 	end
@@ -5813,9 +5830,9 @@ function walkToPetPrompt(model, prompt)
 		return false
 	end
 
-	local stopDistance = CONFIG.petWalkDistance
+	local stopDistance = math.min(CONFIG.petWalkDistance, 5.5)
 	pcall(function()
-		stopDistance = math.max(3, math.min(stopDistance, (tonumber(prompt.MaxActivationDistance) or stopDistance) - 1))
+		stopDistance = math.max(3, math.min(stopDistance, (tonumber(prompt.MaxActivationDistance) or stopDistance) - 2))
 	end)
 	local reached = walkToDynamicPosition(function()
 		if not model.Parent or not prompt.Parent or not model:IsDescendantOf(workspace) then
@@ -5835,18 +5852,49 @@ function buyPetRemote(petName, model, prompt)
 	end
 
 	local spawnId = getPetSpawnId(model, prompt)
-	if sendRawInstancePacket("WildPetTame", model) then
-		return true
-	end
-	if sendTypedPacketArgVariants("WildPetTame", { "Instance" }, { { model } }) then
-		return true
-	end
+	local sent = sendPacket("WildPetTame", model)
 	if spawnId ~= nil then
-		return sendPacketArgVariants("WildPetTame", {
+		local idSent = sendPacketArgVariants("WildPetTame", {
 			{ spawnId },
 			{ { SpawnId = spawnId } },
 			{ { Id = spawnId } },
 		})
+		sent = sent or idSent
+	end
+	if not sent then
+		sent = sendRawInstancePacket("WildPetTame", model)
+	end
+	return sent
+end
+
+function tryVerifiedPetRemote(model, prompt)
+	local spawnId = getPetSpawnId(model, prompt)
+	local attempts = {
+		function()
+			return sendPacket("WildPetTame", model)
+		end,
+	}
+	if spawnId ~= nil then
+		table.insert(attempts, function()
+			return sendPacket("WildPetTame", spawnId)
+		end)
+		table.insert(attempts, function()
+			return sendPacket("WildPetTame", { SpawnId = spawnId })
+		end)
+	end
+	table.insert(attempts, function()
+		return sendRawInstancePacket("WildPetTame", model)
+	end)
+
+	for _, attempt in ipairs(attempts) do
+		local beforeInventoryCount = countInventoryTools()
+		local beforeSheckles = refreshCurrencyStats(true)
+		if attempt() then
+			local changed = purchaseChanged(beforeInventoryCount, beforeSheckles)
+			if changed then
+				return true
+			end
+		end
 	end
 	return false
 end
@@ -5894,16 +5942,28 @@ function buyOnePet(petName)
 		local model = candidate.model
 		local prompt = candidate.prompt
 		local walked = walkToPetPrompt(model, prompt)
-		local prompted = walked and triggerAnyPrompt(prompt)
-		local remoteRequested = not prompted and buyPetRemote(petName, model, prompt)
-		if prompted or remoteRequested then
-			markPetSpawnHandled(model, prompt, prompted and 4 or 2)
-			local mode = prompted and "walk prompt" or "remote"
-			return true, ("Auto pets: %s requested %s"):format(mode, petName), getPetPurchaseInfo(petName, model, prompt)
+		if walked then
+			local beforeInventoryCount = countInventoryTools()
+			local beforeSheckles = refreshCurrencyStats(true)
+			if triggerAnyPrompt(prompt) then
+				local changed = purchaseChanged(beforeInventoryCount, beforeSheckles)
+				if changed then
+					markPetSpawnHandled(model, prompt, 20)
+					return true, ("Auto pets: bought %s by prompt"):format(petName), getPetPurchaseInfo(petName, model, prompt)
+				end
+			end
+		end
+
+		if tryVerifiedPetRemote(model, prompt) then
+			markPetSpawnHandled(model, prompt, 20)
+			return true, ("Auto pets: bought %s by remote"):format(petName), getPetPurchaseInfo(petName, model, prompt)
 		end
 	end
 
-	return false, ("Auto pets: no exact available spawn for %s"):format(petName)
+	if #candidates == 0 then
+		return false, ("Auto pets: no exact available spawn for %s"):format(petName)
+	end
+	return false, ("Auto pets: matched %d %s spawn(s), purchase made no change"):format(#candidates, petName)
 end
 
 function buyPets()
@@ -5924,19 +5984,12 @@ function buyPets()
 			break
 		end
 
-		local beforeInventoryCount = countInventoryTools()
-		local beforeSheckles = refreshCurrencyStats(true)
 		local ok, message, petInfo = buyOnePet(petName)
 		lastMessage = message
 		if ok then
-			local changed = purchaseChanged(beforeInventoryCount, beforeSheckles)
-			if changed then
-				bought += 1
-				if petInfo then
-					table.insert(boughtLines, ("Bought pet: `%s` | Variant: `%s`"):format(petInfo.name or petName, petInfo.variant or "Normal"))
-				end
-			else
-				lastMessage = "Auto pets: no verified purchase for " .. petName
+			bought += 1
+			if petInfo then
+				table.insert(boughtLines, ("Bought pet: `%s` | Variant: `%s`"):format(petInfo.name or petName, petInfo.variant or "Normal"))
 			end
 			task.wait(0.12)
 		end
@@ -7357,6 +7410,7 @@ end
 local wildPetSpawnsForBuy = getWildPetSpawns()
 if wildPetSpawnsForBuy then
 	wildPetSpawnsForBuy.DescendantAdded:Connect(function(descendant)
+		cache.wildPetsAt = 0
 		local model
 		if descendant:IsA("ProximityPrompt") then
 			model = descendant:FindFirstAncestorWhichIsA("Model")
@@ -7379,8 +7433,10 @@ if mapForPetBuy then
 	mapForPetBuy.ChildAdded:Connect(function(child)
 		if child.Name == "WildPetSpawns" then
 			task.wait(0.25)
+			cache.wildPetsAt = 0
 			scanPetBuyNames()
 			child.DescendantAdded:Connect(function(descendant)
+				cache.wildPetsAt = 0
 				local model
 				if descendant:IsA("ProximityPrompt") then
 					model = descendant:FindFirstAncestorWhichIsA("Model")
