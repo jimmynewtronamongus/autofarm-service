@@ -524,6 +524,7 @@ function getStockItemEmoji(shopName, itemName)
 		["sunflower"] = "🌻",
 		["moon bloom"] = "🌙",
 		["poison apple"] = "🍏",
+		["trowel"] = "🔧",
 		["teleporter"] = "🛰️",
 		["flashbang"] = "💣",
 		["basic pot"] = "📦",
@@ -4345,6 +4346,7 @@ function isKnownGearTool(item)
 	for _, word in ipairs({
 		"watering can",
 		"sprinkler",
+		"trowel",
 		"wheelbarrow",
 		"gnome",
 		"lantern",
