@@ -493,6 +493,8 @@ function recordStockPredictionCycle(shopName, restockUnix)
 						local gap = math.max(1, math.floor(((restockUnix - previousHit) / math.max(cycleSeconds, 1)) + 0.5))
 						history.gapTotal = math.max(0, tonumber(history.gapTotal) or 0) + gap
 						history.gapCount = math.max(0, tonumber(history.gapCount) or 0) + 1
+						history.gapMin = math.min(tonumber(history.gapMin) or gap, gap)
+						history.gapMax = math.max(tonumber(history.gapMax) or gap, gap)
 					end
 					history.lastHitRestock = restockUnix
 					if stockAmount > 0 then
@@ -560,42 +562,38 @@ function getStockPredictionEstimate(shopName, itemName, nextRestock)
 	local observations = math.max(0, tonumber(history.observations) or 0)
 	local hits = math.max(0, tonumber(history.hits) or 0)
 	local probability = observations > 0 and math.clamp(hits / observations, 0, 1) or nil
-	local cycles = 1
-	local likelyUnix = nextRestock
-
-	if probability and probability > 0 then
-		cycles = probability >= 1 and 1 or math.max(1, math.ceil(math.log(0.35) / math.log(1 - probability)))
-		likelyUnix = nextRestock + ((cycles - 1) * cycleSeconds)
-	end
-
 	local gapCount = math.max(0, tonumber(history.gapCount) or 0)
 	local gapTotal = math.max(0, tonumber(history.gapTotal) or 0)
 	local lastHitRestock = tonumber(history.lastHitRestock)
-	if gapCount > 0 and lastHitRestock then
-		local averageGap = math.max(1, math.floor((gapTotal / gapCount) + 0.5))
-		likelyUnix = lastHitRestock + (averageGap * cycleSeconds)
-		while likelyUnix < nextRestock do
-			likelyUnix += averageGap * cycleSeconds
-		end
-		cycles = math.max(1, math.floor(((likelyUnix - nextRestock) / cycleSeconds) + 0.5) + 1)
+	if hits <= 0 then
+		return nil, probability, hits, observations, nil, "never_seen"
+	end
+	if hits < 2 or gapCount <= 0 or not lastHitRestock then
+		return nil, probability, hits, observations, nil, "needs_more_sightings"
 	end
 
-	return likelyUnix, probability, hits, observations, cycles
+	local averageGap = math.max(1, math.floor((gapTotal / gapCount) + 0.5))
+	local likelyUnix = lastHitRestock + (averageGap * cycleSeconds)
+	while likelyUnix < nextRestock do
+		likelyUnix += averageGap * cycleSeconds
+	end
+	local cycles = math.max(1, math.floor(((likelyUnix - nextRestock) / cycleSeconds) + 0.5) + 1)
+	return likelyUnix, probability, hits, observations, cycles, "learned"
 end
 
-function getStockPredictionConfidenceText(probability, hits, observations, cycles)
+function getStockPredictionConfidenceText(probability, hits, observations, cycles, status)
 	observations = math.max(0, tonumber(observations) or 0)
 	hits = math.max(0, tonumber(hits) or 0)
 	cycles = math.max(1, tonumber(cycles) or 1)
 
-	if observations <= 0 then
-		return "learning"
+	if status == "never_seen" or hits <= 0 then
+		return observations > 0 and ("never seen in %d checks"):format(observations) or "no data yet"
+	end
+	if status == "needs_more_sightings" then
+		return ("seen %d/%d, learning pattern"):format(hits, observations)
 	end
 
 	local rateText = ("%.0f%%"):format(math.clamp((probability or 0) * 100, 0, 100))
-	if hits <= 0 then
-		return ("0/%d observed"):format(observations)
-	end
 	if cycles > 1 then
 		return ("%s observed, ~%d cycles"):format(rateText, cycles)
 	end
@@ -617,13 +615,13 @@ function buildLegacyStockPredictionEmbed(shopName)
 			if not string.find(string.lower(item.Name), "template", 1, true) then
 				local emoji = getStockItemEmoji(shopName, item.Name)
 				local amount = getShopStockAmount and getShopStockAmount(shopName, item.Name) or 0
-				local likelyUnix, probability, hits, observations = getStockPredictionEstimate(shopName, item.Name, nextRestock)
+				local likelyUnix, probability, hits, observations, _, status = getStockPredictionEstimate(shopName, item.Name, nextRestock)
 				if amount > 0 then
 					table.insert(currentStock, {
 						name = item.Name,
 						line = ("• %s **%s** `x%d`"):format(emoji, item.Name, amount),
 					})
-				elseif observations >= 3 and hits > 0 then
+				elseif likelyUnix and status == "learned" then
 					table.insert(upcoming, {
 						name = item.Name,
 						time = likelyUnix,
@@ -692,23 +690,34 @@ function buildStockPredictionEmbed(shopName)
 	end
 
 	local predictions = {}
+	local learning = {}
 	local items = getStockItemsFolder and getStockItemsFolder(shopName)
 	if items then
 		for _, item in ipairs(items:GetChildren()) do
 			if not string.find(string.lower(item.Name), "template", 1, true) then
 				local emoji = getStockItemEmoji(shopName, item.Name)
-				local likelyUnix, probability, hits, observations, cycles = getStockPredictionEstimate(shopName, item.Name, nextRestock)
-				table.insert(predictions, {
-					name = item.Name,
-					time = likelyUnix,
-					line = ("- %s **%s**: <t:%d:F> (<t:%d:R>) `%s`"):format(
-						emoji,
-						item.Name,
-						likelyUnix,
-						likelyUnix,
-						getStockPredictionConfidenceText(probability, hits, observations, cycles)
-					),
-				})
+				local likelyUnix, probability, hits, observations, cycles, status = getStockPredictionEstimate(shopName, item.Name, nextRestock)
+				local confidence = getStockPredictionConfidenceText(probability, hits, observations, cycles, status)
+				if likelyUnix and status == "learned" then
+					table.insert(predictions, {
+						name = item.Name,
+						time = likelyUnix,
+						line = ("- %s **%s**: <t:%d:F> (<t:%d:R>) `%s`"):format(
+							emoji,
+							item.Name,
+							likelyUnix,
+							likelyUnix,
+							confidence
+						),
+					})
+				else
+					table.insert(learning, {
+						name = item.Name,
+						hits = hits,
+						observations = observations,
+						line = ("- %s **%s**: `%s`"):format(emoji, item.Name, confidence),
+					})
+				end
 			end
 		end
 	end
@@ -716,6 +725,15 @@ function buildStockPredictionEmbed(shopName)
 	table.sort(predictions, function(left, right)
 		if left.time ~= right.time then
 			return left.time < right.time
+		end
+		return left.name < right.name
+	end)
+	table.sort(learning, function(left, right)
+		if left.hits ~= right.hits then
+			return left.hits > right.hits
+		end
+		if left.observations ~= right.observations then
+			return left.observations > right.observations
 		end
 		return left.name < right.name
 	end)
@@ -727,13 +745,24 @@ function buildStockPredictionEmbed(shopName)
 		end
 		table.insert(predictionLines, entry.line)
 	end
+	local learningLines = {}
+	for index, entry in ipairs(learning) do
+		if index > 12 then
+			break
+		end
+		table.insert(learningLines, entry.line)
+	end
 
 	local isSeed = shopName == "SeedShop"
 	local description = table.concat({
-		"Exact shop timer; each item shows the next predicted time it will stock again.",
+		"Exact shop timer. Forecasts only show after an item has enough observed appearances to learn a repeat gap.",
 		("Next shop refresh: <t:%d:F> (<t:%d:R>)"):format(nextRestock, nextRestock),
 		"",
-		#predictionLines > 0 and table.concat(predictionLines, "\n") or "- No stock items found",
+		"**Forecasts**",
+		#predictionLines > 0 and table.concat(predictionLines, "\n") or "- No learned forecasts yet",
+		"",
+		"**Learning / No Forecast**",
+		#learningLines > 0 and table.concat(learningLines, "\n") or "- All listed items have learned forecasts",
 	}, "\n")
 
 	return {
