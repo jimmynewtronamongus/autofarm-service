@@ -22,7 +22,6 @@ CONFIG = {
 	sellCooldown = 1.0,
 	sellResumeFreeSlots = 8,
 	buyInterval = 1.5,
-	mailInterval = 6.0,
 	petSellInterval = 5.0,
 	petBuyInterval = 0.6,
 	petWalkDistance = 10.5,
@@ -68,7 +67,6 @@ state = {
 	sellWhenFull = true,
 	autoBuySeeds = false,
 	autoBuyGear = false,
-	autoAcceptMail = false,
 	autoBuyPets = false,
 	autoSellPets = false,
 	performanceMode = false,
@@ -156,7 +154,6 @@ function loadConfig()
 		"sellWhenFullInterval",
 		"sellResumeFreeSlots",
 		"buyInterval",
-		"mailInterval",
 		"petSellInterval",
 		"maxFruitCollectWeight",
 		"petSellMutationFilter",
@@ -175,7 +172,6 @@ function loadConfig()
 		"sellWhenFull",
 		"autoBuySeeds",
 		"autoBuyGear",
-		"autoAcceptMail",
 		"autoBuyPets",
 		"autoSellPets",
 		"performanceMode",
@@ -213,7 +209,6 @@ saveConfig = function()
 			sellWhenFullInterval = CONFIG.sellWhenFullInterval,
 			sellResumeFreeSlots = CONFIG.sellResumeFreeSlots,
 			buyInterval = CONFIG.buyInterval,
-			mailInterval = CONFIG.mailInterval,
 			petSellInterval = CONFIG.petSellInterval,
 			maxFruitCollectWeight = CONFIG.maxFruitCollectWeight,
 			petSellMutationFilter = CONFIG.petSellMutationFilter,
@@ -232,7 +227,6 @@ saveConfig = function()
 			sellWhenFull = state.sellWhenFull,
 			autoBuySeeds = state.autoBuySeeds,
 			autoBuyGear = state.autoBuyGear,
-			autoAcceptMail = state.autoAcceptMail,
 			autoBuyPets = state.autoBuyPets,
 			autoSellPets = state.autoSellPets,
 			performanceMode = state.performanceMode,
@@ -862,8 +856,6 @@ local stats = {
 	gearBought = 0,
 	petsBought = 0,
 	petsSold = 0,
-	mailClaimed = 0,
-	mailChecks = 0,
 	sheckles = 0,
 	startSheckles = nil,
 	shecklesFarmed = 0,
@@ -2845,8 +2837,6 @@ function buildStatsSnapshot()
 		gearBought = stats.gearBought,
 		petsBought = stats.petsBought,
 		petsSold = stats.petsSold,
-		mailClaimed = stats.mailClaimed,
-		mailChecks = stats.mailChecks,
 		inventoryItems = stats.inventoryItems,
 		inventoryCapacity = stats.inventoryCapacity,
 		freeSlots = freeSlots,
@@ -2861,7 +2851,6 @@ function buildStatsWebhookDescription(snapshot)
 		("Sheckles farmed since start: `+%s`"):format(formatNumber(snapshot.shecklesFarmed)),
 		("Fruit collected: `%s` (`%s/min`)"):format(formatNumber(snapshot.fruitCollected), formatNumber(snapshot.fruitRate)),
 		("Bought: `%s` seeds | `%s` gear | `%s` pets"):format(formatNumber(snapshot.seedsBought), formatNumber(snapshot.gearBought), formatNumber(snapshot.petsBought)),
-		("Mail: `%s` claimed across `%s` check(s)"):format(formatNumber(snapshot.mailClaimed), formatNumber(snapshot.mailChecks)),
 		("Pets sold: `%s`"):format(formatNumber(snapshot.petsSold)),
 		("Inventory: `%s/%s` (`%s` free)%s"):format(formatNumber(snapshot.inventoryItems), formatNumber(snapshot.inventoryCapacity), formatNumber(snapshot.freeSlots), snapshot.inventoryFull and " FULL" or ""),
 		("Enabled systems: `%d`"):format(snapshot.enabled),
@@ -2981,12 +2970,10 @@ function updateStatsUI()
 				label.Text = ("Farmed this run: +%s sheckles"):format(formatNumber(snapshot.shecklesFarmed))
 			elseif key == "collect" then
 				label.Text = ("Fruit: %s total | %s/min"):format(formatNumber(snapshot.fruitCollected), formatNumber(snapshot.fruitRate))
-			elseif key == "mail" then
-				label.Text = ("Mail: %s claimed | %s checks"):format(formatNumber(snapshot.mailClaimed), formatNumber(snapshot.mailChecks))
 			elseif key == "shops" then
 				label.Text = ("Bought: %s seeds | %s gear | %s pets | Sold pets: %s"):format(formatNumber(snapshot.seedsBought), formatNumber(snapshot.gearBought), formatNumber(snapshot.petsBought), formatNumber(snapshot.petsSold))
 			elseif key == "limits" then
-				label.Text = ("Inv: %s/%s (%s free)%s | Mail: %s/%s"):format(formatNumber(snapshot.inventoryItems), formatNumber(snapshot.inventoryCapacity), formatNumber(snapshot.freeSlots), snapshot.inventoryFull and " FULL" or "", formatNumber(snapshot.mailClaimed), formatNumber(snapshot.mailChecks))
+				label.Text = ("Inv: %s/%s (%s free)%s"):format(formatNumber(snapshot.inventoryItems), formatNumber(snapshot.inventoryCapacity), formatNumber(snapshot.freeSlots), snapshot.inventoryFull and " FULL" or "")
 			end
 		end
 	end
@@ -4974,91 +4961,6 @@ function useToolAtPosition(tool, position, holdSeconds)
 	return activateToolOnly(tool)
 end
 
-function autoAcceptMail()
-	if not isEnabled("autoAcceptMail") then
-		return
-	end
-	stats.mailChecks += 1
-	local actions = 0
-	local beforeInventoryCount = countInventoryTools()
-
-	if sendExactPacket("MailboxList") then
-		actions += 1
-	end
-	if sendExactPacket("MailboxOpenInbox") then
-		actions += 1
-	end
-	local openOk, openCount = sendPacketArgVariants("MailboxOpenInbox", {
-		{},
-		{ true },
-		{ "Inbox" },
-		{ localPlayer },
-		{ { Player = localPlayer } },
-	})
-	if openOk then
-		actions += openCount or 1
-	end
-	if sendExactPacket("MailboxClaim") then
-		actions += 1
-	end
-	local claimAllOk, claimAllCount = sendPacketArgVariants("MailboxClaim", {
-		{},
-		{ true },
-		{ "All" },
-		{ "Inbox" },
-		{ localPlayer },
-		{ { ClaimAll = true } },
-		{ { All = true } },
-		{ { Player = localPlayer } },
-	})
-	if claimAllOk then
-		actions += claimAllCount or 1
-	end
-	for index = 1, 50 do
-		if sendTypedPacketExact("MailboxClaim", { "NumberU8" }, index) then
-			actions += 1
-		end
-		if sendTypedPacketExact("MailboxClaim", { "NumberU16" }, index) then
-			actions += 1
-		end
-		if sendTypedPacketExact("MailboxClaim", { "NumberU32" }, index) then
-			actions += 1
-		end
-		if sendTypedPacketExact("MailboxClaim", { "String" }, tostring(index)) then
-			actions += 1
-		end
-		if sendExactPacket("MailboxClaim", index) then
-			actions += 1
-		end
-		if sendExactPacket("MailboxClaim", tostring(index)) then
-			actions += 1
-		end
-		local indexOk, indexCount = sendPacketArgVariants("MailboxClaim", {
-			{ index },
-			{ tostring(index) },
-			{ { Index = index } },
-			{ { Id = index } },
-			{ { ID = index } },
-			{ { MailId = index } },
-			{ { MailID = index } },
-			{ { InboxIndex = index } },
-		})
-		if indexOk then
-			actions += indexCount or 1
-		end
-	end
-	task.wait(0.25)
-
-	local afterInventoryCount = countInventoryTools()
-	local claimed = math.max((afterInventoryCount or 0) - (beforeInventoryCount or 0), 0)
-	if claimed > 0 then
-		stats.mailClaimed += claimed
-		refreshInventoryStats(true)
-		updateStatsUI()
-	end
-	setStatus(("Mail: remote checked (%d action(s)), inventory +%d"):format(actions, claimed))
-end
-
 function applyPlayerVisualSettings()
 	local changed = 0
 	local ownGui = playerGui:FindFirstChild("GardenAutomationGui")
@@ -6525,7 +6427,6 @@ setBuildTab("Shops")
 makeSectionLabel("Shops", 1)
 makeToggle("Auto Buy Seeds", "autoBuySeeds", 2)
 makeToggle("Auto Buy Gear", "autoBuyGear", 3)
-makeToggle("Auto Accept Mail", "autoAcceptMail", 4)
 setBuildTab("Settings")
 makeSectionLabel("Settings", 1)
 makeToggle("Performance Mode", "performanceMode", 2)
@@ -6667,9 +6568,8 @@ makeStatsLabel("status", 1)
 makeStatsLabel("systems", 2)
 makeStatsLabel("inventory", 3)
 makeStatsLabel("collect", 4)
-makeStatsLabel("mail", 5)
-makeStatsLabel("shops", 6)
-makeStatsLabel("limits", 7)
+makeStatsLabel("shops", 5)
+makeStatsLabel("limits", 6)
 refreshInventoryStats()
 updateStatsUI()
 
@@ -7338,7 +7238,6 @@ timers = {
 	fruitCollector = 0,
 	autoSell = 0,
 	sellWhenFull = 0,
-	autoAcceptMail = 0,
 	autoBuySeeds = 0,
 	autoBuyGear = 0,
 	autoBuyPets = 0,
@@ -7411,7 +7310,6 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	timers.fruitCollector = state.fruitCollector and (timers.fruitCollector + deltaTime) or 0
 	timers.autoSell = state.autoSell and (timers.autoSell + deltaTime) or 0
 	timers.sellWhenFull = state.sellWhenFull and (timers.sellWhenFull + deltaTime) or 0
-	timers.autoAcceptMail = state.autoAcceptMail and (timers.autoAcceptMail + deltaTime) or 0
 	timers.autoBuySeeds = state.autoBuySeeds and (timers.autoBuySeeds + deltaTime) or 0
 	timers.autoBuyGear = state.autoBuyGear and (timers.autoBuyGear + deltaTime) or 0
 	timers.autoBuyPets = state.autoBuyPets and (timers.autoBuyPets + deltaTime) or 0
@@ -7461,12 +7359,6 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	elseif not hasSellableInventory then
 		timers.autoSell = 0
 		timers.sellWhenFull = 0
-	end
-
-	if state.autoAcceptMail and timers.autoAcceptMail >= CONFIG.mailInterval then
-		if tryRun("autoAcceptMail", autoAcceptMail) then
-			timers.autoAcceptMail = 0
-		end
 	end
 
 	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval then
