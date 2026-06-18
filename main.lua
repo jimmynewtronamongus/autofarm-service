@@ -3191,6 +3191,19 @@ function purchaseChanged(beforeInventoryCount, beforeSheckles)
 		afterSheckles
 end
 
+function waitForPurchaseChanged(beforeInventoryCount, beforeSheckles, timeoutSeconds)
+	local deadline = os.clock() + (timeoutSeconds or 2.5)
+	local changed, afterInventoryCount, afterSheckles = purchaseChanged(beforeInventoryCount, beforeSheckles)
+	while not changed and os.clock() < deadline do
+		task.wait(0.25)
+		afterInventoryCount = countInventoryTools()
+		afterSheckles = refreshCurrencyStats(true)
+		changed = (afterInventoryCount and beforeInventoryCount and afterInventoryCount > beforeInventoryCount)
+			or (afterSheckles and beforeSheckles and afterSheckles < beforeSheckles)
+	end
+	return changed, afterInventoryCount, afterSheckles
+end
+
 function shouldPauseFruitCollection()
 	if not (state.sellWhenFull or state.autoSell) then
 		return false
@@ -5773,6 +5786,34 @@ function getPetSpawnId(model, prompt)
 		or (model and model.Name)
 end
 
+function getPetRemoteInstances(model, prompt)
+	local instances = {}
+	local seen = {}
+	local function add(instance)
+		if typeof(instance) == "Instance" and not seen[instance] then
+			seen[instance] = true
+			table.insert(instances, instance)
+		end
+	end
+
+	add(prompt)
+	add(prompt and prompt.Parent)
+	add(model)
+	local rootPart = model and model:FindFirstChild("RootPart")
+	add(rootPart)
+	local primaryPart = model and model.PrimaryPart
+	add(primaryPart)
+	return instances
+end
+
+function buildSingleArgVariants(values)
+	local variants = {}
+	for _, value in ipairs(values or {}) do
+		table.insert(variants, { value })
+	end
+	return variants
+end
+
 function getPetBuyAliases(petName, model, prompt)
 	local aliases = {}
 	local seen = {}
@@ -5988,7 +6029,13 @@ function buyPetRemote(petName, model, prompt)
 	end
 
 	local spawnId = getPetSpawnId(model, prompt)
-	local sent = sendPacket("WildPetTame", model)
+	local sent = false
+	local instances = getPetRemoteInstances(model, prompt)
+	local instanceVariants = buildSingleArgVariants(instances)
+	local typedOk = sendTypedPacketArgVariants("WildPetTame", { "Instance" }, instanceVariants)
+	sent = sent or typedOk
+	local instanceOk = sendPacketArgVariants("WildPetTame", instanceVariants)
+	sent = sent or instanceOk
 	if spawnId ~= nil then
 		local idSent = sendPacketArgVariants("WildPetTame", {
 			{ spawnId },
@@ -5998,18 +6045,24 @@ function buyPetRemote(petName, model, prompt)
 		sent = sent or idSent
 	end
 	if not sent then
-		sent = sendRawInstancePacket("WildPetTame", model)
+		local rawOk = sendRawInstanceVariants("WildPetTame", instances)
+		sent = sent or rawOk
 	end
 	return sent
 end
 
 function tryVerifiedPetRemote(model, prompt)
 	local spawnId = getPetSpawnId(model, prompt)
-	local attempts = {
-		function()
-			return sendPacket("WildPetTame", model)
-		end,
-	}
+	local attempts = {}
+	for _, instance in ipairs(getPetRemoteInstances(model, prompt)) do
+		table.insert(attempts, function()
+			return sendTypedPacketArgVariants("WildPetTame", { "Instance" }, { { instance } })
+				or sendExactPacket("WildPetTame", instance)
+				or sendPacket("WildPetTame", instance)
+				or sendRawInstancePacket("WildPetTame", instance)
+				or sendRawAnyInstancePacket("WildPetTame", instance)
+		end)
+	end
 	if spawnId ~= nil then
 		table.insert(attempts, function()
 			return sendPacket("WildPetTame", spawnId)
@@ -6018,15 +6071,12 @@ function tryVerifiedPetRemote(model, prompt)
 			return sendPacket("WildPetTame", { SpawnId = spawnId })
 		end)
 	end
-	table.insert(attempts, function()
-		return sendRawInstancePacket("WildPetTame", model)
-	end)
 
 	for _, attempt in ipairs(attempts) do
 		local beforeInventoryCount = countInventoryTools()
 		local beforeSheckles = refreshCurrencyStats(true)
 		if attempt() then
-			local changed = purchaseChanged(beforeInventoryCount, beforeSheckles)
+			local changed = waitForPurchaseChanged(beforeInventoryCount, beforeSheckles, 2.5)
 			if changed then
 				return true
 			end
@@ -6083,7 +6133,7 @@ function buyOnePet(petName)
 			local beforeInventoryCount = countInventoryTools()
 			local beforeSheckles = refreshCurrencyStats(true)
 			if triggerAnyPrompt(prompt) then
-				local changed = purchaseChanged(beforeInventoryCount, beforeSheckles)
+				local changed = waitForPurchaseChanged(beforeInventoryCount, beforeSheckles, 3.0)
 				if changed then
 					markPetSpawnHandled(model, prompt, 20)
 					return true, ("Auto pets: bought %s by prompt"):format(petName), getPetPurchaseInfo(petName, model, prompt)
