@@ -13,10 +13,10 @@ localPlayer = Players.LocalPlayer
 playerGui = localPlayer:WaitForChild("PlayerGui")
 
 CONFIG = {
-	collectInterval = 0.45,
+	collectInterval = 0.15,
 	sellInterval = 12.0,
 	sellWhenFullInterval = 1.5,
-	schedulerInterval = 0.25,
+	schedulerInterval = 0.1,
 	maxSellAttempts = 2,
 	sellCooldown = 3.0,
 	sellResumeFreeSlots = 8,
@@ -30,11 +30,11 @@ CONFIG = {
 	cacheRefreshInterval = 25.0,
 	inventoryRefreshInterval = 1.0,
 	guiInventoryRefreshInterval = 30.0,
-	maxFruitCollectPerTick = 14,
-	maxFruitScanPerRoot = 550,
-	fruitCacheRefreshInterval = 1.25,
-	maxFruitTargetsCached = 320,
-	maxFruitPromptFallbackPerTick = 8,
+	maxFruitCollectPerTick = 30,
+	maxFruitScanPerRoot = 900,
+	fruitCacheRefreshInterval = 0.65,
+	maxFruitTargetsCached = 500,
+	maxFruitPromptFallbackPerTick = 24,
 	deepPacketDiscovery = false,
 	packetDiscoveryCooldown = 60.0,
 	packetDiscoveryLimit = 1200,
@@ -50,7 +50,9 @@ CONFIG = {
 	keepAllPetVariants = true,
 	webhookUrl = "",
 	officialStockWebhookUrl = "",
+	predictorWebhookUrl = "",
 	statsWebhookInterval = 180.0,
+	stockPredictorLeadSeconds = 30,
 	maxPetBuyPerTick = 1,
 }
 
@@ -89,6 +91,8 @@ buyPetNames = {}
 
 selectedPets = {}
 selectedSellPets = {}
+stockPredictionHistory = {}
+stockPredictionShops = {}
 
 plantPromptTextCache = setmetatable({}, { __mode = "k" })
 harvestPromptCache = setmetatable({}, { __mode = "k" })
@@ -164,8 +168,10 @@ function loadConfig()
 		"keepAllPetVariants",
 		"webhookUrl",
 		"officialStockWebhookUrl",
+		"predictorWebhookUrl",
 		"statsWebhookInterval",
 		"stockWebhookCooldown",
+		"stockPredictorLeadSeconds",
 	})
 	copyKnownValues(decoded.state, state, {
 		"fruitCollector",
@@ -191,6 +197,12 @@ function loadConfig()
 	selectedGears = copyMap(decoded.selectedGears)
 	selectedPets = copyMap(decoded.selectedPets)
 	selectedSellPets = copyMap(decoded.selectedSellPets)
+	if type(decoded.stockPredictionHistory) == "table" then
+		stockPredictionHistory = decoded.stockPredictionHistory
+	end
+	if type(decoded.stockPredictionShops) == "table" then
+		stockPredictionShops = decoded.stockPredictionShops
+	end
 
 	return true
 end
@@ -222,8 +234,10 @@ saveConfig = function()
 			keepAllPetVariants = CONFIG.keepAllPetVariants,
 			webhookUrl = CONFIG.webhookUrl,
 			officialStockWebhookUrl = CONFIG.officialStockWebhookUrl,
+			predictorWebhookUrl = CONFIG.predictorWebhookUrl,
 			statsWebhookInterval = CONFIG.statsWebhookInterval,
 			stockWebhookCooldown = CONFIG.stockWebhookCooldown,
+			stockPredictorLeadSeconds = CONFIG.stockPredictorLeadSeconds,
 		},
 		state = {
 			fruitCollector = state.fruitCollector,
@@ -245,6 +259,8 @@ saveConfig = function()
 		selectedGears = selectedGears,
 		selectedPets = selectedPets,
 		selectedSellPets = selectedSellPets,
+		stockPredictionHistory = stockPredictionHistory,
+		stockPredictionShops = stockPredictionShops,
 	}
 
 	local ok, encoded = pcall(function()
@@ -261,6 +277,7 @@ local configLoaded = loadConfig()
 
 local webhookSentAt = {}
 local stockLastAmounts = {}
+local stockPredictionSeenAt = {}
 local stockWebhookQueue = {}
 local stockWebhookScheduled = false
 local activityWebhookQueue = {}
@@ -276,9 +293,9 @@ function getRequestFunction()
 		or request
 end
 
-function sendWebhook(title, description, key, targetUrl)
+function sendWebhookEmbeds(embeds, key, targetUrl, username)
 	local url = targetUrl or CONFIG.webhookUrl
-	if url == "" then
+	if url == "" or type(embeds) ~= "table" or #embeds == 0 then
 		return false
 	end
 
@@ -295,15 +312,8 @@ function sendWebhook(title, description, key, targetUrl)
 	end
 
 	local payload = {
-		username = "Garden Tools",
-		embeds = {
-			{
-				title = title,
-				description = description,
-				color = 65280,
-				timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-			},
-		},
+		username = username or "Garden Tools",
+		embeds = embeds,
 	}
 
 	local ok, response = pcall(function()
@@ -332,8 +342,272 @@ function sendWebhook(title, description, key, targetUrl)
 	return sent
 end
 
+function sendWebhook(title, description, key, targetUrl)
+	return sendWebhookEmbeds({
+		{
+			title = title,
+			description = description,
+			color = 65280,
+			timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+		},
+	}, key, targetUrl)
+end
+
 function canSendOfficialStockWebhook()
 	return CONFIG.officialStockWebhookUrl ~= "" and string.lower(localPlayer.Name or "") == "saraoliver6"
+end
+
+function canSendPredictorWebhook()
+	return CONFIG.predictorWebhookUrl ~= "" and string.lower(localPlayer.Name or "") == "saraoliver6"
+end
+
+function getStockPredictionKey(shopName, itemName)
+	return tostring(shopName) .. ":" .. tostring(itemName)
+end
+
+function getSelectedPredictionMap(shopName)
+	return shopName == "SeedShop" and selectedSeeds or selectedGears
+end
+
+function getShopRestockTimes(shopName)
+	local stockValues = ReplicatedStorage:FindFirstChild("StockValues")
+	local shop = stockValues and stockValues:FindFirstChild(shopName)
+	if not shop then
+		return nil, nil
+	end
+
+	local lastValue = shop:FindFirstChild("UnixLastRestock")
+	local nextValue = shop:FindFirstChild("UnixNextRestock")
+	local lastRestock = lastValue and tonumber(lastValue.Value) or nil
+	local nextRestock = nextValue and tonumber(nextValue.Value) or nil
+	return lastRestock, nextRestock
+end
+
+function recordStockPredictionCycle(shopName, restockUnix)
+	restockUnix = tonumber(restockUnix)
+	if not restockUnix or restockUnix <= 0 then
+		return false
+	end
+
+	local shopHistory = stockPredictionShops[shopName]
+	if type(shopHistory) ~= "table" then
+		shopHistory = {}
+		stockPredictionShops[shopName] = shopHistory
+	end
+	if tonumber(shopHistory.lastObservedRestock) == restockUnix then
+		return false
+	end
+
+	shopHistory.lastObservedRestock = restockUnix
+	shopHistory.observations = math.max(0, tonumber(shopHistory.observations) or 0) + 1
+
+	local items = getStockItemsFolder and getStockItemsFolder(shopName)
+	if items then
+		for _, item in ipairs(items:GetChildren()) do
+			if not string.find(string.lower(item.Name), "template", 1, true) then
+				local key = getStockPredictionKey(shopName, item.Name)
+				local history = stockPredictionHistory[key]
+				if type(history) ~= "table" then
+					history = {}
+					stockPredictionHistory[key] = history
+				end
+
+				history.observations = math.max(0, tonumber(history.observations) or 0) + 1
+				local stockAmount = getShopStockAmount and getShopStockAmount(shopName, item.Name) or 0
+				local seenRestock = tonumber(stockPredictionSeenAt[key])
+				if stockAmount > 0 or seenRestock == restockUnix then
+					history.hits = math.max(0, tonumber(history.hits) or 0) + 1
+					local previousHit = tonumber(history.lastHitRestock)
+					if previousHit and previousHit < restockUnix then
+						local cycleSeconds = tonumber(shopHistory.cycleSeconds) or 300
+						local gap = math.max(1, math.floor(((restockUnix - previousHit) / math.max(cycleSeconds, 1)) + 0.5))
+						history.gapTotal = math.max(0, tonumber(history.gapTotal) or 0) + gap
+						history.gapCount = math.max(0, tonumber(history.gapCount) or 0) + 1
+					end
+					history.lastHitRestock = restockUnix
+					if stockAmount > 0 then
+						history.lastAmount = stockAmount
+					end
+				end
+			end
+		end
+	end
+
+	saveConfig()
+	return true
+end
+
+function getStockItemEmoji(shopName, itemName)
+	local name = string.lower(tostring(itemName or ""))
+	local exact = {
+		["bamboo"] = "🎋",
+		["corn"] = "🌽",
+		["tulip"] = "🌷",
+		["tomato"] = "🍅",
+		["carrot"] = "🥕",
+		["strawberry"] = "🍓",
+		["blueberry"] = "🫐",
+		["mushroom"] = "🍄",
+		["acorn"] = "🌰",
+		["sunflower"] = "🌻",
+		["moon bloom"] = "🌙",
+		["poison apple"] = "🍏",
+		["trowel"] = "🔧",
+		["teleporter"] = "🛰️",
+		["flashbang"] = "💣",
+		["basic pot"] = "📦",
+	}
+	if exact[name] then
+		return exact[name]
+	end
+	if string.find(name, "watering", 1, true) then
+		return "💧"
+	elseif string.find(name, "sprinkler", 1, true) then
+		return "🚿"
+	elseif string.find(name, "mushroom", 1, true) then
+		return "🍄"
+	elseif string.find(name, "dragon", 1, true) then
+		return "🐉"
+	elseif string.find(name, "berry", 1, true) then
+		return "🫐"
+	elseif string.find(name, "seed", 1, true) then
+		return "🌱"
+	end
+	return shopName == "SeedShop" and "🌱" or "🧰"
+end
+
+function getStockPredictionEstimate(shopName, itemName, nextRestock)
+	local shopHistory = stockPredictionShops[shopName] or {}
+	local cycleSeconds = math.max(1, tonumber(shopHistory.cycleSeconds) or 300)
+	local history = stockPredictionHistory[getStockPredictionKey(shopName, itemName)] or {}
+	local observations = math.max(0, tonumber(history.observations) or 0)
+	local hits = math.max(0, tonumber(history.hits) or 0)
+	local probability = observations > 0 and math.clamp(hits / observations, 0, 1) or nil
+	local cycles = 1
+	local likelyUnix = nextRestock
+
+	if probability and probability > 0 then
+		cycles = probability >= 1 and 1 or math.max(1, math.ceil(math.log(0.35) / math.log(1 - probability)))
+		likelyUnix = nextRestock + ((cycles - 1) * cycleSeconds)
+	end
+
+	local gapCount = math.max(0, tonumber(history.gapCount) or 0)
+	local gapTotal = math.max(0, tonumber(history.gapTotal) or 0)
+	local lastHitRestock = tonumber(history.lastHitRestock)
+	if gapCount > 0 and lastHitRestock then
+		local averageGap = math.max(1, math.floor((gapTotal / gapCount) + 0.5))
+		likelyUnix = lastHitRestock + (averageGap * cycleSeconds)
+		while likelyUnix < nextRestock do
+			likelyUnix += averageGap * cycleSeconds
+		end
+		cycles = math.max(1, math.floor(((likelyUnix - nextRestock) / cycleSeconds) + 0.5) + 1)
+	end
+
+	return likelyUnix, probability, hits, observations, cycles
+end
+
+function buildStockPredictionEmbed(shopName)
+	local _, nextRestock = getShopRestockTimes(shopName)
+	nextRestock = tonumber(nextRestock)
+	if not nextRestock or nextRestock <= 0 then
+		return nil
+	end
+
+	local nextStock = {}
+	local upcoming = {}
+	local items = getStockItemsFolder and getStockItemsFolder(shopName)
+	if items then
+		for _, item in ipairs(items:GetChildren()) do
+			if not string.find(string.lower(item.Name), "template", 1, true) then
+				local emoji = getStockItemEmoji(shopName, item.Name)
+				local likelyUnix, probability, hits, observations = getStockPredictionEstimate(shopName, item.Name, nextRestock)
+				local history = stockPredictionHistory[getStockPredictionKey(shopName, item.Name)] or {}
+				if hits > 0 and likelyUnix <= nextRestock then
+					local predictedAmount = math.max(1, tonumber(history.lastAmount) or 1)
+					table.insert(nextStock, {
+						name = item.Name,
+						line = ("• %s **%s** `x%d`"):format(emoji, item.Name, predictedAmount),
+					})
+				else
+					local detail
+					if observations == 0 then
+						detail = "learning"
+					elseif hits == 0 then
+						detail = ("not seen in %d cycle%s"):format(observations, observations == 1 and "" or "s")
+					else
+						detail = ("%.0f%% observed"):format((probability or 0) * 100)
+					end
+					table.insert(upcoming, {
+						name = item.Name,
+						time = likelyUnix,
+						line = ("• %s **%s** · <t:%d:R> · `%s`"):format(emoji, item.Name, likelyUnix, detail),
+					})
+				end
+			end
+		end
+	end
+
+	table.sort(nextStock, function(left, right)
+		return left.name < right.name
+	end)
+	table.sort(upcoming, function(left, right)
+		if left.time ~= right.time then
+			return left.time < right.time
+		end
+		return left.name < right.name
+	end)
+
+	local nextStockLines = {}
+	for _, entry in ipairs(nextStock) do
+		table.insert(nextStockLines, entry.line)
+	end
+	local upcomingLines = {}
+	for index, entry in ipairs(upcoming) do
+		if index > 20 then
+			break
+		end
+		table.insert(upcomingLines, entry.line)
+	end
+
+	local isSeed = shopName == "SeedShop"
+	local description = table.concat({
+		"🔵 Learned restock forecast",
+		("**%s Predicted Next Stock · <t:%d:R>**"):format(isSeed and "🌱" or "🧰", nextRestock),
+		#nextStockLines > 0 and table.concat(nextStockLines, "\n") or "• Collecting enough history for the next-stock list",
+		"",
+		("**%s Upcoming**"):format(isSeed and "🌹 Seeds" or "🧰 Gears"),
+		#upcomingLines > 0 and table.concat(upcomingLines, "\n") or "• Collecting prediction history",
+	}, "\n")
+
+	return {
+		title = isSeed and "🌿 Next Seed Shop" or "🧰 Next Gear Shop",
+		description = description,
+		color = isSeed and 5763719 or 3447003,
+		footer = {
+			text = (isSeed and "Seed Shop" or "Gear Shop") .. " • SaraOliver6 Predictor • Estimates are not guaranteed",
+		},
+		timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+	}
+end
+
+function sendStockPrediction()
+	if not canSendPredictorWebhook() then
+		return false
+	end
+	local embeds = {}
+	for _, shopName in ipairs({ "SeedShop", "GearShop" }) do
+		local embed = buildStockPredictionEmbed(shopName)
+		if embed then
+			table.insert(embeds, embed)
+		end
+	end
+	if #embeds == 0 then
+		return false
+	end
+	local _, seedNext = getShopRestockTimes("SeedShop")
+	local _, gearNext = getShopRestockTimes("GearShop")
+	local key = ("predictor:combined:%s:%s"):format(tostring(seedNext), tostring(gearNext))
+	return sendWebhookEmbeds(embeds, key, CONFIG.predictorWebhookUrl, "SaraOliver6 Stock Predictor")
 end
 
 function shouldNotifySelected(map, name)
@@ -487,6 +761,11 @@ function notifyStock(shopName, itemName, force)
 	if stockAmount <= 0 then
 		webhookSentAt[key] = nil
 		return
+	end
+
+	local lastRestock = getShopRestockTimes(stockFolderName)
+	if lastRestock and lastRestock > 0 then
+		stockPredictionSeenAt[getStockPredictionKey(stockFolderName, itemName)] = lastRestock
 	end
 
 	if force or previousAmount == nil or previousAmount ~= stockAmount then
@@ -966,9 +1245,83 @@ function refreshPetNamesFromAssets()
 	table.sort(petNames)
 end
 
+function watchStockPredictionShop(shopName)
+	local stockValues = ReplicatedStorage:FindFirstChild("StockValues")
+	local shop = stockValues and stockValues:FindFirstChild(shopName)
+	local lastValue = shop and shop:FindFirstChild("UnixLastRestock")
+	local nextValue = shop and shop:FindFirstChild("UnixNextRestock")
+	if not lastValue or not nextValue then
+		return
+	end
+
+	local function updateCycle()
+		local lastRestock = tonumber(lastValue.Value)
+		local nextRestock = tonumber(nextValue.Value)
+		local history = stockPredictionShops[shopName]
+		if type(history) ~= "table" then
+			history = {}
+			stockPredictionShops[shopName] = history
+		end
+		if lastRestock and nextRestock and nextRestock > lastRestock then
+			history.cycleSeconds = nextRestock - lastRestock
+		end
+	end
+
+	local function observeRestock()
+		updateCycle()
+		task.delay(0.75, function()
+			recordStockPredictionCycle(shopName, tonumber(lastValue.Value))
+		end)
+	end
+
+	lastValue.Changed:Connect(observeRestock)
+	nextValue.Changed:Connect(updateCycle)
+	updateCycle()
+	task.delay(1, observeRestock)
+end
+
 refreshSeedNamesFromStockValues()
 refreshGearNamesFromStockValues()
 refreshPetNamesFromAssets()
+watchStockPredictionShop("SeedShop")
+watchStockPredictionShop("GearShop")
+
+task.spawn(function()
+	while task.wait(1) do
+		if canSendPredictorWebhook() then
+			local now = os.time()
+			local predictionDue = false
+			for _, shopName in ipairs({ "SeedShop", "GearShop" }) do
+				local _, nextRestock = getShopRestockTimes(shopName)
+				nextRestock = tonumber(nextRestock)
+				if nextRestock and nextRestock > 0 then
+					local history = stockPredictionShops[shopName]
+					if type(history) ~= "table" then
+						history = {}
+						stockPredictionShops[shopName] = history
+					end
+					local leadSeconds = math.max(5, tonumber(CONFIG.stockPredictorLeadSeconds) or 30)
+					if now >= nextRestock - leadSeconds
+						and now <= nextRestock + 2
+						and tonumber(history.predictedFor) ~= nextRestock
+					then
+						predictionDue = true
+					end
+				end
+			end
+			if predictionDue and sendStockPrediction() then
+				for _, shopName in ipairs({ "SeedShop", "GearShop" }) do
+					local _, nextRestock = getShopRestockTimes(shopName)
+					local history = stockPredictionShops[shopName]
+					if type(history) == "table" then
+						history.predictedFor = nextRestock
+					end
+				end
+				saveConfig()
+			end
+		end
+	end
+end)
 
 function getCharacter()
 	return localPlayer.Character or localPlayer.CharacterAdded:Wait()
@@ -3572,12 +3925,12 @@ function collectFruit()
 			end
 		end
 
-		if index % 8 == 0 then
+		if index % 15 == 0 then
 			task.wait()
 		end
 	end
 
-	task.wait(0.12)
+	task.wait(0.04)
 	local afterInventoryCount = countHarvestInventoryItems()
 	local gained = math.max((afterInventoryCount or 0) - (beforeInventoryCount or 0), 0)
 	stats.fruitCollected += gained
@@ -5375,52 +5728,25 @@ function walkToPetPrompt(model, prompt)
 end
 
 function buyPetRemote(petName, model, prompt)
-	local aliases, spawnId = getPetBuyAliases(petName, model, prompt)
-	local modelName = model and model.Name or petName
-	local instanceVariants = {}
-	if model then
-		table.insert(instanceVariants, { model })
+	if not model or not model:IsDescendantOf(workspace) then
+		return false
 	end
-	if prompt then
-		table.insert(instanceVariants, { prompt })
-	end
-	local rawInstances = {}
-	if model then
-		table.insert(rawInstances, model)
-	end
-	if prompt then
-		table.insert(rawInstances, prompt)
-	end
-	local rawTameOk = sendRawInstanceVariants("WildPetTame", rawInstances)
-	local rawCollectedOk = sendRawInstanceVariants("WildPetCollected", rawInstances)
-	local rawTameNameOk = sendRawStringVariants("WildPetTame", aliases)
-	local rawCollectedNameOk = sendRawStringVariants("WildPetCollected", aliases)
-	local typedTameOk = sendTypedPacketArgVariants("WildPetTame", { "Instance" }, instanceVariants)
-	local typedCollectedOk = sendTypedPacketArgVariants("WildPetCollected", { "Instance" }, instanceVariants)
 
-	local variants = {
-		{ petName },
-		{ modelName },
-		{ model },
-		{ prompt },
-		{ { Name = petName } },
-		{ { Pet = petName } },
-		{ { PetName = petName } },
-	}
+	local spawnId = getPetSpawnId(model, prompt)
+	if sendRawInstancePacket("WildPetTame", model) then
+		return true
+	end
+	if sendTypedPacketArgVariants("WildPetTame", { "Instance" }, { { model } }) then
+		return true
+	end
 	if spawnId ~= nil then
-		table.insert(variants, 1, { spawnId })
-		table.insert(variants, { spawnId, petName })
-		table.insert(variants, { petName, spawnId })
-		table.insert(variants, { { Id = spawnId } })
-		table.insert(variants, { { PetId = spawnId } })
-		table.insert(variants, { { SpawnId = spawnId } })
-		table.insert(variants, { { UID = spawnId } })
-		table.insert(variants, { { Id = spawnId, PetName = petName } })
+		return sendPacketArgVariants("WildPetTame", {
+			{ spawnId },
+			{ { SpawnId = spawnId } },
+			{ { Id = spawnId } },
+		})
 	end
-
-	local tameOk = sendPacketArgVariants("WildPetTame", variants)
-	local collectedOk = sendPacketArgVariants("WildPetCollected", variants)
-	return rawTameOk or rawCollectedOk or rawTameNameOk or rawCollectedNameOk or typedTameOk or typedCollectedOk or tameOk or collectedOk
+	return false
 end
 
 function buyOnePet(petName)
@@ -5429,7 +5755,6 @@ function buyOnePet(petName)
 	end
 
 	local wildPetSpawns = getWildPetSpawns()
-	local petTerm = string.lower(string.gsub(petName, "%s+", ""))
 	local selectedTerm = compactName(petName)
 	local candidates = {}
 
@@ -5444,14 +5769,10 @@ function buyOnePet(petName)
 				continue
 			end
 
-			local modelName = model and string.lower(string.gsub(model.Name, "%s+", "")) or ""
 			local baseName = model and getWildPetBaseName(model.Name) or ""
 			local baseTerm = compactName(baseName)
 			local isBuyPrompt = descendant.Name == "BuyPrompt" or textMatches(descendant, { "buy", "purchase", "adopt" })
-			local isPetPrompt = string.find(modelName, petTerm, 1, true) ~= nil
-				or (selectedTerm ~= "" and string.find(baseTerm, selectedTerm, 1, true) ~= nil)
-				or (baseTerm ~= "" and string.find(selectedTerm, baseTerm, 1, true) ~= nil)
-				or textMatches(descendant, { petName, baseName })
+			local isPetPrompt = selectedTerm ~= "" and baseTerm == selectedTerm
 
 			if isBuyPrompt and isPetPrompt then
 				table.insert(candidates, {
@@ -5472,7 +5793,7 @@ function buyOnePet(petName)
 		local prompt = candidate.prompt
 		local walked = walkToPetPrompt(model, prompt)
 		local prompted = walked and triggerAnyPrompt(prompt)
-		local remoteRequested = buyPetRemote(petName, model, prompt)
+		local remoteRequested = not prompted and buyPetRemote(petName, model, prompt)
 		if prompted or remoteRequested then
 			markPetSpawnHandled(model, prompt, prompted and 4 or 2)
 			local mode = prompted and "walk prompt" or "remote"
@@ -5480,11 +5801,7 @@ function buyOnePet(petName)
 		end
 	end
 
-	if buyPetRemote(petName) then
-		return true, ("Auto pets: remote requested %s"):format(petName), getPetPurchaseInfo(petName)
-	end
-
-	return false, ("Auto pets: no matching remote target for %s"):format(petName)
+	return false, ("Auto pets: no exact available spawn for %s"):format(petName)
 end
 
 function buyPets()
@@ -6260,7 +6577,7 @@ if string.lower(localPlayer.Name or "") == "saraoliver6" then
 		BorderSizePixel = 0,
 		ClearTextOnFocus = false,
 		Font = Enum.Font.GothamSemibold,
-		PlaceholderText = "Official stock webhook URL",
+		PlaceholderText = "Exclusive live-stock webhook URL",
 		Text = CONFIG.officialStockWebhookUrl,
 		TextColor3 = Color3.fromRGB(242, 247, 239),
 		TextSize = 9,
@@ -6279,6 +6596,35 @@ if string.lower(localPlayer.Name or "") == "saraoliver6" then
 		saveConfig()
 		setStatus(CONFIG.officialStockWebhookUrl ~= "" and "Official stock webhook saved" or "Official stock webhook cleared")
 	end)
+
+	local predictorWebhookBox = make("TextBox", {
+		Name = "PredictorWebhookUrl",
+		BackgroundColor3 = Color3.fromRGB(34, 41, 42),
+		BorderSizePixel = 0,
+		ClearTextOnFocus = false,
+		Font = Enum.Font.GothamSemibold,
+		PlaceholderText = "Exclusive predictor webhook URL",
+		Text = CONFIG.predictorWebhookUrl,
+		TextColor3 = Color3.fromRGB(242, 247, 239),
+		TextSize = 9,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.new(1, 0, 0, 20),
+		LayoutOrder = 36,
+	}, currentTabParent or content)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, predictorWebhookBox)
+	make("UIPadding", {
+		PaddingLeft = UDim.new(0, 7),
+		PaddingRight = UDim.new(0, 7),
+	}, predictorWebhookBox)
+	predictorWebhookBox.FocusLost:Connect(function()
+		CONFIG.predictorWebhookUrl = string.gsub(tostring(predictorWebhookBox.Text or ""), "^%s*(.-)%s*$", "%1")
+		predictorWebhookBox.Text = CONFIG.predictorWebhookUrl
+		saveConfig()
+		setStatus(CONFIG.predictorWebhookUrl ~= "" and "Exclusive predictor webhook saved" or "Exclusive predictor webhook cleared")
+		if CONFIG.predictorWebhookUrl ~= "" then
+			sendStockPrediction()
+		end
+	end)
 end
 
 local statsTitle = make("TextLabel", {
@@ -6290,7 +6636,7 @@ local statsTitle = make("TextLabel", {
 	TextSize = 9,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Size = UDim2.new(1, 0, 0, 10),
-	LayoutOrder = 36,
+	LayoutOrder = 37,
 }, currentTabParent or content)
 
 local statsFrame = make("Frame", {
