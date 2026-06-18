@@ -839,9 +839,12 @@ function flushStockWebhookQueue()
 	local queued = stockWebhookQueue
 	stockWebhookQueue = {}
 
+	local byShop = {}
 	local keys = {}
 	for _, entry in pairs(queued) do
 		if entry.amount and entry.amount > 0 then
+			byShop[entry.shopName] = byShop[entry.shopName] or {}
+			table.insert(byShop[entry.shopName], ("- %s (%d available)"):format(entry.itemName, entry.amount))
 			table.insert(keys, entry.key)
 		end
 	end
@@ -850,15 +853,22 @@ function flushStockWebhookQueue()
 		return
 	end
 
-	local embeds = buildStockPredictionEmbeds()
-	if #embeds == 0 then
+	local sections = {}
+	for shopName, lines in pairs(byShop) do
+		table.sort(lines)
+		table.insert(sections, ("**%s**\n%s"):format(shopName, table.concat(lines, "\n")))
+	end
+	table.sort(sections)
+
+	if #sections == 0 then
 		return
 	end
 
-	local sent = sendWebhookEmbeds(embeds, nil, CONFIG.webhookUrl, "Stock Predictor")
+	local description = table.concat(sections, "\n\n")
+	local sent = sendWebhook("Stock update", description, nil, CONFIG.webhookUrl)
 	local officialSent = false
 	if canSendOfficialStockWebhook() then
-		officialSent = sendWebhookEmbeds(embeds, nil, CONFIG.officialStockWebhookUrl, "Stock Predictor")
+		officialSent = sendWebhook("Stock update", description, nil, CONFIG.officialStockWebhookUrl)
 	end
 	local now = os.clock()
 	if sent then
