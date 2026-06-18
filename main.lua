@@ -369,10 +369,6 @@ function buildWeatherEventEmbed(weatherName, endTime)
 	if endTime then
 		table.insert(lines, ("Ends: <t:%d:F> (<t:%d:R>)"):format(endTime, endTime))
 	end
-	if game.JobId and game.JobId ~= "" then
-		table.insert(lines, ("Server: `%s`"):format(game.JobId))
-	end
-
 	return {
 		title = "Weather Event Started",
 		description = table.concat(lines, "\n"),
