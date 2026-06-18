@@ -6112,6 +6112,9 @@ end
 
 local startupLoadClicked = setmetatable({}, { __mode = "k" })
 local startupLoadStarted = false
+local startupLoadFinished = false
+local startupLoadClicks = 0
+local startupLoadLastClickAt = 0
 local startupLoadPositiveWords = {
 	"play",
 	"start",
@@ -6233,6 +6236,9 @@ function isStartupLoadButton(button)
 end
 
 function clickStartupLoadButton(button)
+	if startupLoadFinished then
+		return false
+	end
 	if not isStartupLoadButton(button) then
 		return false
 	end
@@ -6266,15 +6272,31 @@ function clickStartupLoadButton(button)
 		button:Activate()
 	end)
 	clicked = clicked or activateOk
+	startupLoadClicks += 1
+	startupLoadLastClickAt = os.clock()
+	if startupLoadClicks >= 3 then
+		startupLoadFinished = true
+	end
 	setStatus(("Startup: clicked %s"):format(safeText(button.Name)))
 	return clicked
 end
 
 function scanStartupLoadButtons()
+	if startupLoadFinished then
+		return false
+	end
 	local candidates = {}
+	local checked = 0
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
+		checked += 1
+		if checked > 350 then
+			break
+		end
 		if isStartupLoadButton(descendant) then
 			table.insert(candidates, descendant)
+			if #candidates >= 4 then
+				break
+			end
 		end
 	end
 	table.sort(candidates, function(a, b)
@@ -6297,7 +6319,11 @@ function startAutoLoadGame()
 	local startedAt = os.clock()
 	local connection
 	connection = playerGui.DescendantAdded:Connect(function(descendant)
-		if os.clock() - startedAt <= 90 then
+		if startupLoadFinished then
+			if connection then
+				connection:Disconnect()
+			end
+		elseif os.clock() - startedAt <= 22 then
 			task.defer(function()
 				clickStartupLoadButton(descendant)
 			end)
@@ -6307,10 +6333,15 @@ function startAutoLoadGame()
 	end)
 
 	task.spawn(function()
-		while os.clock() - startedAt <= 90 do
+		while not startupLoadFinished and os.clock() - startedAt <= 22 do
 			scanStartupLoadButtons()
-			task.wait(0.35)
+			if startupLoadLastClickAt > 0 and os.clock() - startupLoadLastClickAt > 5 then
+				startupLoadFinished = true
+				break
+			end
+			task.wait(startupLoadLastClickAt > 0 and 0.75 or 1.25)
 		end
+		startupLoadFinished = true
 		if connection then
 			connection:Disconnect()
 		end
