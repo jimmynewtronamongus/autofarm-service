@@ -3416,20 +3416,28 @@ function getInstanceTextBlob(instance, maxAncestors)
 	return string.lower(table.concat(parts, " "))
 end
 
-function getFruitWeight(instance)
+function getFruitWeightKg(instance)
 	local blob = getInstanceTextBlob(instance, 5)
-	local weight = tonumber(string.match(blob, "([%d%.]+)%s*kg"))
-		or tonumber(string.match(blob, "([%d%.]+)%s*g"))
-		or tonumber(string.match(blob, "([%d%.]+)%s*lb"))
-		or 0
+	local value, unit = string.match(blob, "([%d%.]+)%s*(kg)")
+	if not value then
+		value, unit = string.match(blob, "([%d%.]+)%s*(lb)")
+	end
+	if not value then
+		value, unit = string.match(blob, "([%d%.]+)%s*(g)")
+	end
 
-	if string.find(blob, "kg", 1, true) then
-		weight *= 1000
-	elseif string.find(blob, "lb", 1, true) then
-		weight *= 453.592
+	local weight = tonumber(value) or 0
+	if unit == "g" then
+		weight /= 1000
+	elseif unit == "lb" then
+		weight *= 0.453592
 	end
 
 	return weight
+end
+
+function getFruitWeight(instance)
+	return getFruitWeightKg(instance)
 end
 
 function getFruitRarity(instance)
@@ -7026,8 +7034,8 @@ local maxFruitWeightBox = make("TextBox", {
 	BorderSizePixel = 0,
 	ClearTextOnFocus = false,
 	Font = Enum.Font.GothamSemibold,
-	PlaceholderText = "Max fruit weight in g (0 = no limit)",
-	Text = tostring(math.floor(getMaxFruitCollectWeight() + 0.5)),
+	PlaceholderText = "Max fruit weight in kg (0 = no limit)",
+	Text = tostring(getMaxFruitCollectWeight()),
 	TextColor3 = Color3.fromRGB(242, 247, 239),
 	TextSize = 9,
 	TextTruncate = Enum.TextTruncate.AtEnd,
@@ -7042,10 +7050,10 @@ make("UIPadding", {
 maxFruitWeightBox.FocusLost:Connect(function()
 	local value = math.max(0, tonumber(maxFruitWeightBox.Text) or 0)
 	CONFIG.maxFruitCollectWeight = value
-	maxFruitWeightBox.Text = tostring(math.floor(value + 0.5))
+	maxFruitWeightBox.Text = tostring(value)
 	fruitTargetCache.refreshedAt = 0
 	saveConfig()
-	setStatus(value > 0 and ("Fruit collector max weight: %.0fg"):format(value) or "Fruit collector max weight disabled")
+	setStatus(value > 0 and ("Fruit collector max weight: %.2fkg"):format(value) or "Fruit collector max weight disabled")
 end)
 setBuildTab("Shops")
 makeSectionLabel("Shops", 1)
