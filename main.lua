@@ -8,17 +8,18 @@ ReplicatedStorage = game:GetService("ReplicatedStorage")
 RunService = game:GetService("RunService")
 StarterGui = game:GetService("StarterGui")
 UserInputService = game:GetService("UserInputService")
+PathfindingService = game:GetService("PathfindingService")
 
 localPlayer = Players.LocalPlayer
 playerGui = localPlayer:WaitForChild("PlayerGui")
 
 CONFIG = {
 	collectInterval = 0.15,
-	sellInterval = 12.0,
-	sellWhenFullInterval = 1.5,
+	sellInterval = 5.0,
+	sellWhenFullInterval = 0.75,
 	schedulerInterval = 0.1,
 	maxSellAttempts = 2,
-	sellCooldown = 3.0,
+	sellCooldown = 1.0,
 	sellResumeFreeSlots = 8,
 	buyInterval = 1.5,
 	mailInterval = 6.0,
@@ -26,6 +27,8 @@ CONFIG = {
 	petBuyInterval = 1.5,
 	petWalkDistance = 10.5,
 	petWalkTimeout = 12.0,
+	petPathRefreshInterval = 0.65,
+	petPathTargetMoveThreshold = 4.0,
 	stockWebhookCooldown = 10.0,
 	cacheRefreshInterval = 25.0,
 	inventoryRefreshInterval = 1.0,
@@ -197,11 +200,13 @@ function loadConfig()
 	selectedGears = copyMap(decoded.selectedGears)
 	selectedPets = copyMap(decoded.selectedPets)
 	selectedSellPets = copyMap(decoded.selectedSellPets)
-	if type(decoded.stockPredictionHistory) == "table" then
+	if decoded.stockPredictionVersion == 2 and type(decoded.stockPredictionHistory) == "table" then
 		stockPredictionHistory = decoded.stockPredictionHistory
 	end
-	if type(decoded.stockPredictionShops) == "table" then
+	if decoded.stockPredictionVersion == 2 and type(decoded.stockPredictionShops) == "table" then
 		stockPredictionShops = decoded.stockPredictionShops
+	elseif type(decoded.stockPredictionShops) == "table" and decoded.stockPredictionShops.webhookMessageId then
+		stockPredictionShops.webhookMessageId = decoded.stockPredictionShops.webhookMessageId
 	end
 
 	return true
@@ -259,6 +264,7 @@ saveConfig = function()
 		selectedGears = selectedGears,
 		selectedPets = selectedPets,
 		selectedSellPets = selectedSellPets,
+		stockPredictionVersion = 2,
 		stockPredictionHistory = stockPredictionHistory,
 		stockPredictionShops = stockPredictionShops,
 	}
@@ -282,6 +288,7 @@ local stockWebhookQueue = {}
 local stockWebhookScheduled = false
 local activityWebhookQueue = {}
 local activityWebhookScheduled = false
+local predictorWebhookUpdateScheduled = false
 local getStockItemsFolder
 local getShopStockAmount
 local getShopPriceAmount
@@ -351,6 +358,69 @@ function sendWebhook(title, description, key, targetUrl)
 			timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
 		},
 	}, key, targetUrl)
+end
+
+function requestPredictorWebhookMessage(embeds)
+	if not canSendPredictorWebhook() or type(embeds) ~= "table" or #embeds == 0 then
+		return false
+	end
+
+	local requestFunction = getRequestFunction()
+	if type(requestFunction) ~= "function" then
+		setStatus("Predictor webhook: request function unavailable")
+		return false
+	end
+
+	local webhookUrl = string.gsub(CONFIG.predictorWebhookUrl, "%?.*$", "")
+	local messageId = tostring(stockPredictionShops.webhookMessageId or "")
+	local createBody = HttpService:JSONEncode({
+		username = "Stock Predictor",
+		embeds = embeds,
+	})
+	local editBody = HttpService:JSONEncode({
+		embeds = embeds,
+	})
+
+	local function perform(method, url, requestBody)
+		local ok, response = pcall(function()
+			return requestFunction({
+				Url = url,
+				Method = method,
+				Headers = {
+					["Content-Type"] = "application/json",
+				},
+				Body = requestBody,
+			})
+		end)
+		local statusCode = ok and type(response) == "table"
+			and tonumber(response.StatusCode or response.Status or response.status_code)
+			or 0
+		return ok and statusCode >= 200 and statusCode < 300, response, statusCode
+	end
+
+	if messageId ~= "" then
+		local edited = perform("PATCH", webhookUrl .. "/messages/" .. messageId, editBody)
+		if edited then
+			return true
+		end
+		stockPredictionShops.webhookMessageId = nil
+	end
+
+	local sent, response, statusCode = perform("POST", webhookUrl .. "?wait=true", createBody)
+	if not sent then
+		setStatus(("Predictor webhook failed (%s)"):format(tostring(statusCode)))
+		return false
+	end
+
+	local responseBody = type(response) == "table" and (response.Body or response.body) or nil
+	if type(responseBody) == "string" then
+		local decodedOk, decoded = pcall(HttpService.JSONDecode, HttpService, responseBody)
+		if decodedOk and type(decoded) == "table" and decoded.id then
+			stockPredictionShops.webhookMessageId = tostring(decoded.id)
+		end
+	end
+	saveConfig()
+	return true
 end
 
 function canSendOfficialStockWebhook()
@@ -434,6 +504,13 @@ function recordStockPredictionCycle(shopName, restockUnix)
 	end
 
 	saveConfig()
+	if canSendPredictorWebhook() then
+		task.defer(function()
+			if type(queueStockPredictionUpdate) == "function" then
+				queueStockPredictionUpdate()
+			end
+		end)
+	end
 	return true
 end
 
@@ -513,41 +590,37 @@ function buildStockPredictionEmbed(shopName)
 		return nil
 	end
 
-	local nextStock = {}
+	local currentStock = {}
 	local upcoming = {}
 	local items = getStockItemsFolder and getStockItemsFolder(shopName)
 	if items then
 		for _, item in ipairs(items:GetChildren()) do
 			if not string.find(string.lower(item.Name), "template", 1, true) then
 				local emoji = getStockItemEmoji(shopName, item.Name)
+				local amount = getShopStockAmount and getShopStockAmount(shopName, item.Name) or 0
 				local likelyUnix, probability, hits, observations = getStockPredictionEstimate(shopName, item.Name, nextRestock)
-				local history = stockPredictionHistory[getStockPredictionKey(shopName, item.Name)] or {}
-				if hits > 0 and likelyUnix <= nextRestock then
-					local predictedAmount = math.max(1, tonumber(history.lastAmount) or 1)
-					table.insert(nextStock, {
+				if amount > 0 then
+					table.insert(currentStock, {
 						name = item.Name,
-						line = ("• %s **%s** `x%d`"):format(emoji, item.Name, predictedAmount),
+						line = ("• %s **%s** `x%d`"):format(emoji, item.Name, amount),
 					})
-				else
-					local detail
-					if observations == 0 then
-						detail = "learning"
-					elseif hits == 0 then
-						detail = ("not seen in %d cycle%s"):format(observations, observations == 1 and "" or "s")
-					else
-						detail = ("%.0f%% observed"):format((probability or 0) * 100)
-					end
+				elseif observations >= 3 and hits > 0 then
 					table.insert(upcoming, {
 						name = item.Name,
 						time = likelyUnix,
-						line = ("• %s **%s** · <t:%d:R> · `%s`"):format(emoji, item.Name, likelyUnix, detail),
+						line = ("• %s **%s** · estimated <t:%d:R> · `%.0f%% observed rate`"):format(
+							emoji,
+							item.Name,
+							likelyUnix,
+							(probability or 0) * 100
+						),
 					})
 				end
 			end
 		end
 	end
 
-	table.sort(nextStock, function(left, right)
+	table.sort(currentStock, function(left, right)
 		return left.name < right.name
 	end)
 	table.sort(upcoming, function(left, right)
@@ -557,9 +630,9 @@ function buildStockPredictionEmbed(shopName)
 		return left.name < right.name
 	end)
 
-	local nextStockLines = {}
-	for _, entry in ipairs(nextStock) do
-		table.insert(nextStockLines, entry.line)
+	local currentStockLines = {}
+	for _, entry in ipairs(currentStock) do
+		table.insert(currentStockLines, entry.line)
 	end
 	local upcomingLines = {}
 	for index, entry in ipairs(upcoming) do
@@ -571,20 +644,22 @@ function buildStockPredictionEmbed(shopName)
 
 	local isSeed = shopName == "SeedShop"
 	local description = table.concat({
-		"🔵 Learned restock forecast",
-		("**%s Predicted Next Stock · <t:%d:R>**"):format(isSeed and "🌱" or "🧰", nextRestock),
-		#nextStockLines > 0 and table.concat(nextStockLines, "\n") or "• Collecting enough history for the next-stock list",
+		"🔵 Exact shop timer; item estimates use observed restock history",
+		("**%s Next Restock · <t:%d:R>**"):format(isSeed and "🌱" or "🧰", nextRestock),
 		"",
-		("**%s Upcoming**"):format(isSeed and "🌹 Seeds" or "🧰 Gears"),
-		#upcomingLines > 0 and table.concat(upcomingLines, "\n") or "• Collecting prediction history",
+		("**%s Current Stock**"):format(isSeed and "🌱" or "🧰"),
+		#currentStockLines > 0 and table.concat(currentStockLines, "\n") or "• Nothing currently in stock",
+		"",
+		("**%s Learned Estimates**"):format(isSeed and "🌹 Seeds" or "🧰 Gears"),
+		#upcomingLines > 0 and table.concat(upcomingLines, "\n") or "• At least 3 observed restocks are required",
 	}, "\n")
 
 	return {
-		title = isSeed and "🌿 Next Seed Shop" or "🧰 Next Gear Shop",
+		title = isSeed and "🌿 Seed Shop Stock Forecast" or "🧰 Gear Shop Stock Forecast",
 		description = description,
 		color = isSeed and 5763719 or 3447003,
 		footer = {
-			text = (isSeed and "Seed Shop" or "Gear Shop") .. " • SaraOliver6 Predictor • Estimates are not guaranteed",
+			text = (isSeed and "Seed Shop" or "Gear Shop") .. " • Learned estimates are not guaranteed",
 		},
 		timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
 	}
@@ -604,10 +679,18 @@ function sendStockPrediction()
 	if #embeds == 0 then
 		return false
 	end
-	local _, seedNext = getShopRestockTimes("SeedShop")
-	local _, gearNext = getShopRestockTimes("GearShop")
-	local key = ("predictor:combined:%s:%s"):format(tostring(seedNext), tostring(gearNext))
-	return sendWebhookEmbeds(embeds, key, CONFIG.predictorWebhookUrl, "SaraOliver6 Stock Predictor")
+	return requestPredictorWebhookMessage(embeds)
+end
+
+function queueStockPredictionUpdate()
+	if predictorWebhookUpdateScheduled then
+		return
+	end
+	predictorWebhookUpdateScheduled = true
+	task.delay(1.5, function()
+		predictorWebhookUpdateScheduled = false
+		sendStockPrediction()
+	end)
 end
 
 function shouldNotifySelected(map, name)
@@ -3805,39 +3888,27 @@ function sellToolByRemote(tool)
 	return soldItem or soldFruit
 end
 
-function sellInventoryByRemote(sellableTools)
-	local actions = 0
-	local toolIds = {}
-	for _, tool in ipairs(sellableTools or {}) do
-		local id = getToolPacketId(tool)
-		if id ~= nil then
-			table.insert(toolIds, id)
+function sellInventoryByRemote(sellableTools, individualFallback)
+	if not individualFallback then
+		if sendExactPacket("SellAll") then
+			return 1
 		end
-	end
-	local sellAllVariants = {
-		{},
-		{ "Fruit" },
-		{ "Fruits" },
-		{ "Inventory" },
-		{ "All" },
-		{ true },
-		{ sellableTools or {} },
-		{ toolIds },
-		{ { Type = "Fruit" } },
-		{ { Category = "Fruit" } },
-		{ { Items = toolIds } },
-	}
-	local ok, count = sendPacketArgVariants("SellAll", sellAllVariants)
-	if ok then
-		actions += count
+		local ok, count = sendPacketArgVariants("SellAll", {
+			{ "Fruit" },
+			{ { Type = "Fruit" } },
+		})
+		return ok and (count or 1) or 0
 	end
 
-	for _, tool in ipairs(sellableTools or {}) do
+	local actions = 0
+	for index, tool in ipairs(sellableTools or {}) do
+		if index > 12 then
+			break
+		end
 		if sellToolByRemote(tool) then
 			actions += 1
 		end
 	end
-
 	return actions
 end
 
@@ -4892,104 +4963,38 @@ function movePlantTarget(plant, targetPosition)
 		return false
 	end
 
-	local part = getTargetPart(plant)
 	local tool = getTrowelTool()
-	if tool and part then
-		useToolAtPosition(tool, part.Position, 0.45)
-		task.wait(0.1)
-		useToolAtPosition(tool, targetPosition, 0.45)
+	if not tool then
+		return false
 	end
 
-	local variants = {
-		{ plant, targetPosition },
-		{ plant.Name, targetPosition },
-		{ plant, { Position = targetPosition } },
-		{ plant, { Target = targetPosition } },
-		{ plant, { TargetPosition = targetPosition } },
-		{ { Plant = plant, Position = targetPosition } },
-		{ { Plant = plant, Target = targetPosition } },
-		{ { Plant = plant, TargetPosition = targetPosition } },
-	}
 	local plantId = getInstancePacketId(plant)
-	if plantId ~= nil then
-		table.insert(variants, 1, { plantId, targetPosition })
-		table.insert(variants, { { Id = plantId, Position = targetPosition } })
-		table.insert(variants, { { PlantId = plantId, Position = targetPosition } })
-		table.insert(variants, { { UID = plantId, Position = targetPosition } })
-		table.insert(variants, { { Id = plantId, Target = targetPosition } })
-		table.insert(variants, { { PlantId = plantId, Target = targetPosition } })
-		table.insert(variants, { { Id = plantId, TargetPosition = targetPosition } })
+	if plantId == nil then
+		return false
+	end
+	plantId = tostring(plantId)
+
+	local character = getCharacter()
+	local humanoid = getHumanoid()
+	if tool.Parent ~= character and humanoid then
+		humanoid:EquipTool(tool)
+		task.wait(0.08)
 	end
 
-	local targetCFrame = CFrame.new(targetPosition)
-	table.insert(variants, { plant, targetCFrame })
-	table.insert(variants, { plant.Name, targetCFrame })
-	table.insert(variants, { { Plant = plant, CFrame = targetCFrame } })
-	table.insert(variants, { { Plant = plant, Pivot = targetCFrame } })
-	if plantId ~= nil then
-		table.insert(variants, { plantId, targetCFrame })
-		table.insert(variants, { { Id = plantId, CFrame = targetCFrame } })
-		table.insert(variants, { { PlantId = plantId, CFrame = targetCFrame } })
-	end
-
-	local actions = 0
-	if sendRawInstanceVector3Packet("MovePlant", plant, targetPosition) then
-		actions += 1
-	end
-	if sendRawStringVector3Packet("MovePlant", plant.Name, targetPosition) then
-		actions += 1
-	end
-	if plantId ~= nil and sendRawStringVector3Packet("MovePlant", plantId, targetPosition) then
-		actions += 1
-	end
-
-	local typedInstanceOk, typedInstanceCount = sendTypedPacketArgVariants("MovePlant", { "Instance", "Vector3" }, {
-		{ plant, targetPosition },
-	})
-	if typedInstanceOk then
-		actions += typedInstanceCount or 1
-	end
-	local typedInstanceCFrameOk, typedInstanceCFrameCount = sendTypedPacketArgVariants("MovePlant", { "Instance", "CFrame" }, {
-		{ plant, targetCFrame },
-	})
-	if typedInstanceCFrameOk then
-		actions += typedInstanceCFrameCount or 1
-	end
-
-	local typedStringVariants = {
+	local typedOk = sendTypedPacketArgVariants("MovePlant", { "String", "Vector3" }, {
+		{ plantId, targetPosition },
 		{ plant.Name, targetPosition },
-	}
-	if plantId ~= nil then
-		table.insert(typedStringVariants, { tostring(plantId), targetPosition })
+	})
+	if typedOk then
+		return true
 	end
-	local typedStringOk, typedStringCount = sendTypedPacketArgVariants("MovePlant", { "String", "Vector3" }, typedStringVariants)
-	if typedStringOk then
-		actions += typedStringCount or 1
+	if sendPacket("MovePlant", plantId, targetPosition) then
+		return true
 	end
-	local typedStringCFrameVariants = {
-		{ plant.Name, targetCFrame },
-	}
-	if plantId ~= nil then
-		table.insert(typedStringCFrameVariants, { tostring(plantId), targetCFrame })
+	if sendPacket("MovePlant", plant.Name, targetPosition) then
+		return true
 	end
-	local typedStringCFrameOk, typedStringCFrameCount = sendTypedPacketArgVariants("MovePlant", { "String", "CFrame" }, typedStringCFrameVariants)
-	if typedStringCFrameOk then
-		actions += typedStringCFrameCount or 1
-	end
-
-	local moveOk, moveCount = sendPacketArgVariants("MovePlant", variants)
-	if moveOk then
-		actions += moveCount or 1
-	end
-
-	for _, packetName in ipairs({ "TrowelPlant", "UseTrowel" }) do
-		local ok, count = sendPacketArgVariants(packetName, variants)
-		if ok then
-			actions += count or 1
-		end
-	end
-
-	return actions > 0
+	return sendRawStringVector3Packet("MovePlant", plantId, targetPosition)
 end
 
 function plantReachedTargetOrMoved(plant, beforePosition, targetPosition)
@@ -5005,6 +5010,13 @@ function plantReachedTargetOrMoved(plant, beforePosition, targetPosition)
 	return targetPosition and (afterPosition - targetPosition).Magnitude <= 6
 end
 
+function getTrowelSlotPosition(center, index)
+	local slot = math.max(0, (index or 1) - 1)
+	local column = (slot % 3) - 1
+	local row = math.floor(slot / 3)
+	return center + Vector3.new(column * 4, 0, row * 4)
+end
+
 function autoMovePlants()
 	if not isEnabled("autoMovePlants") then
 		return
@@ -5015,6 +5027,7 @@ function autoMovePlants()
 		setStatus("Move plants: save a move position first")
 		return
 	end
+	targetPosition = getGroundPositionBelow(targetPosition)
 
 	local selected = getSelectedMoveSeedList()
 	if #selected == 0 then
@@ -5038,12 +5051,16 @@ function autoMovePlants()
 			if plant and not seen[plant] and plantMatchesSelection(plant, selected) then
 				seen[plant] = true
 				checked += 1
+				local plantTargetPosition = getTrowelSlotPosition(targetPosition, checked)
 				local part = getTargetPart(plant)
 				local beforePosition = part and part.Position or nil
-				if movePlantTarget(plant, targetPosition) then
+				if beforePosition and (beforePosition - plantTargetPosition).Magnitude <= 2.5 then
+					continue
+				end
+				if movePlantTarget(plant, plantTargetPosition) then
 					task.wait(0.7)
 				end
-				if plantReachedTargetOrMoved(plant, beforePosition, targetPosition) then
+				if plantReachedTargetOrMoved(plant, beforePosition, plantTargetPosition) then
 					moved += 1
 					task.wait(0.25)
 				end
@@ -5137,12 +5154,18 @@ function plantMatchesSelection(plant, selected)
 	for _, seedName in ipairs(selected) do
 		local lowered = string.lower(seedName)
 		local compactSeed = string.gsub(lowered, "[%s_%-]", "")
+		local baseSeed = string.gsub(lowered, "%s+fruit$", "")
+		baseSeed = string.gsub(baseSeed, "%s+seed$", "")
+		local compactBaseSeed = string.gsub(baseSeed, "[%s_%-]", "")
 		if string.find(plantName, lowered, 1, true)
 			or string.find(compactPlantName, compactSeed, 1, true)
+			or (compactBaseSeed ~= "" and string.find(compactPlantName, compactBaseSeed, 1, true))
 			or string.find(pathText, lowered, 1, true)
 			or string.find(compactPath, compactSeed, 1, true)
+			or (compactBaseSeed ~= "" and string.find(compactPath, compactBaseSeed, 1, true))
 			or plantHasPromptText(plant, seedName)
 			or treeTextMatches(plant, { seedName }, 3)
+			or (baseSeed ~= lowered and treeTextMatches(plant, { baseSeed }, 3))
 		then
 			return true
 		end
@@ -5170,6 +5193,17 @@ function vectorFromConfigPosition(value)
 		return Vector3.new(x, y, z)
 	end
 	return nil
+end
+
+function getGroundPositionBelow(position)
+	if not position then
+		return nil
+	end
+	local parameters = RaycastParams.new()
+	parameters.FilterType = Enum.RaycastFilterType.Exclude
+	parameters.FilterDescendantsInstances = { getCharacter() }
+	local result = workspace:Raycast(position + Vector3.new(0, 8, 0), Vector3.new(0, -80, 0), parameters)
+	return result and result.Position or position
 end
 
 function getToolByWords(words)
@@ -5330,7 +5364,7 @@ function autoSell(force)
 		return
 	end
 	lastAutoSellAttemptAt = now
-	fruitCollectionPausedUntil = now + 2.5
+	fruitCollectionPausedUntil = now + 1.0
 
 	local inventoryFull = refreshInventoryStats(true)
 	local sellableTools = getSellableFruitTools(true)
@@ -5357,9 +5391,9 @@ function autoSell(force)
 			return
 		end
 
-		local remoteActions = sellInventoryByRemote(getSellableFruitTools(true))
+		local remoteActions = sellInventoryByRemote(getSellableFruitTools(true), attempt > 1)
 		if remoteActions > 0 then
-			task.wait(0.45)
+			task.wait(attempt == 1 and 0.18 or 0.25)
 			local sold = sellSucceeded(beforeInventoryCount, beforeSheckles)
 			if sold then
 				setStatus(("Sell: remote sold inventory (%d action(s))"):format(remoteActions))
@@ -5372,7 +5406,7 @@ function autoSell(force)
 		end
 	end
 
-	task.wait(0.15)
+	task.wait(0.05)
 	local afterSheckles = refreshCurrencyStats(true)
 	if afterSheckles and beforeSheckles and afterSheckles > beforeSheckles then
 		stats.shecklesFarmed = math.max(stats.shecklesFarmed or 0, farmedBeforeSell + (afterSheckles - beforeSheckles))
@@ -5679,9 +5713,10 @@ function getPetPromptPosition(model, prompt)
 	return part and part.Position or nil
 end
 
-function walkToPosition(position, stopDistance, timeoutSeconds)
+function walkToDynamicPosition(getPosition, stopDistance, timeoutSeconds)
 	local humanoid = getHumanoid()
 	local root = getRoot()
+	local position = type(getPosition) == "function" and getPosition() or nil
 	if not humanoid or not root or not position then
 		return false
 	end
@@ -5689,30 +5724,92 @@ function walkToPosition(position, stopDistance, timeoutSeconds)
 	stopDistance = stopDistance or CONFIG.petWalkDistance
 	timeoutSeconds = timeoutSeconds or CONFIG.petWalkTimeout
 	local startedAt = os.clock()
+	local lastProgressPosition = root.Position
+	local lastProgressAt = os.clock()
 
 	while os.clock() - startedAt < timeoutSeconds do
 		root = getRoot()
-		if not root then
+		position = getPosition()
+		if not root or not position then
 			return false
 		end
-		local distance = (root.Position - position).Magnitude
-		if distance <= stopDistance then
+		if (root.Position - position).Magnitude <= stopDistance then
 			return true
 		end
 
-		pcall(function()
-			humanoid:MoveTo(position)
+		local path = PathfindingService:CreatePath({
+			AgentRadius = 2.25,
+			AgentHeight = 5,
+			AgentCanJump = true,
+			WaypointSpacing = 4,
+		})
+		local computed = pcall(function()
+			path:ComputeAsync(root.Position, position)
 		end)
-		task.wait(0.2)
+		local waypoints = computed and path.Status == Enum.PathStatus.Success and path:GetWaypoints() or {}
+		if #waypoints < 2 then
+			waypoints = {
+				{ Position = root.Position },
+				{ Position = position },
+			}
+		end
+
+		local plannedTarget = position
+		local recompute = false
+		for index = 2, #waypoints do
+			local waypoint = waypoints[index]
+			if waypoint.Action == Enum.PathWaypointAction.Jump then
+				humanoid.Jump = true
+			end
+			humanoid:MoveTo(waypoint.Position)
+
+			local waypointStartedAt = os.clock()
+			while os.clock() - waypointStartedAt < CONFIG.petPathRefreshInterval do
+				task.wait(0.08)
+				root = getRoot()
+				position = getPosition()
+				if not root or not position then
+					return false
+				end
+				if (root.Position - position).Magnitude <= stopDistance then
+					return true
+				end
+				if (position - plannedTarget).Magnitude >= CONFIG.petPathTargetMoveThreshold then
+					recompute = true
+					break
+				end
+				if (root.Position - waypoint.Position).Magnitude <= 2.5 then
+					break
+				end
+				if (root.Position - lastProgressPosition).Magnitude >= 1.5 then
+					lastProgressPosition = root.Position
+					lastProgressAt = os.clock()
+				elseif os.clock() - lastProgressAt >= 0.8 then
+					humanoid.Jump = true
+					recompute = true
+					lastProgressAt = os.clock()
+					break
+				end
+			end
+			if recompute then
+				break
+			end
+		end
 	end
 
 	root = getRoot()
-	return root and (root.Position - position).Magnitude <= stopDistance
+	position = getPosition()
+	return root and position and (root.Position - position).Magnitude <= stopDistance or false
+end
+
+function walkToPosition(position, stopDistance, timeoutSeconds)
+	return walkToDynamicPosition(function()
+		return position
+	end, stopDistance, timeoutSeconds)
 end
 
 function walkToPetPrompt(model, prompt)
-	local position = getPetPromptPosition(model, prompt)
-	if not position then
+	if not model or not prompt then
 		return false
 	end
 
@@ -5720,7 +5817,12 @@ function walkToPetPrompt(model, prompt)
 	pcall(function()
 		stopDistance = math.max(3, math.min(stopDistance, (tonumber(prompt.MaxActivationDistance) or stopDistance) - 1))
 	end)
-	local reached = walkToPosition(position, stopDistance, CONFIG.petWalkTimeout)
+	local reached = walkToDynamicPosition(function()
+		if not model.Parent or not prompt.Parent or not model:IsDescendantOf(workspace) then
+			return nil
+		end
+		return getPetPromptPosition(model, prompt)
+	end, stopDistance, CONFIG.petWalkTimeout)
 	if reached then
 		task.wait(0.1)
 	end
@@ -6523,12 +6625,13 @@ setBuildTab("Farm")
 makeSectionLabel("Farm", 1)
 makeToggle("Fruit Collector", "fruitCollector", 2)
 makeToggle("Trowel Plants", "autoMovePlants", 3)
-makeCommandButton("Set Trowel Target", 4, function()
+makeCommandButton("Set Trowel Position", 4, function()
 	local root = getRoot()
 	if root then
-		CONFIG.movePlantPosition = { x = root.Position.X, y = root.Position.Y, z = root.Position.Z }
+		local position = getGroundPositionBelow(root.Position)
+		CONFIG.movePlantPosition = { x = position.X, y = position.Y, z = position.Z }
 		saveConfig()
-		setStatus("Saved current position for trowel target")
+		setStatus("Saved current ground position for trowel")
 	end
 end)
 makeToggle("Auto Sell Inventory", "autoSell", 5)
@@ -6617,7 +6720,11 @@ if string.lower(localPlayer.Name or "") == "saraoliver6" then
 		PaddingRight = UDim.new(0, 7),
 	}, predictorWebhookBox)
 	predictorWebhookBox.FocusLost:Connect(function()
+		local previousUrl = CONFIG.predictorWebhookUrl
 		CONFIG.predictorWebhookUrl = string.gsub(tostring(predictorWebhookBox.Text or ""), "^%s*(.-)%s*$", "%1")
+		if CONFIG.predictorWebhookUrl ~= previousUrl then
+			stockPredictionShops.webhookMessageId = nil
+		end
 		predictorWebhookBox.Text = CONFIG.predictorWebhookUrl
 		saveConfig()
 		setStatus(CONFIG.predictorWebhookUrl ~= "" and "Exclusive predictor webhook saved" or "Exclusive predictor webhook cleared")
