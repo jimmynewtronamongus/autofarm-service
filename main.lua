@@ -863,6 +863,43 @@ function itemIsInStock(shopName, itemName)
 	return stockAmount > 0
 end
 
+function buildStockUpdateEmbed(shopName, entries)
+	local stockFolderName = getStockFolderName(shopName)
+	local _, nextRestock = getShopRestockTimes(stockFolderName)
+	nextRestock = tonumber(nextRestock)
+
+	local lines = {}
+	for _, entry in ipairs(entries or {}) do
+		table.insert(lines, ("- %s **%s**: `%d available`"):format(
+			getStockItemEmoji(stockFolderName, entry.itemName),
+			entry.itemName,
+			entry.amount
+		))
+	end
+	table.sort(lines)
+
+	local isSeed = stockFolderName == "SeedShop"
+	local descriptionParts = {
+		"Current stock update. Forecasts are only sent in the predictor webhook.",
+	}
+	if nextRestock and nextRestock > 0 then
+		table.insert(descriptionParts, ("Next shop refresh: <t:%d:F> (<t:%d:R>)"):format(nextRestock, nextRestock))
+	end
+	table.insert(descriptionParts, "")
+	table.insert(descriptionParts, "**Current Stock**")
+	table.insert(descriptionParts, #lines > 0 and table.concat(lines, "\n") or "- No current stock lines")
+
+	return {
+		title = isSeed and "Seed Shop Stock Update" or "Gear Shop Stock Update",
+		description = table.concat(descriptionParts, "\n"),
+		color = isSeed and 5763719 or 3447003,
+		footer = {
+			text = isSeed and "Seed Shop - current stock only" or "Gear Shop - current stock only",
+		},
+		timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+	}
+end
+
 function flushStockWebhookQueue()
 	stockWebhookScheduled = false
 	local queued = stockWebhookQueue
@@ -873,7 +910,10 @@ function flushStockWebhookQueue()
 	for _, entry in pairs(queued) do
 		if entry.amount and entry.amount > 0 then
 			byShop[entry.shopName] = byShop[entry.shopName] or {}
-			table.insert(byShop[entry.shopName], ("- %s (%d available)"):format(entry.itemName, entry.amount))
+			table.insert(byShop[entry.shopName], {
+				itemName = entry.itemName,
+				amount = entry.amount,
+			})
 			table.insert(keys, entry.key)
 		end
 	end
@@ -882,22 +922,27 @@ function flushStockWebhookQueue()
 		return
 	end
 
-	local sections = {}
-	for shopName, lines in pairs(byShop) do
-		table.sort(lines)
-		table.insert(sections, ("**%s**\n%s"):format(shopName, table.concat(lines, "\n")))
+	local embeds = {}
+	local shopNames = {}
+	for shopName in pairs(byShop) do
+		table.insert(shopNames, shopName)
 	end
-	table.sort(sections)
+	table.sort(shopNames)
+	for _, shopName in ipairs(shopNames) do
+		local embed = buildStockUpdateEmbed(shopName, byShop[shopName])
+		if embed then
+			table.insert(embeds, embed)
+		end
+	end
 
-	if #sections == 0 then
+	if #embeds == 0 then
 		return
 	end
 
-	local description = table.concat(sections, "\n\n")
-	local sent = sendWebhook("Stock update", description, nil, CONFIG.webhookUrl)
+	local sent = sendWebhookEmbeds(embeds, nil, CONFIG.webhookUrl, "Stock Updates")
 	local officialSent = false
 	if canSendOfficialStockWebhook() then
-		officialSent = sendWebhook("Stock update", description, nil, CONFIG.officialStockWebhookUrl)
+		officialSent = sendWebhookEmbeds(embeds, nil, CONFIG.officialStockWebhookUrl, "Stock Updates")
 	end
 	local now = os.clock()
 	if sent then
