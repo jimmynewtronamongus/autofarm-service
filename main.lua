@@ -53,9 +53,7 @@ CONFIG = {
 	keepAllPetVariants = true,
 	webhookUrl = "",
 	officialStockWebhookUrl = "",
-	predictorWebhookUrl = "",
 	statsWebhookInterval = 180.0,
-	stockPredictorLeadSeconds = 30,
 	maxPetBuyPerTick = 1,
 }
 
@@ -91,8 +89,6 @@ buyPetNames = {}
 
 selectedPets = {}
 selectedSellPets = {}
-stockPredictionHistory = {}
-stockPredictionShops = {}
 
 plantPromptTextCache = setmetatable({}, { __mode = "k" })
 harvestPromptCache = setmetatable({}, { __mode = "k" })
@@ -168,10 +164,8 @@ function loadConfig()
 		"keepAllPetVariants",
 		"webhookUrl",
 		"officialStockWebhookUrl",
-		"predictorWebhookUrl",
 		"statsWebhookInterval",
 		"stockWebhookCooldown",
-		"stockPredictorLeadSeconds",
 	})
 	copyKnownValues(decoded.state, state, {
 		"fruitCollector",
@@ -195,14 +189,6 @@ function loadConfig()
 	selectedGears = copyMap(decoded.selectedGears)
 	selectedPets = copyMap(decoded.selectedPets)
 	selectedSellPets = copyMap(decoded.selectedSellPets)
-	if decoded.stockPredictionVersion == 2 and type(decoded.stockPredictionHistory) == "table" then
-		stockPredictionHistory = decoded.stockPredictionHistory
-	end
-	if decoded.stockPredictionVersion == 2 and type(decoded.stockPredictionShops) == "table" then
-		stockPredictionShops = decoded.stockPredictionShops
-	elseif type(decoded.stockPredictionShops) == "table" and decoded.stockPredictionShops.webhookMessageId then
-		stockPredictionShops.webhookMessageId = decoded.stockPredictionShops.webhookMessageId
-	end
 
 	return true
 end
@@ -234,10 +220,8 @@ saveConfig = function()
 			keepAllPetVariants = CONFIG.keepAllPetVariants,
 			webhookUrl = CONFIG.webhookUrl,
 			officialStockWebhookUrl = CONFIG.officialStockWebhookUrl,
-			predictorWebhookUrl = CONFIG.predictorWebhookUrl,
 			statsWebhookInterval = CONFIG.statsWebhookInterval,
 			stockWebhookCooldown = CONFIG.stockWebhookCooldown,
-			stockPredictorLeadSeconds = CONFIG.stockPredictorLeadSeconds,
 		},
 		state = {
 			fruitCollector = state.fruitCollector,
@@ -257,9 +241,6 @@ saveConfig = function()
 		selectedGears = selectedGears,
 		selectedPets = selectedPets,
 		selectedSellPets = selectedSellPets,
-		stockPredictionVersion = 2,
-		stockPredictionHistory = stockPredictionHistory,
-		stockPredictionShops = stockPredictionShops,
 	}
 
 	local ok, encoded = pcall(function()
@@ -276,12 +257,10 @@ local configLoaded = loadConfig()
 
 local webhookSentAt = {}
 local stockLastAmounts = {}
-local stockPredictionSeenAt = {}
 local stockWebhookQueue = {}
 local stockWebhookScheduled = false
 local activityWebhookQueue = {}
 local activityWebhookScheduled = false
-local predictorWebhookUpdateScheduled = false
 local getStockItemsFolder
 local getShopStockAmount
 local getShopPriceAmount
@@ -353,83 +332,8 @@ function sendWebhook(title, description, key, targetUrl)
 	}, key, targetUrl)
 end
 
-function requestPredictorWebhookMessage(embeds)
-	if not canSendPredictorWebhook() or type(embeds) ~= "table" or #embeds == 0 then
-		return false
-	end
-
-	local requestFunction = getRequestFunction()
-	if type(requestFunction) ~= "function" then
-		setStatus("Predictor webhook: request function unavailable")
-		return false
-	end
-
-	local webhookUrl = string.gsub(CONFIG.predictorWebhookUrl, "%?.*$", "")
-	local messageId = tostring(stockPredictionShops.webhookMessageId or "")
-	local createBody = HttpService:JSONEncode({
-		username = "Stock Predictor",
-		embeds = embeds,
-	})
-	local editBody = HttpService:JSONEncode({
-		embeds = embeds,
-	})
-
-	local function perform(method, url, requestBody)
-		local ok, response = pcall(function()
-			return requestFunction({
-				Url = url,
-				Method = method,
-				Headers = {
-					["Content-Type"] = "application/json",
-				},
-				Body = requestBody,
-			})
-		end)
-		local statusCode = ok and type(response) == "table"
-			and tonumber(response.StatusCode or response.Status or response.status_code)
-			or 0
-		return ok and statusCode >= 200 and statusCode < 300, response, statusCode
-	end
-
-	if messageId ~= "" then
-		local edited = perform("PATCH", webhookUrl .. "/messages/" .. messageId, editBody)
-		if edited then
-			return true
-		end
-		stockPredictionShops.webhookMessageId = nil
-	end
-
-	local sent, response, statusCode = perform("POST", webhookUrl .. "?wait=true", createBody)
-	if not sent then
-		setStatus(("Predictor webhook failed (%s)"):format(tostring(statusCode)))
-		return false
-	end
-
-	local responseBody = type(response) == "table" and (response.Body or response.body) or nil
-	if type(responseBody) == "string" then
-		local decodedOk, decoded = pcall(HttpService.JSONDecode, HttpService, responseBody)
-		if decodedOk and type(decoded) == "table" and decoded.id then
-			stockPredictionShops.webhookMessageId = tostring(decoded.id)
-		end
-	end
-	saveConfig()
-	return true
-end
-
 function canSendOfficialStockWebhook()
 	return CONFIG.officialStockWebhookUrl ~= "" and string.lower(localPlayer.Name or "") == "saraoliver6"
-end
-
-function canSendPredictorWebhook()
-	return CONFIG.predictorWebhookUrl ~= "" and string.lower(localPlayer.Name or "") == "saraoliver6"
-end
-
-function getStockPredictionKey(shopName, itemName)
-	return tostring(shopName) .. ":" .. tostring(itemName)
-end
-
-function getSelectedPredictionMap(shopName)
-	return shopName == "SeedShop" and selectedSeeds or selectedGears
 end
 
 function getShopRestockTimes(shopName)
@@ -444,69 +348,6 @@ function getShopRestockTimes(shopName)
 	local lastRestock = lastValue and tonumber(lastValue.Value) or nil
 	local nextRestock = nextValue and tonumber(nextValue.Value) or nil
 	return lastRestock, nextRestock
-end
-
-function recordStockPredictionCycle(shopName, restockUnix)
-	restockUnix = tonumber(restockUnix)
-	if not restockUnix or restockUnix <= 0 then
-		return false
-	end
-
-	local shopHistory = stockPredictionShops[shopName]
-	if type(shopHistory) ~= "table" then
-		shopHistory = {}
-		stockPredictionShops[shopName] = shopHistory
-	end
-	if tonumber(shopHistory.lastObservedRestock) == restockUnix then
-		return false
-	end
-
-	shopHistory.lastObservedRestock = restockUnix
-	shopHistory.observations = math.max(0, tonumber(shopHistory.observations) or 0) + 1
-
-	local items = getStockItemsFolder and getStockItemsFolder(shopName)
-	if items then
-		for _, item in ipairs(items:GetChildren()) do
-			if not string.find(string.lower(item.Name), "template", 1, true) then
-				local key = getStockPredictionKey(shopName, item.Name)
-				local history = stockPredictionHistory[key]
-				if type(history) ~= "table" then
-					history = {}
-					stockPredictionHistory[key] = history
-				end
-
-				history.observations = math.max(0, tonumber(history.observations) or 0) + 1
-				local stockAmount = getShopStockAmount and getShopStockAmount(shopName, item.Name) or 0
-				local seenRestock = tonumber(stockPredictionSeenAt[key])
-				if stockAmount > 0 or seenRestock == restockUnix then
-					history.hits = math.max(0, tonumber(history.hits) or 0) + 1
-					local previousHit = tonumber(history.lastHitRestock)
-					if previousHit and previousHit < restockUnix then
-						local cycleSeconds = tonumber(shopHistory.cycleSeconds) or 300
-						local gap = math.max(1, math.floor(((restockUnix - previousHit) / math.max(cycleSeconds, 1)) + 0.5))
-						history.gapTotal = math.max(0, tonumber(history.gapTotal) or 0) + gap
-						history.gapCount = math.max(0, tonumber(history.gapCount) or 0) + 1
-						history.gapMin = math.min(tonumber(history.gapMin) or gap, gap)
-						history.gapMax = math.max(tonumber(history.gapMax) or gap, gap)
-					end
-					history.lastHitRestock = restockUnix
-					if stockAmount > 0 then
-						history.lastAmount = stockAmount
-					end
-				end
-			end
-		end
-	end
-
-	saveConfig()
-	if canSendPredictorWebhook() then
-		task.defer(function()
-			if type(queueStockPredictionUpdate) == "function" then
-				queueStockPredictionUpdate()
-			end
-		end)
-	end
-	return true
 end
 
 function getStockItemEmoji(shopName, itemName)
@@ -546,260 +387,6 @@ function getStockItemEmoji(shopName, itemName)
 		return "🌱"
 	end
 	return shopName == "SeedShop" and "🌱" or "🧰"
-end
-
-function getStockPredictionEstimate(shopName, itemName, nextRestock)
-	local shopHistory = stockPredictionShops[shopName] or {}
-	local cycleSeconds = math.max(1, tonumber(shopHistory.cycleSeconds) or 300)
-	local history = stockPredictionHistory[getStockPredictionKey(shopName, itemName)] or {}
-	local observations = math.max(0, tonumber(history.observations) or 0)
-	local hits = math.max(0, tonumber(history.hits) or 0)
-	local probability = observations > 0 and math.clamp(hits / observations, 0, 1) or nil
-	local gapCount = math.max(0, tonumber(history.gapCount) or 0)
-	local gapTotal = math.max(0, tonumber(history.gapTotal) or 0)
-	local lastHitRestock = tonumber(history.lastHitRestock)
-	if hits <= 0 then
-		return nil, probability, hits, observations, nil, "never_seen"
-	end
-	if hits < 2 or gapCount <= 0 or not lastHitRestock then
-		return nil, probability, hits, observations, nil, "needs_more_sightings"
-	end
-
-	local averageGap = math.max(1, math.floor((gapTotal / gapCount) + 0.5))
-	local likelyUnix = lastHitRestock + (averageGap * cycleSeconds)
-	while likelyUnix < nextRestock do
-		likelyUnix += averageGap * cycleSeconds
-	end
-	local cycles = math.max(1, math.floor(((likelyUnix - nextRestock) / cycleSeconds) + 0.5) + 1)
-	return likelyUnix, probability, hits, observations, cycles, "learned"
-end
-
-function getStockPredictionConfidenceText(probability, hits, observations, cycles, status)
-	observations = math.max(0, tonumber(observations) or 0)
-	hits = math.max(0, tonumber(hits) or 0)
-	cycles = math.max(1, tonumber(cycles) or 1)
-
-	if status == "never_seen" or hits <= 0 then
-		return observations > 0 and ("never seen in %d checks"):format(observations) or "no data yet"
-	end
-	if status == "needs_more_sightings" then
-		return ("seen %d/%d, learning pattern"):format(hits, observations)
-	end
-
-	local rateText = ("%.0f%%"):format(math.clamp((probability or 0) * 100, 0, 100))
-	if cycles > 1 then
-		return ("%s observed, ~%d cycles"):format(rateText, cycles)
-	end
-	return ("%s observed"):format(rateText)
-end
-
-function buildLegacyStockPredictionEmbed(shopName)
-	local _, nextRestock = getShopRestockTimes(shopName)
-	nextRestock = tonumber(nextRestock)
-	if not nextRestock or nextRestock <= 0 then
-		return nil
-	end
-
-	local currentStock = {}
-	local upcoming = {}
-	local items = getStockItemsFolder and getStockItemsFolder(shopName)
-	if items then
-		for _, item in ipairs(items:GetChildren()) do
-			if not string.find(string.lower(item.Name), "template", 1, true) then
-				local emoji = getStockItemEmoji(shopName, item.Name)
-				local amount = getShopStockAmount and getShopStockAmount(shopName, item.Name) or 0
-				local likelyUnix, probability, hits, observations, _, status = getStockPredictionEstimate(shopName, item.Name, nextRestock)
-				if amount > 0 then
-					table.insert(currentStock, {
-						name = item.Name,
-						line = ("• %s **%s** `x%d`"):format(emoji, item.Name, amount),
-					})
-				elseif likelyUnix and status == "learned" then
-					table.insert(upcoming, {
-						name = item.Name,
-						time = likelyUnix,
-						line = ("• %s **%s** · estimated <t:%d:R> · `%.0f%% observed rate`"):format(
-							emoji,
-							item.Name,
-							likelyUnix,
-							(probability or 0) * 100
-						),
-					})
-				end
-			end
-		end
-	end
-
-	table.sort(currentStock, function(left, right)
-		return left.name < right.name
-	end)
-	table.sort(upcoming, function(left, right)
-		if left.time ~= right.time then
-			return left.time < right.time
-		end
-		return left.name < right.name
-	end)
-
-	local currentStockLines = {}
-	for _, entry in ipairs(currentStock) do
-		table.insert(currentStockLines, entry.line)
-	end
-	local upcomingLines = {}
-	for index, entry in ipairs(upcoming) do
-		if index > 20 then
-			break
-		end
-		table.insert(upcomingLines, entry.line)
-	end
-
-	local isSeed = shopName == "SeedShop"
-	local description = table.concat({
-		"🔵 Exact shop timer; item estimates use observed restock history",
-		("**%s Next Restock · <t:%d:R>**"):format(isSeed and "🌱" or "🧰", nextRestock),
-		"",
-		("**%s Legacy Stock Snapshot**"):format(isSeed and "🌱" or "🧰"),
-		#currentStockLines > 0 and table.concat(currentStockLines, "\n") or "• No legacy stock lines",
-		"",
-		("**%s Learned Estimates**"):format(isSeed and "🌹 Seeds" or "🧰 Gears"),
-		#upcomingLines > 0 and table.concat(upcomingLines, "\n") or "• At least 3 observed restocks are required",
-	}, "\n")
-
-	return {
-		title = isSeed and "🌿 Seed Shop Stock Forecast" or "🧰 Gear Shop Stock Forecast",
-		description = description,
-		color = isSeed and 5763719 or 3447003,
-		footer = {
-			text = (isSeed and "Seed Shop" or "Gear Shop") .. " • Learned estimates are not guaranteed",
-		},
-		timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-	}
-end
-
-function buildStockPredictionEmbed(shopName)
-	local _, nextRestock = getShopRestockTimes(shopName)
-	nextRestock = tonumber(nextRestock)
-	if not nextRestock or nextRestock <= 0 then
-		return nil
-	end
-
-	local predictions = {}
-	local learning = {}
-	local items = getStockItemsFolder and getStockItemsFolder(shopName)
-	if items then
-		for _, item in ipairs(items:GetChildren()) do
-			if not string.find(string.lower(item.Name), "template", 1, true) then
-				local emoji = getStockItemEmoji(shopName, item.Name)
-				local likelyUnix, probability, hits, observations, cycles, status = getStockPredictionEstimate(shopName, item.Name, nextRestock)
-				local confidence = getStockPredictionConfidenceText(probability, hits, observations, cycles, status)
-				if likelyUnix and status == "learned" then
-					table.insert(predictions, {
-						name = item.Name,
-						time = likelyUnix,
-						line = ("- %s **%s**: <t:%d:F> (<t:%d:R>) `%s`"):format(
-							emoji,
-							item.Name,
-							likelyUnix,
-							likelyUnix,
-							confidence
-						),
-					})
-				else
-					table.insert(learning, {
-						name = item.Name,
-						hits = hits,
-						observations = observations,
-						line = ("- %s **%s**: `%s`"):format(emoji, item.Name, confidence),
-					})
-				end
-			end
-		end
-	end
-
-	table.sort(predictions, function(left, right)
-		if left.time ~= right.time then
-			return left.time < right.time
-		end
-		return left.name < right.name
-	end)
-	table.sort(learning, function(left, right)
-		if left.hits ~= right.hits then
-			return left.hits > right.hits
-		end
-		if left.observations ~= right.observations then
-			return left.observations > right.observations
-		end
-		return left.name < right.name
-	end)
-
-	local predictionLines = {}
-	for index, entry in ipairs(predictions) do
-		if index > 45 then
-			break
-		end
-		table.insert(predictionLines, entry.line)
-	end
-	local learningLines = {}
-	for index, entry in ipairs(learning) do
-		if index > 12 then
-			break
-		end
-		table.insert(learningLines, entry.line)
-	end
-
-	local isSeed = shopName == "SeedShop"
-	local description = table.concat({
-		"Exact shop timer. Forecasts only show after an item has enough observed appearances to learn a repeat gap.",
-		("Next shop refresh: <t:%d:F> (<t:%d:R>)"):format(nextRestock, nextRestock),
-		"",
-		"**Forecasts**",
-		#predictionLines > 0 and table.concat(predictionLines, "\n") or "- No learned forecasts yet",
-		"",
-		"**Learning / No Forecast**",
-		#learningLines > 0 and table.concat(learningLines, "\n") or "- All listed items have learned forecasts",
-	}, "\n")
-
-	return {
-		title = isSeed and "Seed Shop Stock Forecast" or "Gear Shop Stock Forecast",
-		description = description,
-		color = isSeed and 5763719 or 3447003,
-		footer = {
-			text = (isSeed and "Seed Shop" or "Gear Shop") .. " - learned estimates are not guaranteed",
-		},
-		timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-	}
-end
-
-function buildStockPredictionEmbeds()
-	local embeds = {}
-	for _, shopName in ipairs({ "SeedShop", "GearShop" }) do
-		local embed = buildStockPredictionEmbed(shopName)
-		if embed then
-			table.insert(embeds, embed)
-		end
-	end
-	return embeds
-end
-
-function sendStockPrediction()
-	if not canSendPredictorWebhook() then
-		return false
-	end
-	local embeds = buildStockPredictionEmbeds()
-	if #embeds == 0 then
-		return false
-	end
-	return requestPredictorWebhookMessage(embeds)
-end
-
-function queueStockPredictionUpdate()
-	if predictorWebhookUpdateScheduled then
-		return
-	end
-	predictorWebhookUpdateScheduled = true
-	task.delay(1.5, function()
-		predictorWebhookUpdateScheduled = false
-		sendStockPrediction()
-	end)
 end
 
 function shouldNotifySelected(map, name)
@@ -873,7 +460,7 @@ function buildStockUpdateEmbed(shopName, entries)
 
 	local isSeed = stockFolderName == "SeedShop"
 	local descriptionParts = {
-		"Current stock update. Forecasts are only sent in the predictor webhook.",
+		"Current stock update.",
 	}
 	if nextRestock and nextRestock > 0 then
 		table.insert(descriptionParts, ("Next shop refresh: <t:%d:F> (<t:%d:R>)"):format(nextRestock, nextRestock))
@@ -1002,11 +589,6 @@ function notifyStock(shopName, itemName, force)
 	if stockAmount <= 0 then
 		webhookSentAt[key] = nil
 		return
-	end
-
-	local lastRestock = getShopRestockTimes(stockFolderName)
-	if lastRestock and lastRestock > 0 then
-		stockPredictionSeenAt[getStockPredictionKey(stockFolderName, itemName)] = lastRestock
 	end
 
 	if force or previousAmount == nil or previousAmount ~= stockAmount then
@@ -1483,83 +1065,9 @@ function refreshPetNamesFromAssets()
 	table.sort(petNames)
 end
 
-function watchStockPredictionShop(shopName)
-	local stockValues = ReplicatedStorage:FindFirstChild("StockValues")
-	local shop = stockValues and stockValues:FindFirstChild(shopName)
-	local lastValue = shop and shop:FindFirstChild("UnixLastRestock")
-	local nextValue = shop and shop:FindFirstChild("UnixNextRestock")
-	if not lastValue or not nextValue then
-		return
-	end
-
-	local function updateCycle()
-		local lastRestock = tonumber(lastValue.Value)
-		local nextRestock = tonumber(nextValue.Value)
-		local history = stockPredictionShops[shopName]
-		if type(history) ~= "table" then
-			history = {}
-			stockPredictionShops[shopName] = history
-		end
-		if lastRestock and nextRestock and nextRestock > lastRestock then
-			history.cycleSeconds = nextRestock - lastRestock
-		end
-	end
-
-	local function observeRestock()
-		updateCycle()
-		task.delay(0.75, function()
-			recordStockPredictionCycle(shopName, tonumber(lastValue.Value))
-		end)
-	end
-
-	lastValue.Changed:Connect(observeRestock)
-	nextValue.Changed:Connect(updateCycle)
-	updateCycle()
-	task.delay(1, observeRestock)
-end
-
 refreshSeedNamesFromStockValues()
 refreshGearNamesFromStockValues()
 refreshPetNamesFromAssets()
-watchStockPredictionShop("SeedShop")
-watchStockPredictionShop("GearShop")
-
-task.spawn(function()
-	while task.wait(1) do
-		if canSendPredictorWebhook() then
-			local now = os.time()
-			local predictionDue = false
-			for _, shopName in ipairs({ "SeedShop", "GearShop" }) do
-				local _, nextRestock = getShopRestockTimes(shopName)
-				nextRestock = tonumber(nextRestock)
-				if nextRestock and nextRestock > 0 then
-					local history = stockPredictionShops[shopName]
-					if type(history) ~= "table" then
-						history = {}
-						stockPredictionShops[shopName] = history
-					end
-					local leadSeconds = math.max(5, tonumber(CONFIG.stockPredictorLeadSeconds) or 30)
-					if now >= nextRestock - leadSeconds
-						and now <= nextRestock + 2
-						and tonumber(history.predictedFor) ~= nextRestock
-					then
-						predictionDue = true
-					end
-				end
-			end
-			if predictionDue and sendStockPrediction() then
-				for _, shopName in ipairs({ "SeedShop", "GearShop" }) do
-					local _, nextRestock = getShopRestockTimes(shopName)
-					local history = stockPredictionShops[shopName]
-					if type(history) == "table" then
-						history.predictedFor = nextRestock
-					end
-				end
-				saveConfig()
-			end
-		end
-	end
-end)
 
 function getCharacter()
 	return localPlayer.Character or localPlayer.CharacterAdded:Wait()
@@ -6918,39 +6426,6 @@ if string.lower(localPlayer.Name or "") == "saraoliver6" then
 		officialStockWebhookBox.Text = CONFIG.officialStockWebhookUrl
 		saveConfig()
 		setStatus(CONFIG.officialStockWebhookUrl ~= "" and "Official stock webhook saved" or "Official stock webhook cleared")
-	end)
-
-	local predictorWebhookBox = make("TextBox", {
-		Name = "PredictorWebhookUrl",
-		BackgroundColor3 = Color3.fromRGB(34, 41, 42),
-		BorderSizePixel = 0,
-		ClearTextOnFocus = false,
-		Font = Enum.Font.GothamSemibold,
-		PlaceholderText = "Exclusive predictor webhook URL",
-		Text = CONFIG.predictorWebhookUrl,
-		TextColor3 = Color3.fromRGB(242, 247, 239),
-		TextSize = 9,
-		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.new(1, 0, 0, 20),
-		LayoutOrder = 36,
-	}, currentTabParent or content)
-	make("UICorner", { CornerRadius = UDim.new(0, 6) }, predictorWebhookBox)
-	make("UIPadding", {
-		PaddingLeft = UDim.new(0, 7),
-		PaddingRight = UDim.new(0, 7),
-	}, predictorWebhookBox)
-	predictorWebhookBox.FocusLost:Connect(function()
-		local previousUrl = CONFIG.predictorWebhookUrl
-		CONFIG.predictorWebhookUrl = string.gsub(tostring(predictorWebhookBox.Text or ""), "^%s*(.-)%s*$", "%1")
-		if CONFIG.predictorWebhookUrl ~= previousUrl then
-			stockPredictionShops.webhookMessageId = nil
-		end
-		predictorWebhookBox.Text = CONFIG.predictorWebhookUrl
-		saveConfig()
-		setStatus(CONFIG.predictorWebhookUrl ~= "" and "Exclusive predictor webhook saved" or "Exclusive predictor webhook cleared")
-		if CONFIG.predictorWebhookUrl ~= "" then
-			sendStockPrediction()
-		end
 	end)
 end
 
