@@ -583,7 +583,26 @@ function getStockPredictionEstimate(shopName, itemName, nextRestock)
 	return likelyUnix, probability, hits, observations, cycles
 end
 
-function buildStockPredictionEmbed(shopName)
+function getStockPredictionConfidenceText(probability, hits, observations, cycles)
+	observations = math.max(0, tonumber(observations) or 0)
+	hits = math.max(0, tonumber(hits) or 0)
+	cycles = math.max(1, tonumber(cycles) or 1)
+
+	if observations <= 0 then
+		return "learning"
+	end
+
+	local rateText = ("%.0f%%"):format(math.clamp((probability or 0) * 100, 0, 100))
+	if hits <= 0 then
+		return ("0/%d observed"):format(observations)
+	end
+	if cycles > 1 then
+		return ("%s observed, ~%d cycles"):format(rateText, cycles)
+	end
+	return ("%s observed"):format(rateText)
+end
+
+function buildLegacyStockPredictionEmbed(shopName)
 	local _, nextRestock = getShopRestockTimes(shopName)
 	nextRestock = tonumber(nextRestock)
 	if not nextRestock or nextRestock <= 0 then
@@ -647,8 +666,8 @@ function buildStockPredictionEmbed(shopName)
 		"🔵 Exact shop timer; item estimates use observed restock history",
 		("**%s Next Restock · <t:%d:R>**"):format(isSeed and "🌱" or "🧰", nextRestock),
 		"",
-		("**%s Current Stock**"):format(isSeed and "🌱" or "🧰"),
-		#currentStockLines > 0 and table.concat(currentStockLines, "\n") or "• Nothing currently in stock",
+		("**%s Legacy Stock Snapshot**"):format(isSeed and "🌱" or "🧰"),
+		#currentStockLines > 0 and table.concat(currentStockLines, "\n") or "• No legacy stock lines",
 		"",
 		("**%s Learned Estimates**"):format(isSeed and "🌹 Seeds" or "🧰 Gears"),
 		#upcomingLines > 0 and table.concat(upcomingLines, "\n") or "• At least 3 observed restocks are required",
@@ -665,10 +684,70 @@ function buildStockPredictionEmbed(shopName)
 	}
 end
 
-function sendStockPrediction()
-	if not canSendPredictorWebhook() then
-		return false
+function buildStockPredictionEmbed(shopName)
+	local _, nextRestock = getShopRestockTimes(shopName)
+	nextRestock = tonumber(nextRestock)
+	if not nextRestock or nextRestock <= 0 then
+		return nil
 	end
+
+	local predictions = {}
+	local items = getStockItemsFolder and getStockItemsFolder(shopName)
+	if items then
+		for _, item in ipairs(items:GetChildren()) do
+			if not string.find(string.lower(item.Name), "template", 1, true) then
+				local emoji = getStockItemEmoji(shopName, item.Name)
+				local likelyUnix, probability, hits, observations, cycles = getStockPredictionEstimate(shopName, item.Name, nextRestock)
+				table.insert(predictions, {
+					name = item.Name,
+					time = likelyUnix,
+					line = ("- %s **%s**: <t:%d:F> (<t:%d:R>) `%s`"):format(
+						emoji,
+						item.Name,
+						likelyUnix,
+						likelyUnix,
+						getStockPredictionConfidenceText(probability, hits, observations, cycles)
+					),
+				})
+			end
+		end
+	end
+
+	table.sort(predictions, function(left, right)
+		if left.time ~= right.time then
+			return left.time < right.time
+		end
+		return left.name < right.name
+	end)
+
+	local predictionLines = {}
+	for index, entry in ipairs(predictions) do
+		if index > 45 then
+			break
+		end
+		table.insert(predictionLines, entry.line)
+	end
+
+	local isSeed = shopName == "SeedShop"
+	local description = table.concat({
+		"Exact shop timer; each item shows the next predicted time it will stock again.",
+		("Next shop refresh: <t:%d:F> (<t:%d:R>)"):format(nextRestock, nextRestock),
+		"",
+		#predictionLines > 0 and table.concat(predictionLines, "\n") or "- No stock items found",
+	}, "\n")
+
+	return {
+		title = isSeed and "Seed Shop Stock Forecast" or "Gear Shop Stock Forecast",
+		description = description,
+		color = isSeed and 5763719 or 3447003,
+		footer = {
+			text = (isSeed and "Seed Shop" or "Gear Shop") .. " - learned estimates are not guaranteed",
+		},
+		timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+	}
+end
+
+function buildStockPredictionEmbeds()
 	local embeds = {}
 	for _, shopName in ipairs({ "SeedShop", "GearShop" }) do
 		local embed = buildStockPredictionEmbed(shopName)
@@ -676,6 +755,14 @@ function sendStockPrediction()
 			table.insert(embeds, embed)
 		end
 	end
+	return embeds
+end
+
+function sendStockPrediction()
+	if not canSendPredictorWebhook() then
+		return false
+	end
+	local embeds = buildStockPredictionEmbeds()
 	if #embeds == 0 then
 		return false
 	end
@@ -752,32 +839,26 @@ function flushStockWebhookQueue()
 	local queued = stockWebhookQueue
 	stockWebhookQueue = {}
 
-	local byShop = {}
 	local keys = {}
 	for _, entry in pairs(queued) do
 		if entry.amount and entry.amount > 0 then
-			byShop[entry.shopName] = byShop[entry.shopName] or {}
-			table.insert(byShop[entry.shopName], ("- %s (%d available)"):format(entry.itemName, entry.amount))
 			table.insert(keys, entry.key)
 		end
 	end
 
-	local sections = {}
-	for shopName, lines in pairs(byShop) do
-		table.sort(lines)
-		table.insert(sections, ("**%s**\n%s"):format(shopName, table.concat(lines, "\n")))
-	end
-	table.sort(sections)
-
-	if #sections == 0 then
+	if #keys == 0 then
 		return
 	end
 
-	local description = table.concat(sections, "\n\n")
-	local sent = sendWebhook("Stock update", description, nil, CONFIG.webhookUrl)
+	local embeds = buildStockPredictionEmbeds()
+	if #embeds == 0 then
+		return
+	end
+
+	local sent = sendWebhookEmbeds(embeds, nil, CONFIG.webhookUrl, "Stock Predictor")
 	local officialSent = false
 	if canSendOfficialStockWebhook() then
-		officialSent = sendWebhook("Stock update", description, nil, CONFIG.officialStockWebhookUrl)
+		officialSent = sendWebhookEmbeds(embeds, nil, CONFIG.officialStockWebhookUrl, "Stock Predictor")
 	end
 	local now = os.clock()
 	if sent then
@@ -2480,7 +2561,21 @@ end
 
 function getWildPetSpawns()
 	local map = getMap()
-	return map and map:FindFirstChild("WildPetSpawns")
+	local direct = map and map:FindFirstChild("WildPetSpawns")
+	if direct then
+		return direct
+	end
+
+	for _, root in ipairs({ map, workspace }) do
+		if root then
+			local found = root:FindFirstChild("WildPetSpawns", true)
+			if found then
+				return found
+			end
+		end
+	end
+
+	return nil
 end
 
 function refreshBuyPetNamesFromWildSpawns()
@@ -3484,10 +3579,18 @@ function triggerAnyPrompt(prompt)
 	pcall(function()
 		holdSeconds = math.clamp(tonumber(prompt.HoldDuration) or 0, 0, 2) + 0.05
 	end)
+	local fired = false
 	if typeof(fireproximityprompt) == "function" then
-		local fired = pcall(fireproximityprompt, prompt, holdSeconds, true)
-		if fired then
-			return true
+		for _, args in ipairs({
+			{ prompt, holdSeconds, true },
+			{ prompt, math.max(1, holdSeconds), true },
+			{ prompt, 1, true },
+			{ prompt, 0, true },
+			{ prompt },
+		}) do
+			local ok = pcall(fireproximityprompt, unpackArgs(args))
+			fired = fired or ok
+			task.wait(0.04)
 		end
 	end
 
@@ -3498,7 +3601,7 @@ function triggerAnyPrompt(prompt)
 	local ended = pcall(function()
 		prompt:InputHoldEnd()
 	end)
-	return began or ended
+	return fired or began or ended
 end
 
 function getTargetPart(target)
@@ -5781,7 +5884,7 @@ function walkToDynamicPosition(getPosition, stopDistance, timeoutSeconds)
 			humanoid:MoveTo(waypoint.Position)
 
 			local waypointStartedAt = os.clock()
-			while os.clock() - waypointStartedAt < CONFIG.petPathRefreshInterval do
+			while os.clock() - waypointStartedAt < math.max(CONFIG.petPathRefreshInterval, 3.5) do
 				task.wait(0.08)
 				root = getRoot()
 				position = getPosition()
@@ -5841,9 +5944,42 @@ function walkToPetPrompt(model, prompt)
 		return getPetPromptPosition(model, prompt)
 	end, stopDistance, CONFIG.petWalkTimeout)
 	if reached then
-		task.wait(0.1)
+		task.wait(0.15)
 	end
 	return reached
+end
+
+function isPetBuyPrompt(prompt)
+	if not prompt or not prompt:IsA("ProximityPrompt") then
+		return false
+	end
+	if prompt.Name == "BuyPrompt" then
+		return true
+	end
+	return textMatches(prompt, { "buy", "purchase", "adopt", "tame" })
+end
+
+function petNameMatchesSelection(baseName, selectedName, model, prompt)
+	local selectedTerm = compactName(selectedName)
+	if selectedTerm == "" then
+		return false
+	end
+
+	local terms = {
+		baseName,
+		model and model.Name or "",
+		prompt and prompt.Name or "",
+		prompt and prompt.ObjectText or "",
+		prompt and prompt.ActionText or "",
+	}
+	for _, value in ipairs(terms) do
+		local term = compactName(value)
+		if term ~= "" and (term == selectedTerm or string.find(term, selectedTerm, 1, true) or string.find(selectedTerm, term, 1, true)) then
+			return true
+		end
+	end
+
+	return false
 end
 
 function buyPetRemote(petName, model, prompt)
@@ -5905,10 +6041,14 @@ function buyOnePet(petName)
 	end
 
 	local wildPetSpawns = getWildPetSpawns()
-	local selectedTerm = compactName(petName)
-	local candidates = {}
+	if not wildPetSpawns then
+		return false, "Auto pets: WildPetSpawns not found"
+	end
 
-	for _, descendant in ipairs(getCachedDescendants("wildPets", wildPetSpawns)) do
+	local candidates = {}
+	cache.wildPetsAt = 0
+
+	for _, descendant in ipairs(getCachedDescendants("wildPets", wildPetSpawns, 0.5)) do
 		if not isEnabled("autoBuyPets") then
 			return false, "Auto pets: disabled"
 		end
@@ -5920,11 +6060,8 @@ function buyOnePet(petName)
 			end
 
 			local baseName = model and getWildPetBaseName(model.Name) or ""
-			local baseTerm = compactName(baseName)
-			local isBuyPrompt = descendant.Name == "BuyPrompt" or textMatches(descendant, { "buy", "purchase", "adopt" })
-			local isPetPrompt = selectedTerm ~= "" and baseTerm == selectedTerm
 
-			if isBuyPrompt and isPetPrompt then
+			if isPetBuyPrompt(descendant) and petNameMatchesSelection(baseName, petName, model, descendant) then
 				table.insert(candidates, {
 					model = model,
 					prompt = descendant,
@@ -5952,6 +6089,8 @@ function buyOnePet(petName)
 					return true, ("Auto pets: bought %s by prompt"):format(petName), getPetPurchaseInfo(petName, model, prompt)
 				end
 			end
+		else
+			setStatus(("Auto pets: pathing to %s failed, trying remote"):format(petName))
 		end
 
 		if tryVerifiedPetRemote(model, prompt) then
