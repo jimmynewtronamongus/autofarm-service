@@ -14,10 +14,10 @@ localPlayer = Players.LocalPlayer
 playerGui = localPlayer:WaitForChild("PlayerGui")
 
 CONFIG = {
-	collectInterval = 0.15,
+	collectInterval = 0.05,
 	sellInterval = 5.0,
 	sellWhenFullInterval = 0.75,
-	schedulerInterval = 0.1,
+	schedulerInterval = 0.05,
 	maxSellAttempts = 2,
 	sellCooldown = 1.0,
 	sellResumeFreeSlots = 8,
@@ -32,11 +32,11 @@ CONFIG = {
 	cacheRefreshInterval = 25.0,
 	inventoryRefreshInterval = 1.0,
 	guiInventoryRefreshInterval = 30.0,
-	maxFruitCollectPerTick = 75,
-	maxFruitScanPerRoot = 900,
-	fruitCacheRefreshInterval = 0.25,
-	maxFruitTargetsCached = 500,
-	maxFruitPromptFallbackPerTick = 75,
+	maxFruitCollectPerTick = 180,
+	maxFruitScanPerRoot = 1800,
+	fruitCacheRefreshInterval = 0.1,
+	maxFruitTargetsCached = 1200,
+	maxFruitPromptFallbackPerTick = 180,
 	maxFruitCollectWeight = 0,
 	deepPacketDiscovery = false,
 	packetDiscoveryCooldown = 60.0,
@@ -847,7 +847,6 @@ local lastStatsWebhookAt = 0
 local stats = {
 	fruitTargetsChecked = 0,
 	fruitCollected = 0,
-	collectSkippedFull = 0,
 	seedsBought = 0,
 	gearBought = 0,
 	petsBought = 0,
@@ -2928,20 +2927,6 @@ function waitForPurchaseChanged(beforeInventoryCount, beforeSheckles, timeoutSec
 	return changed, afterInventoryCount, afterSheckles
 end
 
-function shouldPauseFruitCollection()
-	if not (state.sellWhenFull or state.autoSell) then
-		return false
-	end
-
-	local full = refreshInventoryStats(false)
-	if full ~= true then
-		return false
-	end
-
-	invalidateSellableInventoryCache()
-	return #getSellableFruitTools(true) > 0
-end
-
 function updateStatsUI()
 	local now = os.clock()
 	if now - lastStatsUIUpdateAt < 1.5 then
@@ -3769,18 +3754,8 @@ function collectFruit()
 		return
 	end
 
-	if state.sellWhenFull or state.autoSell then
-		invalidateSellableInventoryCache()
-		refreshInventoryStats(true)
-	end
 	if state.performanceMode then
 		restoreOwnGardenAutomationPrompts()
-	end
-
-	if shouldPauseFruitCollection() then
-		stats.collectSkippedFull += 1
-		updateStatsUI()
-		setStatus(("Fruit collector: inventory full (%d/%d), still scanning"):format(stats.inventoryItems, stats.inventoryCapacity))
 	end
 
 	local roots = getOwnGardenRoots()
@@ -3834,12 +3809,12 @@ function collectFruit()
 			end
 		end
 
-		if index % 15 == 0 then
+		if index % 60 == 0 then
 			task.wait()
 		end
 	end
 
-	task.wait(0.04)
+	task.wait()
 	local afterInventoryCount = countHarvestInventoryItems()
 	local gained = math.max((afterInventoryCount or 0) - (beforeInventoryCount or 0), 0)
 	stats.fruitCollected += gained
@@ -7357,6 +7332,12 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		timers.sellWhenFull = 0
 	end
 
+	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
+		if tryRun("fruitCollector", collectFruit) then
+			timers.fruitCollector = 0
+		end
+	end
+
 	if state.autoBuyPets and timers.autoBuyPets >= CONFIG.petBuyInterval then
 		if tryRun("autoBuyPets", buyPets) then
 			timers.autoBuyPets = 0
@@ -7366,12 +7347,6 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	if state.autoSellPets and timers.autoSellPets >= CONFIG.petSellInterval then
 		if tryRun("autoSellPets", autoSellPets) then
 			timers.autoSellPets = 0
-		end
-	end
-
-	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
-		if tryRun("fruitCollector", collectFruit) then
-			timers.fruitCollector = 0
 		end
 	end
 
