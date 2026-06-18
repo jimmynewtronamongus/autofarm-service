@@ -24,10 +24,10 @@ CONFIG = {
 	buyInterval = 1.5,
 	mailInterval = 6.0,
 	petSellInterval = 5.0,
-	petBuyInterval = 1.5,
+	petBuyInterval = 0.6,
 	petWalkDistance = 10.5,
-	petWalkTimeout = 12.0,
-	petPathRefreshInterval = 0.65,
+	petWalkTimeout = 4.5,
+	petPathRefreshInterval = 0.35,
 	petPathTargetMoveThreshold = 4.0,
 	stockWebhookCooldown = 10.0,
 	cacheRefreshInterval = 25.0,
@@ -5928,6 +5928,24 @@ function walkToDynamicPosition(getPosition, stopDistance, timeoutSeconds)
 			return true
 		end
 
+		humanoid:MoveTo(position)
+		local directStartedAt = os.clock()
+		while os.clock() - directStartedAt < 0.45 do
+			task.wait(0.06)
+			root = getRoot()
+			position = getPosition()
+			if not root or not position then
+				return false
+			end
+			if (root.Position - position).Magnitude <= stopDistance then
+				return true
+			end
+			if (root.Position - lastProgressPosition).Magnitude >= 2 then
+				lastProgressPosition = root.Position
+				lastProgressAt = os.clock()
+			end
+		end
+
 		local path = PathfindingService:CreatePath({
 			AgentRadius = 2.25,
 			AgentHeight = 5,
@@ -5955,8 +5973,8 @@ function walkToDynamicPosition(getPosition, stopDistance, timeoutSeconds)
 			humanoid:MoveTo(waypoint.Position)
 
 			local waypointStartedAt = os.clock()
-			while os.clock() - waypointStartedAt < math.max(CONFIG.petPathRefreshInterval, 3.5) do
-				task.wait(0.08)
+			while os.clock() - waypointStartedAt < CONFIG.petPathRefreshInterval do
+				task.wait(0.06)
 				root = getRoot()
 				position = getPosition()
 				if not root or not position then
@@ -5975,7 +5993,7 @@ function walkToDynamicPosition(getPosition, stopDistance, timeoutSeconds)
 				if (root.Position - lastProgressPosition).Magnitude >= 1.5 then
 					lastProgressPosition = root.Position
 					lastProgressAt = os.clock()
-				elseif os.clock() - lastProgressAt >= 0.8 then
+				elseif os.clock() - lastProgressAt >= 0.45 then
 					humanoid.Jump = true
 					recompute = true
 					lastProgressAt = os.clock()
@@ -6106,7 +6124,7 @@ function tryVerifiedPetRemote(model, prompt)
 		local beforeInventoryCount = countInventoryTools()
 		local beforeSheckles = refreshCurrencyStats(true)
 		if attempt() then
-			local changed = waitForPurchaseChanged(beforeInventoryCount, beforeSheckles, 2.5)
+			local changed = waitForPurchaseChanged(beforeInventoryCount, beforeSheckles, 0.8)
 			if changed then
 				return true
 			end
@@ -6158,6 +6176,11 @@ function buyOnePet(petName)
 	for _, candidate in ipairs(candidates) do
 		local model = candidate.model
 		local prompt = candidate.prompt
+		if tryVerifiedPetRemote(model, prompt) then
+			markPetSpawnHandled(model, prompt, 20)
+			return true, ("Auto pets: bought %s by remote"):format(petName), getPetPurchaseInfo(petName, model, prompt)
+		end
+
 		local walked = walkToPetPrompt(model, prompt)
 		if walked then
 			local beforeInventoryCount = countInventoryTools()
@@ -6171,11 +6194,6 @@ function buyOnePet(petName)
 			end
 		else
 			setStatus(("Auto pets: pathing to %s failed, trying remote"):format(petName))
-		end
-
-		if tryVerifiedPetRemote(model, prompt) then
-			markPetSpawnHandled(model, prompt, 20)
-			return true, ("Auto pets: bought %s by remote"):format(petName), getPetPurchaseInfo(petName, model, prompt)
 		end
 	end
 
