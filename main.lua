@@ -9,6 +9,11 @@ RunService = game:GetService("RunService")
 StarterGui = game:GetService("StarterGui")
 UserInputService = game:GetService("UserInputService")
 PathfindingService = game:GetService("PathfindingService")
+GuiService = game:GetService("GuiService")
+VirtualInputManager = nil
+pcall(function()
+	VirtualInputManager = game:GetService("VirtualInputManager")
+end)
 
 localPlayer = Players.LocalPlayer
 playerGui = localPlayer:WaitForChild("PlayerGui")
@@ -6105,6 +6110,213 @@ function refreshSelectorFilter(buttons, names, query, row, columns)
 	row.CanvasSize = UDim2.fromOffset(0, math.max(1, math.ceil(visible / (columns or 2))) * 20)
 end
 
+local startupLoadClicked = setmetatable({}, { __mode = "k" })
+local startupLoadStarted = false
+local startupLoadPositiveWords = {
+	"play",
+	"start",
+	"continue",
+	"load",
+	"enter",
+	"begin",
+	"skip",
+	"ok",
+	"okay",
+	"confirm",
+}
+local startupLoadContextWords = {
+	"loading",
+	"loader",
+	"mainmenu",
+	"menu",
+	"startscreen",
+	"titlescreen",
+	"splash",
+	"play",
+}
+local startupLoadBlockedWords = {
+	"buy",
+	"shop",
+	"sell",
+	"gift",
+	"stock",
+	"seed",
+	"gear",
+	"pet",
+	"egg",
+	"weather",
+	"webhook",
+	"delete",
+	"remove",
+	"close",
+	"exit",
+	"cancel",
+	"claim",
+	"equip",
+	"unequip",
+	"settings",
+	"code",
+	"invite",
+	"teleport",
+	"trade",
+	"craft",
+	"quest",
+	"daily",
+	"reward",
+	"robux",
+	"premium",
+	"gamepass",
+}
+
+function startupGuiText(instance, depth)
+	local parts = {}
+	local current = instance
+	local remaining = depth or 4
+	while current and current ~= playerGui and remaining > 0 do
+		table.insert(parts, safeText(current.Name))
+		pcall(function()
+			if current.Text and current.Text ~= "" then
+				table.insert(parts, safeText(current.Text))
+			end
+		end)
+		pcall(function()
+			if current.PlaceholderText and current.PlaceholderText ~= "" then
+				table.insert(parts, safeText(current.PlaceholderText))
+			end
+		end)
+		current = current.Parent
+		remaining -= 1
+	end
+	return compactName(table.concat(parts, " "))
+end
+
+function startupTextHasAny(text, words)
+	for _, word in ipairs(words) do
+		if string.find(text, compactName(word), 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+function isStartupLoadButton(button)
+	if not button or startupLoadClicked[button] then
+		return false
+	end
+	if not (button:IsA("TextButton") or button:IsA("ImageButton")) then
+		return false
+	end
+	local ownGui = playerGui:FindFirstChild("GardenAutomationGui")
+	if ownGui and button:IsDescendantOf(ownGui) then
+		return false
+	end
+
+	local visible = true
+	pcall(function()
+		visible = button.Visible
+	end)
+	if not visible then
+		return false
+	end
+
+	local text = startupGuiText(button, 6)
+	if text == "" or startupTextHasAny(text, startupLoadBlockedWords) then
+		return false
+	end
+
+	local buttonText = startupGuiText(button, 2)
+	if startupTextHasAny(buttonText, startupLoadPositiveWords) then
+		return true
+	end
+
+	return startupTextHasAny(text, startupLoadPositiveWords) and startupTextHasAny(text, startupLoadContextWords)
+end
+
+function clickStartupLoadButton(button)
+	if not isStartupLoadButton(button) then
+		return false
+	end
+
+	startupLoadClicked[button] = true
+	pcall(function()
+		GuiService.SelectedObject = button
+	end)
+	local clicked = false
+	for _, signalName in ipairs({ "Activated", "MouseButton1Click", "MouseButton1Down", "MouseButton1Up" }) do
+		local signal = button[signalName]
+		if signal and typeof(firesignal) == "function" then
+			local ok = pcall(function()
+				firesignal(signal)
+			end)
+			clicked = clicked or ok
+		end
+	end
+
+	if VirtualInputManager then
+		local ok = pcall(function()
+			local center = button.AbsolutePosition + (button.AbsoluteSize / 2)
+			VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 0)
+			task.wait(0.03)
+			VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 0)
+		end)
+		clicked = clicked or ok
+	end
+
+	local activateOk = pcall(function()
+		button:Activate()
+	end)
+	clicked = clicked or activateOk
+	setStatus(("Startup: clicked %s"):format(safeText(button.Name)))
+	return clicked
+end
+
+function scanStartupLoadButtons()
+	local candidates = {}
+	for _, descendant in ipairs(playerGui:GetDescendants()) do
+		if isStartupLoadButton(descendant) then
+			table.insert(candidates, descendant)
+		end
+	end
+	table.sort(candidates, function(a, b)
+		return startupGuiText(a, 2) < startupGuiText(b, 2)
+	end)
+	for _, button in ipairs(candidates) do
+		if clickStartupLoadButton(button) then
+			return true
+		end
+	end
+	return false
+end
+
+function startAutoLoadGame()
+	if startupLoadStarted then
+		return
+	end
+	startupLoadStarted = true
+
+	local startedAt = os.clock()
+	local connection
+	connection = playerGui.DescendantAdded:Connect(function(descendant)
+		if os.clock() - startedAt <= 90 then
+			task.defer(function()
+				clickStartupLoadButton(descendant)
+			end)
+		elseif connection then
+			connection:Disconnect()
+		end
+	end)
+
+	task.spawn(function()
+		while os.clock() - startedAt <= 90 do
+			scanStartupLoadButtons()
+			task.wait(0.35)
+		end
+		if connection then
+			connection:Disconnect()
+		end
+	end)
+end
+
 function buildUI()
 local existing = playerGui:FindFirstChild("GardenAutomationGui")
 if existing then
@@ -7205,6 +7417,7 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 end
 
+startAutoLoadGame()
 buildUI()
 
 schedulePerformanceModeRestore()
