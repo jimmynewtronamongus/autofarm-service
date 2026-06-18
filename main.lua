@@ -1059,7 +1059,6 @@ local stats = {
 local running = {}
 local stopTokens = {}
 local lastAutoSellAttemptAt = 0
-local fruitCollectionPausedUntil = 0
 
 function bumpStopToken(key)
 	stopTokens[key] = (stopTokens[key] or 0) + 1
@@ -3537,36 +3536,19 @@ function collectFruitPacket(target, heavy, prompt)
 	return false
 end
 
-function collectionTookEffect(target, beforeInventoryCount, timeoutSeconds)
-	local deadline = os.clock() + (timeoutSeconds or 0.9)
-	while true do
-		task.wait(0.12)
+function collectionTookEffect(target, beforeInventoryCount)
+	task.wait(0.25)
 
-		if target and not target.Parent then
-			return true
-		end
-
-		if target and target.Parent and not target:IsDescendantOf(workspace) then
-			return true
-		end
-
-		local afterInventoryCount = countHarvestInventoryItems()
-		if beforeInventoryCount ~= nil and afterInventoryCount > beforeInventoryCount then
-			return true
-		end
-
-		if os.clock() >= deadline then
-			return false
-		end
+	if target and not target.Parent then
+		return true
 	end
-end
 
-function getPromptHoldSeconds(prompt, extra)
-	local holdSeconds = 0
-	pcall(function()
-		holdSeconds = tonumber(prompt.HoldDuration) or 0
-	end)
-	return math.clamp(holdSeconds, 0, 2) + (extra or 0.05)
+	if target and target.Parent and not target:IsDescendantOf(workspace) then
+		return true
+	end
+
+	local afterInventoryCount = countHarvestInventoryItems()
+	return beforeInventoryCount ~= nil and afterInventoryCount > beforeInventoryCount
 end
 
 function triggerHarvestPrompt(prompt)
@@ -3574,30 +3556,23 @@ function triggerHarvestPrompt(prompt)
 		return false
 	end
 
-	local holdSeconds = getPromptHoldSeconds(prompt, 0.08)
-	local fired = false
 	if typeof(fireproximityprompt) == "function" then
-		for _, args in ipairs({
-			{ prompt, holdSeconds, true },
-			{ prompt, math.max(1, holdSeconds), true },
-			{ prompt, 1, true },
-			{ prompt, 0, true },
-			{ prompt },
-		}) do
-			local ok = pcall(fireproximityprompt, unpackArgs(args))
-			fired = fired or ok
-			task.wait(0.03)
+		local ok = pcall(fireproximityprompt, prompt)
+			or pcall(fireproximityprompt, prompt, 0)
+			or pcall(fireproximityprompt, prompt, 1, true)
+		if ok then
+			return true
 		end
 	end
 
 	local began = pcall(function()
 		prompt:InputHoldBegin()
 	end)
-	task.wait(holdSeconds)
+	task.wait(0.03)
 	local ended = pcall(function()
 		prompt:InputHoldEnd()
 	end)
-	return fired or began or ended
+	return began or ended
 end
 
 function triggerAnyPrompt(prompt)
@@ -3665,13 +3640,13 @@ function collectPrompt(prompt)
 	local fired = false
 	if prompt then
 		fired = triggerHarvestPrompt(prompt) or fired
-		if collectionTookEffect(target or prompt, beforeInventoryCount, 1.2) then
+		if collectionTookEffect(target or prompt, beforeInventoryCount) then
 			return true
 		end
 	end
 	if target ~= nil then
 		fired = collectFruitPacket(target, true, prompt) or fired
-		if collectionTookEffect(target or prompt, beforeInventoryCount, 1.0) then
+		if collectionTookEffect(target or prompt, beforeInventoryCount) then
 			return true
 		end
 	end
@@ -3964,13 +3939,13 @@ function collectFruitEntryFast(entry, heavy, verifyEach)
 	local fired = false
 	if prompt then
 		fired = triggerHarvestPrompt(prompt) or fired
-		if verifyEach and collectionTookEffect(target or prompt, beforeInventoryCount, 0.75) then
+		if verifyEach and collectionTookEffect(target or prompt, beforeInventoryCount) then
 			return true, true
 		end
 	end
 	if target then
 		fired = collectFruitPacket(target, true, prompt) or fired
-		if verifyEach and collectionTookEffect(target or prompt, beforeInventoryCount, 0.75) then
+		if verifyEach and collectionTookEffect(target or prompt, beforeInventoryCount) then
 			return true, true
 		end
 	end
@@ -4057,12 +4032,10 @@ function collectFruit()
 		restoreOwnGardenAutomationPrompts()
 	end
 
-	local inventoryFull = shouldPauseFruitCollection()
-	if inventoryFull then
+	if shouldPauseFruitCollection() then
 		stats.collectSkippedFull += 1
 		updateStatsUI()
-		setStatus(("Fruit collector: inventory full (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
-		return
+		setStatus(("Fruit collector: inventory full (%d/%d), still scanning"):format(stats.inventoryItems, stats.inventoryCapacity))
 	end
 
 	local roots = getOwnGardenRoots()
@@ -4107,8 +4080,9 @@ function collectFruit()
 		end
 		if shouldPauseFruitCollection() then
 			stats.collectSkippedFull += 1
-			setStatus(("Fruit collector paused: sell needed (%d/%d)"):format(stats.inventoryItems, stats.inventoryCapacity))
-			return
+			if index % 15 == 0 then
+				setStatus(("Fruit collector: sell needed (%d/%d), still running"):format(stats.inventoryItems, stats.inventoryCapacity))
+			end
 		end
 
 		if fallback < fallbackLimit and isLiveFruitEntry(entry) and entry.target then
@@ -4143,7 +4117,6 @@ function collectFruit()
 		fruitTargetCache.noGainStreak = 0
 	else
 		fruitTargetCache.noGainStreak = math.min(fruitTargetCache.noGainStreak + 1, 3)
-		fruitTargetCache.refreshedAt = 0
 	end
 	if failedRemoteHarvests > 0 then
 		fruitTargetCache.refreshedAt = 0
@@ -5556,7 +5529,6 @@ function autoSell(force)
 		return
 	end
 	lastAutoSellAttemptAt = now
-	fruitCollectionPausedUntil = now + 1.0
 
 	local inventoryFull = refreshInventoryStats(true)
 	local sellableTools = getSellableFruitTools(true)
@@ -5610,7 +5582,6 @@ function autoSell(force)
 	local sold = afterInventoryCount < beforeInventoryCount
 		or (afterSheckles and beforeSheckles and afterSheckles > beforeSheckles)
 	if sold then
-		fruitCollectionPausedUntil = 0
 		fruitTargetCache.refreshedAt = 0
 		if timers then
 			timers.sellWhenFull = 0
@@ -8037,12 +8008,8 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	end
 
 	if state.fruitCollector and timers.fruitCollector >= CONFIG.collectInterval then
-		if os.clock() < fruitCollectionPausedUntil then
-			timers.fruitCollector = CONFIG.collectInterval
-		else
-			if tryRun("fruitCollector", collectFruit) then
-				timers.fruitCollector = 0
-			end
+		if tryRun("fruitCollector", collectFruit) then
+			timers.fruitCollector = 0
 		end
 	end
 
