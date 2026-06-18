@@ -38,6 +38,7 @@ CONFIG = {
 	fruitCacheRefreshInterval = 0.65,
 	maxFruitTargetsCached = 500,
 	maxFruitPromptFallbackPerTick = 24,
+	maxFruitCollectWeight = 0,
 	deepPacketDiscovery = false,
 	packetDiscoveryCooldown = 60.0,
 	packetDiscoveryLimit = 1200,
@@ -164,6 +165,7 @@ function loadConfig()
 		"buyInterval",
 		"mailInterval",
 		"petSellInterval",
+		"maxFruitCollectWeight",
 		"movePlantPosition",
 		"petSellMutationFilter",
 		"petSellVariantFilter",
@@ -232,6 +234,7 @@ saveConfig = function()
 			buyInterval = CONFIG.buyInterval,
 			mailInterval = CONFIG.mailInterval,
 			petSellInterval = CONFIG.petSellInterval,
+			maxFruitCollectWeight = CONFIG.maxFruitCollectWeight,
 			movePlantPosition = CONFIG.movePlantPosition,
 			petSellMutationFilter = CONFIG.petSellMutationFilter,
 			petSellVariantFilter = CONFIG.petSellVariantFilter,
@@ -3801,6 +3804,20 @@ function getFruitPriority(instance)
 	return priority
 end
 
+function getMaxFruitCollectWeight()
+	return math.max(0, tonumber(CONFIG.maxFruitCollectWeight) or 0)
+end
+
+function fruitAllowedByWeight(instance)
+	local maxWeight = getMaxFruitCollectWeight()
+	if maxWeight <= 0 then
+		return true
+	end
+
+	local weight = getFruitWeight(instance)
+	return weight <= 0 or weight <= maxWeight
+end
+
 function isLiveFruitEntry(entry)
 	if not entry then
 		return false
@@ -3829,6 +3846,9 @@ function addFruitTarget(targets, seenTargets, prompt, target)
 
 	target = target or getCollectFruitTarget(prompt)
 	if not target then
+		return
+	end
+	if not fruitAllowedByWeight(target) then
 		return
 	end
 
@@ -7015,6 +7035,34 @@ makeCommandButton("Set Trowel Position", 4, function()
 	end
 end)
 makeToggle("Auto Sell Inventory", "autoSell", 5)
+
+local maxFruitWeightBox = make("TextBox", {
+	Name = "MaxFruitCollectWeight",
+	BackgroundColor3 = Color3.fromRGB(34, 41, 42),
+	BorderSizePixel = 0,
+	ClearTextOnFocus = false,
+	Font = Enum.Font.GothamSemibold,
+	PlaceholderText = "Max fruit weight in g (0 = no limit)",
+	Text = tostring(math.floor(getMaxFruitCollectWeight() + 0.5)),
+	TextColor3 = Color3.fromRGB(242, 247, 239),
+	TextSize = 9,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+	Size = UDim2.new(1, 0, 0, 20),
+	LayoutOrder = 6,
+}, currentTabParent or content)
+make("UICorner", { CornerRadius = UDim.new(0, 6) }, maxFruitWeightBox)
+make("UIPadding", {
+	PaddingLeft = UDim.new(0, 7),
+	PaddingRight = UDim.new(0, 7),
+}, maxFruitWeightBox)
+maxFruitWeightBox.FocusLost:Connect(function()
+	local value = math.max(0, tonumber(maxFruitWeightBox.Text) or 0)
+	CONFIG.maxFruitCollectWeight = value
+	maxFruitWeightBox.Text = tostring(math.floor(value + 0.5))
+	fruitTargetCache.refreshedAt = 0
+	saveConfig()
+	setStatus(value > 0 and ("Fruit collector max weight: %.0fg"):format(value) or "Fruit collector max weight disabled")
+end)
 setBuildTab("Shops")
 makeSectionLabel("Shops", 1)
 makeToggle("Auto Buy Seeds", "autoBuySeeds", 2)
