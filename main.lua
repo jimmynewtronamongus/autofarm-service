@@ -4522,6 +4522,40 @@ function getSelectedPetList()
 	return selected
 end
 
+function getAvailableBuyPetMap()
+	local available = {}
+	local wildPetSpawns = getWildPetSpawns()
+	if not wildPetSpawns then
+		return available
+	end
+
+	for _, descendant in ipairs(getCachedDescendants("wildPets", wildPetSpawns, 0.5)) do
+		if descendant:IsA("ProximityPrompt") and descendant.Parent and descendant:IsDescendantOf(workspace) then
+			local model = descendant:FindFirstAncestorWhichIsA("Model")
+			if model and not petSpawnHandled(model, descendant) and isPetBuyPrompt(descendant) then
+				local baseName = getWildPetBaseName(model.Name)
+				if baseName ~= "" then
+					available[baseName] = true
+				end
+			end
+		end
+	end
+
+	return available
+end
+
+function petIsAvailableForBuy(petName, available)
+	if type(available) ~= "table" then
+		return false
+	end
+	for availableName in pairs(available) do
+		if petNameMatchesSelection(availableName, petName, nil, nil) then
+			return true
+		end
+	end
+	return false
+end
+
 function getPromptPart(prompt)
 	local current = prompt.Parent
 	while current and current ~= workspace do
@@ -6164,25 +6198,33 @@ function buyPets()
 	local attempts = 0
 	local lastMessage = "Auto pets: no pets selected"
 	local boughtLines = {}
+	local skippedUnavailable = {}
+	local selectedList = getSelectedPetList()
+	local availablePets = getAvailableBuyPetMap()
 
-	for _, petName in ipairs(getSelectedPetList()) do
+	for _, petName in ipairs(selectedList) do
 		if not isEnabled("autoBuyPets") then
 			return
 		end
-		if attempts >= CONFIG.maxPetBuyPerTick then
-			break
-		end
-
-		local ok, message, petInfo = buyOnePet(petName)
-		lastMessage = message
-		if ok then
-			bought += 1
-			if petInfo then
-				table.insert(boughtLines, ("Bought pet: `%s` | Variant: `%s`"):format(petInfo.name or petName, petInfo.variant or "Normal"))
+		if petIsAvailableForBuy(petName, availablePets) then
+			if attempts >= CONFIG.maxPetBuyPerTick then
+				break
 			end
-			task.wait(0.12)
+
+			local ok, message, petInfo = buyOnePet(petName)
+			lastMessage = message
+			if ok then
+				bought += 1
+				if petInfo then
+					table.insert(boughtLines, ("Bought pet: `%s` | Variant: `%s`"):format(petInfo.name or petName, petInfo.variant or "Normal"))
+				end
+				task.wait(0.12)
+			end
+			attempts += 1
+		else
+			table.insert(skippedUnavailable, petName)
+			lastMessage = ("Auto pets: %s is selected but not currently spawned"):format(petName)
 		end
-		attempts += 1
 	end
 
 	if bought > 0 then
@@ -6193,6 +6235,10 @@ function buyPets()
 			queueActivityWebhook(line)
 		end
 		setStatus(("Auto pets: verified %d purchase(s)"):format(bought))
+	elseif #selectedList == 0 then
+		setStatus("Auto pets: no pets selected")
+	elseif attempts == 0 and #skippedUnavailable > 0 then
+		setStatus(("Auto pets: selected pet(s) not spawned: %s"):format(table.concat(skippedUnavailable, ", ")))
 	else
 		setStatus(lastMessage)
 	end
