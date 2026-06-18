@@ -1142,7 +1142,6 @@ local stats = {
 
 local running = {}
 local stopTokens = {}
-local lastAutoSellAttemptAt = 0
 
 function bumpStopToken(key)
 	stopTokens[key] = (stopTokens[key] or 0) + 1
@@ -5608,11 +5607,6 @@ function autoSell(force)
 	if runStopped(stopKey, token) then
 		return
 	end
-	local now = os.clock()
-	if now - lastAutoSellAttemptAt < CONFIG.sellCooldown then
-		return
-	end
-	lastAutoSellAttemptAt = now
 
 	local inventoryFull = refreshInventoryStats(true)
 	local sellableTools = getSellableFruitTools(true)
@@ -8064,8 +8058,7 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		sellNeeded = inventoryFull and hasSellableInventory
 	end
 	local urgentSellDue = hasSellableInventory and inventoryFull and (state.sellWhenFull or state.autoSell)
-	local sellDue = hasSellableInventory and (urgentSellDue
-		or (state.autoSell and timers.autoSell >= CONFIG.sellInterval))
+	local sellDue = hasSellableInventory and (urgentSellDue or state.autoSell)
 
 	if sellDue and not running.autoSell and not running.sellWhenFull then
 		if state.sellWhenFull and sellNeeded then
