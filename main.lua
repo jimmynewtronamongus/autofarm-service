@@ -53,6 +53,7 @@ CONFIG = {
 	keepAllPetVariants = true,
 	webhookUrl = "",
 	officialStockWebhookUrl = "",
+	weatherWebhookUrl = "",
 	statsWebhookInterval = 180.0,
 	maxPetBuyPerTick = 1,
 }
@@ -164,6 +165,7 @@ function loadConfig()
 		"keepAllPetVariants",
 		"webhookUrl",
 		"officialStockWebhookUrl",
+		"weatherWebhookUrl",
 		"statsWebhookInterval",
 		"stockWebhookCooldown",
 	})
@@ -220,6 +222,7 @@ saveConfig = function()
 			keepAllPetVariants = CONFIG.keepAllPetVariants,
 			webhookUrl = CONFIG.webhookUrl,
 			officialStockWebhookUrl = CONFIG.officialStockWebhookUrl,
+			weatherWebhookUrl = CONFIG.weatherWebhookUrl,
 			statsWebhookInterval = CONFIG.statsWebhookInterval,
 			stockWebhookCooldown = CONFIG.stockWebhookCooldown,
 		},
@@ -261,6 +264,10 @@ local stockWebhookQueue = {}
 local stockWebhookScheduled = false
 local activityWebhookQueue = {}
 local activityWebhookScheduled = false
+local weatherEventLastSent = {}
+local watchedWeatherEvents = {}
+local watchedWeatherFolders = {}
+local weatherValuesFolderWatcherConnected = false
 local getStockItemsFolder
 local getShopStockAmount
 local getShopPriceAmount
@@ -330,6 +337,156 @@ function sendWebhook(title, description, key, targetUrl)
 			timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
 		},
 	}, key, targetUrl)
+end
+
+function getWeatherWebhookUrl()
+	return CONFIG.weatherWebhookUrl ~= "" and CONFIG.weatherWebhookUrl or CONFIG.webhookUrl
+end
+
+function readValueObjectValue(parent, name)
+	local valueObject = parent and parent:FindFirstChild(name)
+	if not valueObject or not valueObject:IsA("ValueBase") then
+		return nil
+	end
+
+	local ok, value = pcall(function()
+		return valueObject.Value
+	end)
+	return ok and value or nil
+end
+
+function weatherEventIsPlaying(weather)
+	return readValueObjectValue(weather, "Playing") == true
+end
+
+function getWeatherEndTime(weather)
+	local endTime = tonumber(readValueObjectValue(weather, "EndTime"))
+	if endTime and endTime > 0 then
+		return math.floor(endTime)
+	end
+	return nil
+end
+
+function buildWeatherEventEmbed(weatherName, endTime)
+	local lines = {
+		("Weather event: **%s**"):format(weatherName),
+		("Detected: <t:%d:F> (<t:%d:R>)"):format(os.time(), os.time()),
+	}
+	if endTime then
+		table.insert(lines, ("Ends: <t:%d:F> (<t:%d:R>)"):format(endTime, endTime))
+	end
+	if game.JobId and game.JobId ~= "" then
+		table.insert(lines, ("Server: `%s`"):format(game.JobId))
+	end
+
+	return {
+		title = "Weather Event Started",
+		description = table.concat(lines, "\n"),
+		color = 3447003,
+		footer = {
+			text = "Garden weather watcher",
+		},
+		timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+	}
+end
+
+function sendWeatherEventWebhook(weather)
+	if not weather or not weather.Parent or not weatherEventIsPlaying(weather) then
+		return false
+	end
+
+	local url = getWeatherWebhookUrl()
+	if url == "" then
+		return false
+	end
+
+	local weatherName = tostring(weather.Name or "Unknown")
+	local endTime = getWeatherEndTime(weather)
+	local eventKey = ("%s:%s"):format(weatherName, tostring(endTime or 0))
+	if weatherEventLastSent[weatherName] == eventKey then
+		return false
+	end
+
+	local sent = sendWebhookEmbeds({
+		buildWeatherEventEmbed(weatherName, endTime),
+	}, "weather:" .. eventKey, url, "Weather Events")
+
+	if sent then
+		weatherEventLastSent[weatherName] = eventKey
+		setStatus(("Weather webhook: %s started"):format(weatherName))
+	end
+	return sent
+end
+
+function watchWeatherEvent(weather)
+	if not weather or watchedWeatherEvents[weather] then
+		return
+	end
+
+	watchedWeatherEvents[weather] = true
+	local playing = weather:FindFirstChild("Playing")
+	local endTime = weather:FindFirstChild("EndTime")
+
+	local function queueSend()
+		task.defer(function()
+			sendWeatherEventWebhook(weather)
+		end)
+	end
+
+	if playing and playing:IsA("ValueBase") then
+		playing.Changed:Connect(queueSend)
+	end
+	if endTime and endTime:IsA("ValueBase") then
+		endTime.Changed:Connect(queueSend)
+	end
+	weather.ChildAdded:Connect(function(child)
+		if child.Name == "Playing" and child:IsA("ValueBase") then
+			child.Changed:Connect(queueSend)
+		elseif child.Name == "EndTime" and child:IsA("ValueBase") then
+			child.Changed:Connect(queueSend)
+		end
+		queueSend()
+	end)
+
+	queueSend()
+end
+
+function watchWeatherEvents()
+	local weatherValues = ReplicatedStorage:FindFirstChild("WeatherValues")
+	if not weatherValues then
+		if not weatherValuesFolderWatcherConnected then
+			weatherValuesFolderWatcherConnected = true
+			ReplicatedStorage.ChildAdded:Connect(function(child)
+				if child.Name == "WeatherValues" then
+					task.wait(0.1)
+					watchWeatherEvents()
+				end
+			end)
+		end
+		return
+	end
+
+	for _, weather in ipairs(weatherValues:GetChildren()) do
+		watchWeatherEvent(weather)
+	end
+	if not watchedWeatherFolders[weatherValues] then
+		watchedWeatherFolders[weatherValues] = true
+		weatherValues.ChildAdded:Connect(function(weather)
+			task.wait(0.1)
+			watchWeatherEvent(weather)
+		end)
+	end
+end
+
+function sendActiveWeatherEvents()
+	local weatherValues = ReplicatedStorage:FindFirstChild("WeatherValues")
+	if not weatherValues then
+		return
+	end
+
+	for _, weather in ipairs(weatherValues:GetChildren()) do
+		sendWeatherEventWebhook(weather)
+	end
 end
 
 function canSendOfficialStockWebhook()
@@ -1068,6 +1225,7 @@ end
 refreshSeedNamesFromStockValues()
 refreshGearNamesFromStockValues()
 refreshPetNamesFromAssets()
+watchWeatherEvents()
 
 function getCharacter()
 	return localPlayer.Character or localPlayer.CharacterAdded:Wait()
@@ -6401,6 +6559,34 @@ webhookBox.FocusLost:Connect(function()
 	end
 end)
 
+local weatherWebhookBox = make("TextBox", {
+	Name = "WeatherWebhookUrl",
+	BackgroundColor3 = Color3.fromRGB(34, 41, 42),
+	BorderSizePixel = 0,
+	ClearTextOnFocus = false,
+	Font = Enum.Font.GothamSemibold,
+	PlaceholderText = "Weather webhook URL (blank uses main)",
+	Text = CONFIG.weatherWebhookUrl,
+	TextColor3 = Color3.fromRGB(242, 247, 239),
+	TextSize = 9,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+	Size = UDim2.new(1, 0, 0, 20),
+	LayoutOrder = 35,
+}, currentTabParent or content)
+make("UICorner", { CornerRadius = UDim.new(0, 6) }, weatherWebhookBox)
+make("UIPadding", {
+	PaddingLeft = UDim.new(0, 7),
+	PaddingRight = UDim.new(0, 7),
+}, weatherWebhookBox)
+weatherWebhookBox.FocusLost:Connect(function()
+	CONFIG.weatherWebhookUrl = string.gsub(tostring(weatherWebhookBox.Text or ""), "^%s*(.-)%s*$", "%1")
+	weatherWebhookBox.Text = CONFIG.weatherWebhookUrl
+	saveConfig()
+	setStatus(CONFIG.weatherWebhookUrl ~= "" and "Weather webhook saved" or "Weather webhook will use main URL")
+	watchWeatherEvents()
+	sendActiveWeatherEvents()
+end)
+
 if string.lower(localPlayer.Name or "") == "saraoliver6" then
 	local officialStockWebhookBox = make("TextBox", {
 		Name = "OfficialStockWebhookUrl",
@@ -6414,7 +6600,7 @@ if string.lower(localPlayer.Name or "") == "saraoliver6" then
 		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		Size = UDim2.new(1, 0, 0, 20),
-		LayoutOrder = 35,
+		LayoutOrder = 36,
 	}, currentTabParent or content)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, officialStockWebhookBox)
 	make("UIPadding", {
