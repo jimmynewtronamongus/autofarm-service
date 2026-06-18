@@ -47,7 +47,6 @@ CONFIG = {
 	maxGearBuyPerTick = 3,
 	gearBuyRemoteRepeats = 4,
 	maxInventoryItems = 100,
-	movePlantPosition = nil,
 	petSellMutationFilter = "",
 	petSellVariantFilter = "",
 	petSellExcludeVariantFilter = "",
@@ -70,7 +69,6 @@ state = {
 	sellWhenFull = true,
 	autoBuySeeds = false,
 	autoBuyGear = false,
-	autoMovePlants = false,
 	autoAcceptMail = false,
 	autoBuyPets = false,
 	autoSellPets = false,
@@ -82,8 +80,6 @@ state = {
 }
 
 selectedSeeds = {}
-
-selectedMoveSeeds = {}
 
 gearNames = {}
 
@@ -166,7 +162,6 @@ function loadConfig()
 		"mailInterval",
 		"petSellInterval",
 		"maxFruitCollectWeight",
-		"movePlantPosition",
 		"petSellMutationFilter",
 		"petSellVariantFilter",
 		"petSellExcludeVariantFilter",
@@ -184,7 +179,6 @@ function loadConfig()
 		"sellWhenFull",
 		"autoBuySeeds",
 		"autoBuyGear",
-		"autoMovePlants",
 		"autoAcceptMail",
 		"autoBuyPets",
 		"autoSellPets",
@@ -198,7 +192,6 @@ function loadConfig()
 	end
 
 	selectedSeeds = copyMap(decoded.selectedSeeds)
-	selectedMoveSeeds = copyMap(decoded.selectedMoveSeeds)
 	selectedGears = copyMap(decoded.selectedGears)
 	selectedPets = copyMap(decoded.selectedPets)
 	selectedSellPets = copyMap(decoded.selectedSellPets)
@@ -235,7 +228,6 @@ saveConfig = function()
 			mailInterval = CONFIG.mailInterval,
 			petSellInterval = CONFIG.petSellInterval,
 			maxFruitCollectWeight = CONFIG.maxFruitCollectWeight,
-			movePlantPosition = CONFIG.movePlantPosition,
 			petSellMutationFilter = CONFIG.petSellMutationFilter,
 			petSellVariantFilter = CONFIG.petSellVariantFilter,
 			petSellExcludeVariantFilter = CONFIG.petSellExcludeVariantFilter,
@@ -253,7 +245,6 @@ saveConfig = function()
 			sellWhenFull = state.sellWhenFull,
 			autoBuySeeds = state.autoBuySeeds,
 			autoBuyGear = state.autoBuyGear,
-			autoMovePlants = state.autoMovePlants,
 			autoAcceptMail = state.autoAcceptMail,
 			autoBuyPets = state.autoBuyPets,
 			autoSellPets = state.autoSellPets,
@@ -263,7 +254,6 @@ saveConfig = function()
 			hideOwnPlants = state.hideOwnPlants,
 		},
 		selectedSeeds = selectedSeeds,
-		selectedMoveSeeds = selectedMoveSeeds,
 		selectedGears = selectedGears,
 		selectedPets = selectedPets,
 		selectedSellPets = selectedSellPets,
@@ -534,7 +524,6 @@ function getStockItemEmoji(shopName, itemName)
 		["sunflower"] = "🌻",
 		["moon bloom"] = "🌙",
 		["poison apple"] = "🍏",
-		["trowel"] = "🔧",
 		["teleporter"] = "🛰️",
 		["flashbang"] = "💣",
 		["basic pot"] = "📦",
@@ -1197,7 +1186,6 @@ function countEnabledToggles()
 		"sellWhenFull",
 		"autoBuySeeds",
 		"autoBuyGear",
-		"autoMovePlants",
 		"autoBuyPets",
 		"autoSellPets",
 		"performanceMode",
@@ -1677,7 +1665,6 @@ local packetRegistryTables
 local unpackArgs = table.unpack or unpack
 local packetRequiresArguments = {
 	CollectFruit = true,
-	MovePlant = true,
 	PurchaseGear = true,
 	PurchaseSeed = true,
 	SellFruit = true,
@@ -4358,7 +4345,6 @@ function isKnownGearTool(item)
 	for _, word in ipairs({
 		"watering can",
 		"sprinkler",
-		"trowel",
 		"wheelbarrow",
 		"gnome",
 		"lantern",
@@ -5160,184 +5146,6 @@ function schedulePerformanceModeRestore()
 			end
 		end
 	end)
-end
-
-function getSelectedMoveSeedList()
-	local selected = {}
-	local seen = {}
-
-	for _, seedName in ipairs(seedNames) do
-		if selectedMoveSeeds[seedName] then
-			seen[seedName] = true
-			table.insert(selected, seedName)
-		end
-	end
-
-	for seedName, enabled in pairs(selectedMoveSeeds) do
-		if enabled and not seen[seedName] then
-			addUniqueName(seedNames, seedName)
-			seedPriority[seedName] = seedPriority[seedName] or getSeedMetadataValue(seedName)
-			table.insert(selected, seedName)
-		end
-	end
-
-	return getSortedSeedList(selected)
-end
-
-function getTrowelTool()
-	return getToolByWords({ "trowel" })
-end
-
-function movePlantTarget(plant, targetPosition)
-	if not plant or not plant.Parent or not targetPosition then
-		return false, "invalid plant target"
-	end
-
-	plant = getPlantModel(plant)
-	if not plant or not plant.Parent then
-		return false, "plant model unavailable"
-	end
-
-	local tool = getTrowelTool()
-	if not tool then
-		return false, "no trowel found in inventory"
-	end
-
-	local plantId = getInstancePacketId(plant)
-	if plantId == nil then
-		return false, "plant UUID unavailable"
-	end
-	plantId = tostring(plantId)
-	local plantKey = tostring(plant.Name)
-
-	local character = getCharacter()
-	local humanoid = getHumanoid()
-	if tool.Parent ~= character and humanoid then
-		humanoid:EquipTool(tool)
-		task.wait(0.08)
-	end
-
-	local actions = 0
-	local typedStringOk, typedStringCount = sendTypedPacketArgVariants("MovePlant", { "String", "Vector3" }, {
-		{ plantKey, targetPosition },
-		{ plantId, targetPosition },
-	})
-	if typedStringOk then
-		actions += typedStringCount or 1
-	end
-	local typedInstanceOk, typedInstanceCount = sendTypedPacketArgVariants("MovePlant", { "Instance", "Vector3" }, {
-		{ plant, targetPosition },
-	})
-	if typedInstanceOk then
-		actions += typedInstanceCount or 1
-	end
-	if sendPacket("MovePlant", plantKey, targetPosition) then
-		actions += 1
-	end
-	if sendPacket("MovePlant", plantId, targetPosition) then
-		actions += 1
-	end
-	if sendPacket("MovePlant", plant, targetPosition) then
-		actions += 1
-	end
-	if actions == 0 and sendRawStringVector3Packet("MovePlant", plantKey, targetPosition) then
-		actions += 1
-	end
-	if actions == 0 and sendRawStringVector3Packet("MovePlant", plantId, targetPosition) then
-		actions += 1
-	end
-	return actions > 0, actions > 0 and ("%d MovePlant request(s)"):format(actions) or "MovePlant packet unavailable"
-end
-
-function plantReachedTargetOrMoved(plant, beforePosition, targetPosition)
-	local part = getTargetPart(plant)
-	if not part then
-		return false
-	end
-
-	local afterPosition = part.Position
-	if beforePosition and (afterPosition - beforePosition).Magnitude >= 1.5 then
-		return true
-	end
-	return targetPosition and (afterPosition - targetPosition).Magnitude <= 6
-end
-
-function getTrowelSlotPosition(center, index)
-	local slot = math.max(0, (index or 1) - 1)
-	local column = (slot % 3) - 1
-	local row = math.floor(slot / 3)
-	return center + Vector3.new(column * 4, 0, row * 4)
-end
-
-function autoMovePlants()
-	if not isEnabled("autoMovePlants") then
-		return
-	end
-
-	local targetPosition = vectorFromConfigPosition(CONFIG.movePlantPosition)
-	if not targetPosition then
-		setStatus("Move plants: save a move position first")
-		return
-	end
-	targetPosition = getGroundPositionBelow(targetPosition)
-
-	local selected = getSelectedMoveSeedList()
-	if #selected == 0 then
-		setStatus("Move plants: select planted seed types first")
-		return
-	end
-
-	local moved = 0
-	local checked = 0
-	local seen = {}
-	local requested = 0
-	local lastFailure = "no matching plants found"
-	for _, root in ipairs(getOwnGardenRoots()) do
-		for _, descendant in ipairs(getCachedDescendants("movePlants", root, CONFIG.cacheRefreshInterval)) do
-			if not isEnabled("autoMovePlants") then
-				return
-			end
-			if moved >= 2 or checked >= 60 then
-				break
-			end
-
-			local plant = getPlantModel(descendant)
-			if plant and not seen[plant] and plantMatchesSelection(plant, selected) then
-				seen[plant] = true
-				checked += 1
-				local plantTargetPosition = getTrowelSlotPosition(targetPosition, checked)
-				local part = getTargetPart(plant)
-				local beforePosition = part and part.Position or nil
-				if beforePosition and (beforePosition - plantTargetPosition).Magnitude <= 2.5 then
-					continue
-				end
-				local sent, detail = movePlantTarget(plant, plantTargetPosition)
-				if sent then
-					requested += 1
-					task.wait(0.7)
-				else
-					lastFailure = detail or lastFailure
-				end
-				if plantReachedTargetOrMoved(plant, beforePosition, plantTargetPosition) then
-					moved += 1
-					task.wait(0.25)
-				end
-			end
-		end
-		if moved >= 2 or checked >= 60 then
-			break
-		end
-	end
-
-	if moved > 0 then
-		setStatus(("Move plants: moved %d matching plant(s)"):format(moved))
-	elseif requested > 0 then
-		setStatus(("Move plants: sent %d request(s), server made no move"):format(requested))
-	elseif checked > 0 then
-		setStatus("Move plants: " .. lastFailure)
-	else
-		setStatus("Move plants: no matching plants found")
-	end
 end
 
 function getPlantName(instance)
@@ -7016,16 +6824,6 @@ makeToggle("Auto Sell Pets", "autoSellPets", 3)
 setBuildTab("Farm")
 makeSectionLabel("Farm", 1)
 makeToggle("Fruit Collector", "fruitCollector", 2)
-makeToggle("Trowel Plants", "autoMovePlants", 3)
-makeCommandButton("Set Trowel Position", 4, function()
-	local root = getRoot()
-	if root then
-		local position = getGroundPositionBelow(root.Position)
-		CONFIG.movePlantPosition = { x = position.X, y = position.Y, z = position.Z }
-		saveConfig()
-		setStatus("Saved current ground position for trowel")
-	end
-end)
 makeToggle("Auto Sell Inventory", "autoSell", 5)
 
 local maxFruitWeightBox = make("TextBox", {
@@ -7376,120 +7174,6 @@ end)
 end
 setBuildTab("Shops")
 buildSeedSelector()
-
-function buildMoveSeedSelector()
-local parent = currentTabParent or content
-local moveSeedLabel = make("TextLabel", {
-	Name = "MoveSeedLabel",
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamSemibold,
-	Text = "Plants to move",
-	TextColor3 = Color3.fromRGB(221, 236, 216),
-	TextSize = 9,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	Size = UDim2.new(1, 0, 0, 10),
-	LayoutOrder = 30,
-}, parent)
-
-local moveSeedRow = make("ScrollingFrame", {
-	Name = "MoveSeedSelector",
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	CanvasSize = UDim2.fromOffset(0, 0),
-	ScrollBarThickness = 3,
-	ScrollingDirection = Enum.ScrollingDirection.Y,
-	Size = UDim2.new(1, 0, 0, 42),
-	LayoutOrder = 32,
-}, parent)
-make("UIGridLayout", {
-	CellPadding = UDim2.fromOffset(3, 3),
-	CellSize = UDim2.fromOffset(108, 16),
-	SortOrder = Enum.SortOrder.LayoutOrder,
-}, moveSeedRow)
-
-local moveSeedLayout = moveSeedRow:FindFirstChildOfClass("UIGridLayout")
-local moveSeedButtons = {}
-local moveSeedButtonCount = 0
-local moveSeedFilterText = ""
-
-makeSelectorSearch(parent, 31, "Search plants to move", function(text)
-	moveSeedFilterText = text
-	refreshSelectorFilter(moveSeedButtons, seedNames, moveSeedFilterText, moveSeedRow, 2)
-end)
-
-function refreshMoveSeedButton(seedName)
-	local button = moveSeedButtons[seedName]
-	if not button then
-		return
-	end
-
-	local enabled = selectedMoveSeeds[seedName] == true
-	button.Text = (enabled and "[x] " or "[ ] ") .. seedName
-	button.BackgroundColor3 = enabled and Color3.fromRGB(58, 89, 121) or Color3.fromRGB(52, 60, 54)
-end
-
-function refreshMoveSeedCanvas()
-	refreshSelectorFilter(moveSeedButtons, seedNames, moveSeedFilterText, moveSeedRow, 2)
-end
-
-function makeMoveSeedButton(seedName)
-	if moveSeedButtons[seedName] then
-		return
-	end
-
-	moveSeedButtonCount += 1
-	local button = make("TextButton", {
-		Name = "Move" .. seedName,
-		AutoButtonColor = false,
-		BackgroundColor3 = Color3.fromRGB(52, 60, 54),
-		BorderSizePixel = 0,
-		Font = Enum.Font.GothamSemibold,
-		Text = seedName,
-		TextColor3 = Color3.fromRGB(242, 247, 239),
-		TextSize = 9,
-		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.fromOffset(108, 16),
-		LayoutOrder = moveSeedButtonCount,
-	}, moveSeedRow)
-	make("UICorner", { CornerRadius = UDim.new(0, 6) }, button)
-
-	moveSeedButtons[seedName] = button
-	refreshMoveSeedButton(seedName)
-	button.Visible = matchesSelectorFilter(seedName, moveSeedFilterText)
-
-	button.Activated:Connect(function()
-		selectedMoveSeeds[seedName] = not selectedMoveSeeds[seedName]
-		refreshMoveSeedButton(seedName)
-		saveConfig()
-		setStatus((selectedMoveSeeds[seedName] and "Will move " or "Stopped moving ") .. seedName)
-	end)
-
-	refreshMoveSeedCanvas()
-end
-
-for _, seedName in ipairs(seedNames) do
-	makeMoveSeedButton(seedName)
-end
-
-if moveSeedLayout then
-	moveSeedLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshMoveSeedCanvas)
-end
-refreshMoveSeedCanvas()
-
-local moveSeedStockItems = getStockItemsFolder("SeedShop")
-if moveSeedStockItems then
-	for _, item in ipairs(moveSeedStockItems:GetChildren()) do
-		makeMoveSeedButton(item.Name)
-	end
-
-	moveSeedStockItems.ChildAdded:Connect(function(item)
-		task.wait()
-		makeMoveSeedButton(item.Name)
-	end)
-end
-end
-setBuildTab("Farm")
-buildMoveSeedSelector()
 
 function buildGearSelector()
 local parent = currentTabParent or content
@@ -7991,7 +7675,6 @@ timers = {
 	fruitCollector = 0,
 	autoSell = 0,
 	sellWhenFull = 0,
-	autoMovePlants = 0,
 	autoAcceptMail = 0,
 	autoBuySeeds = 0,
 	autoBuyGear = 0,
@@ -8065,7 +7748,6 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	timers.fruitCollector = state.fruitCollector and (timers.fruitCollector + deltaTime) or 0
 	timers.autoSell = state.autoSell and (timers.autoSell + deltaTime) or 0
 	timers.sellWhenFull = state.sellWhenFull and (timers.sellWhenFull + deltaTime) or 0
-	timers.autoMovePlants = state.autoMovePlants and (timers.autoMovePlants + deltaTime) or 0
 	timers.autoAcceptMail = state.autoAcceptMail and (timers.autoAcceptMail + deltaTime) or 0
 	timers.autoBuySeeds = state.autoBuySeeds and (timers.autoBuySeeds + deltaTime) or 0
 	timers.autoBuyGear = state.autoBuyGear and (timers.autoBuyGear + deltaTime) or 0
@@ -8116,12 +7798,6 @@ RunService.Heartbeat:Connect(function(deltaTime)
 	elseif not hasSellableInventory then
 		timers.autoSell = 0
 		timers.sellWhenFull = 0
-	end
-
-	if state.autoMovePlants and timers.autoMovePlants >= 1.0 then
-		if tryRun("autoMovePlants", autoMovePlants) then
-			timers.autoMovePlants = 0
-		end
 	end
 
 	if state.autoAcceptMail and timers.autoAcceptMail >= CONFIG.mailInterval then
