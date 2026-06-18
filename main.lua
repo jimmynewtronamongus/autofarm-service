@@ -33,11 +33,11 @@ CONFIG = {
 	cacheRefreshInterval = 25.0,
 	inventoryRefreshInterval = 1.0,
 	guiInventoryRefreshInterval = 30.0,
-	maxFruitCollectPerTick = 30,
+	maxFruitCollectPerTick = 75,
 	maxFruitScanPerRoot = 900,
-	fruitCacheRefreshInterval = 0.65,
+	fruitCacheRefreshInterval = 0.25,
 	maxFruitTargetsCached = 500,
-	maxFruitPromptFallbackPerTick = 24,
+	maxFruitPromptFallbackPerTick = 75,
 	maxFruitCollectWeight = 0,
 	deepPacketDiscovery = false,
 	packetDiscoveryCooldown = 60.0,
@@ -4031,14 +4031,11 @@ function collectFruitEntryFast(entry, heavy, verifyEach)
 	if not isLiveFruitEntry(entry) then
 		return false, false
 	end
-	if verifyEach == nil then
-		verifyEach = true
-	end
 
 	local target = entry.target
 	local prompt = entry.prompt
 
-	local beforeInventoryCount = countHarvestInventoryItems()
+	local beforeInventoryCount = verifyEach and countHarvestInventoryItems() or nil
 	local fired = false
 	if prompt then
 		fired = triggerHarvestPrompt(prompt) or fired
@@ -4047,7 +4044,7 @@ function collectFruitEntryFast(entry, heavy, verifyEach)
 		end
 	end
 	if target then
-		fired = collectFruitPacket(target, true, prompt) or fired
+		fired = collectFruitPacket(target, heavy == true, prompt) or fired
 		if verifyEach and collectionTookEffect(target or prompt, beforeInventoryCount) then
 			return true, true
 		end
@@ -4166,26 +4163,13 @@ function collectFruit()
 	local fired = 0
 	local fallback = 0
 	local fallbackLimit = CONFIG.maxFruitPromptFallbackPerTick
-	if fruitTargetCache.noGainStreak >= 1 then
-		fallbackLimit = math.min(math.ceil(CONFIG.maxFruitCollectPerTick / 2), fallbackLimit + 10)
-	end
-	if fruitTargetCache.noGainStreak >= 2 then
-		fallbackLimit = CONFIG.maxFruitCollectPerTick
-	end
-
 	local heavyFallback = fruitTargetCache.noGainStreak >= 1
-	local verifyEachHarvest = fruitTargetCache.noGainStreak >= 2
+	local verifyEachHarvest = false
 	local failedRemoteHarvests = 0
 	local attemptedHarvests = 0
 	for index, entry in ipairs(targets) do
 		if not isEnabled("fruitCollector") then
 			return
-		end
-		if shouldPauseFruitCollection() then
-			stats.collectSkippedFull += 1
-			if index % 15 == 0 then
-				setStatus(("Fruit collector: sell needed (%d/%d), still running"):format(stats.inventoryItems, stats.inventoryCapacity))
-			end
 		end
 
 		if fallback < fallbackLimit and isLiveFruitEntry(entry) and entry.target then
