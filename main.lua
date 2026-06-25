@@ -3,16 +3,16 @@
 
 local Players = game:GetService("Players")
 local Lighting = game:GetService("Lighting")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local SoundService = game:GetService("SoundService")
 local Workspace = game:GetService("Workspace")
 
 local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui", 30)
 
-local SCAN_DELAY = 2.5
-local PLANT_SCAN_DELAY = 0.75
-local BATCH_SIZE = 450
+local SCAN_DELAY = 8
+local PLANT_SCAN_DELAY = 0.35
+local BATCH_SIZE = 2500
+local PLANT_BATCH_SIZE = 5000
 local HIDE_PLAYER_CHARACTER = false
 
 local stats = {
@@ -222,7 +222,7 @@ local function killTexture(instance)
 
 	if instance:IsA("Decal") or instance:IsA("Texture") then
 		changed = changed + safeSet(function()
-			instance.Transparency = 1
+			instance:Destroy()
 		end)
 	elseif instance:IsA("SurfaceAppearance") then
 		changed = changed + safeSet(function()
@@ -263,6 +263,8 @@ local function hidePart(instance)
 		instance.Material = Enum.Material.SmoothPlastic
 		instance.Reflectance = 0
 		instance.CastShadow = false
+		instance.CanQuery = false
+		instance.CanTouch = false
 	end)
 
 	if instance:IsA("MeshPart") then
@@ -356,7 +358,7 @@ local function optimizePlantFolder(folder)
 		return 0
 	end
 
-	return optimizeService(folder, 120)
+	return optimizeService(folder, PLANT_BATCH_SIZE)
 end
 
 local function optimizePlantVisuals()
@@ -371,15 +373,6 @@ local function optimizePlantVisuals()
 			changed = changed + optimizePlantFolder(plot:FindFirstChild("Crops"))
 			changed = changed + optimizePlantFolder(plot:FindFirstChild("Harvest"))
 			changed = changed + optimizePlantFolder(plot:FindFirstChild("Harvests"))
-		end
-	end
-
-	for _, descendant in ipairs(Workspace:GetDescendants()) do
-		if isPlantVisualRoot(descendant) then
-			changed = changed + optimizeInstance(descendant)
-			for _, child in ipairs(descendant:GetDescendants()) do
-				changed = changed + optimizeInstance(child)
-			end
 		end
 	end
 
@@ -466,6 +459,11 @@ end
 
 local function watch(root)
 	root.DescendantAdded:Connect(function(instance)
+		if isPlantVisualRoot(instance) then
+			task.spawn(function()
+				addStat("plants", optimizeService(instance, PLANT_BATCH_SIZE))
+			end)
+		end
 		queued[#queued + 1] = instance
 		drainQueue()
 	end)
@@ -478,13 +476,26 @@ local function scanEverything()
 	changed = changed + optimizeLighting()
 	changed = changed + optimizeService(Lighting, BATCH_SIZE)
 	changed = changed + optimizeService(SoundService, BATCH_SIZE)
-	changed = changed + optimizeService(Workspace, BATCH_SIZE)
 	changed = changed + optimizePlantVisuals()
-	changed = changed + optimizeService(ReplicatedStorage, BATCH_SIZE)
 
 	stats.scans = stats.scans + 1
 	stats.lastChanged = changed
 	setStatus(("Potato applied: %d"):format(changed))
+	updateGui()
+end
+
+local function startupNuke()
+	setStatus("Startup nuke")
+	local changed = 0
+	changed = changed + optimizeLighting()
+	changed = changed + optimizeService(Lighting, BATCH_SIZE)
+	changed = changed + optimizeService(SoundService, BATCH_SIZE)
+	changed = changed + optimizeService(Workspace, BATCH_SIZE)
+	changed = changed + optimizePlantVisuals()
+
+	stats.scans = stats.scans + 1
+	stats.lastChanged = changed
+	setStatus(("Startup nuke: %d"):format(changed))
 	updateGui()
 end
 
@@ -494,9 +505,9 @@ setStatus("Running")
 watch(Workspace)
 watch(Lighting)
 watch(SoundService)
-watch(ReplicatedStorage)
 
 task.spawn(function()
+	startupNuke()
 	while true do
 		scanEverything()
 		task.wait(SCAN_DELAY)
