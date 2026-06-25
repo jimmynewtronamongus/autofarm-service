@@ -84,6 +84,49 @@ local function disableLaggyEffect(instance)
 	return 0
 end
 
+local function stripTextureInstance(instance)
+	if not instance then
+		return 0
+	end
+
+	if instance:IsA("Decal") or instance:IsA("Texture") then
+		pcall(function()
+			instance.Transparency = 1
+		end)
+		return 1
+	end
+
+	if instance:IsA("SurfaceAppearance") then
+		pcall(function()
+			instance:Destroy()
+		end)
+		return 1
+	end
+
+	if instance:IsA("Sky") or instance:IsA("Clouds") then
+		pcall(function()
+			instance:Destroy()
+		end)
+		return 1
+	end
+
+	if instance:IsA("SpecialMesh") then
+		pcall(function()
+			instance.TextureId = ""
+		end)
+		return 1
+	end
+
+	if instance:IsA("MeshPart") then
+		pcall(function()
+			instance.TextureID = ""
+		end)
+		return 1
+	end
+
+	return 0
+end
+
 local function getGardens()
 	local map = workspace:FindFirstChild("Map")
 	if map then
@@ -190,18 +233,26 @@ local function hidePerformanceVisual(instance)
 	if instance:IsA("BasePart") then
 		performanceState.hidden[instance] = true
 		pcall(function()
+			if instance:IsA("MeshPart") then
+				instance.TextureID = ""
+			end
+			instance.Material = Enum.Material.SmoothPlastic
+			instance.Reflectance = 0
 			instance.LocalTransparencyModifier = 1
 			instance.CastShadow = false
 		end)
 		return changed + 1
 	end
 
-	if instance:IsA("Decal") or instance:IsA("Texture") then
+	if instance:IsA("Decal")
+		or instance:IsA("Texture")
+		or instance:IsA("SurfaceAppearance")
+		or instance:IsA("SpecialMesh")
+		or instance:IsA("Sky")
+		or instance:IsA("Clouds")
+	then
 		performanceState.hidden[instance] = true
-		pcall(function()
-			instance.Transparency = 1
-		end)
-		return changed + 1
+		return changed + stripTextureInstance(instance)
 	end
 
 	if instance:IsA("BillboardGui")
@@ -309,18 +360,22 @@ local function optimizePerformanceInstance(instance)
 			instance.Reflectance = 0
 			instance.CastShadow = false
 			if instance:IsA("MeshPart") then
+				instance.TextureID = ""
 				instance.RenderFidelity = Enum.RenderFidelity.Performance
 			end
 		end)
 		return changed + 1
 	end
 
-	if instance:IsA("Decal") or instance:IsA("Texture") then
+	if instance:IsA("Decal")
+		or instance:IsA("Texture")
+		or instance:IsA("SurfaceAppearance")
+		or instance:IsA("SpecialMesh")
+		or instance:IsA("Sky")
+		or instance:IsA("Clouds")
+	then
 		performanceState.optimized[instance] = true
-		pcall(function()
-			instance.Transparency = 1
-		end)
-		return changed + 1
+		return changed + stripTextureInstance(instance)
 	end
 
 	if instance:IsA("BillboardGui")
@@ -355,6 +410,7 @@ local function optimizePerformanceTree(root, budget)
 	local changed = 0
 	local processed = 0
 
+	changed = changed + optimizePerformanceInstance(root)
 	for _, descendant in ipairs(root:GetDescendants()) do
 		changed = changed + optimizePerformanceInstance(descendant)
 		processed = processed + 1
@@ -392,6 +448,9 @@ local function connectPerformanceWatcher()
 						break
 					end
 					optimizePerformanceInstance(item)
+					if item.Parent then
+						optimizePerformanceTree(item, 80)
+					end
 				end
 
 				if performanceState.queueHead > 300 then
