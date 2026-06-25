@@ -9,6 +9,21 @@ local SoundService = game:GetService("SoundService")
 local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui", 30)
 
+local debugState = {
+	status = "Starting",
+	lastReady = false,
+	loadingGui = false,
+	coreReady = false,
+	gardenReady = false,
+	scans = 0,
+	optimized = 0,
+	hidden = 0,
+	plantsHidden = 0,
+	texturesStripped = 0,
+	effectsDisabled = 0,
+	lastChanged = 0,
+}
+
 local performanceState = {
 	optimized = setmetatable({}, { __mode = "k" }),
 	hidden = setmetatable({}, { __mode = "k" }),
@@ -19,6 +34,17 @@ local performanceState = {
 	fullScanDone = false,
 	lastGardenHideAt = 0,
 }
+
+local updateDebugGui = function() end
+
+local function setDebugStatus(status)
+	debugState.status = status
+	updateDebugGui()
+end
+
+local function addDebugCount(key, amount)
+	debugState[key] = (debugState[key] or 0) + (amount or 1)
+end
 
 local function isLaggyEffectInstance(instance)
 	return instance:IsA("ParticleEmitter")
@@ -66,6 +92,7 @@ local function disableLaggyEffect(instance)
 		pcall(function()
 			instance.Visible = false
 		end)
+		addDebugCount("effectsDisabled", 1)
 		return 1
 	end
 
@@ -80,6 +107,7 @@ local function disableLaggyEffect(instance)
 		pcall(function()
 			instance.Enabled = false
 		end)
+		addDebugCount("effectsDisabled", 1)
 		return 1
 	end
 
@@ -95,6 +123,7 @@ local function stripTextureInstance(instance)
 		pcall(function()
 			instance.Transparency = 1
 		end)
+		addDebugCount("texturesStripped", 1)
 		return 1
 	end
 
@@ -102,6 +131,7 @@ local function stripTextureInstance(instance)
 		pcall(function()
 			instance:Destroy()
 		end)
+		addDebugCount("texturesStripped", 1)
 		return 1
 	end
 
@@ -109,6 +139,7 @@ local function stripTextureInstance(instance)
 		pcall(function()
 			instance:Destroy()
 		end)
+		addDebugCount("texturesStripped", 1)
 		return 1
 	end
 
@@ -116,6 +147,7 @@ local function stripTextureInstance(instance)
 		pcall(function()
 			instance.TextureId = ""
 		end)
+		addDebugCount("texturesStripped", 1)
 		return 1
 	end
 
@@ -123,6 +155,7 @@ local function stripTextureInstance(instance)
 		pcall(function()
 			instance.TextureID = ""
 		end)
+		addDebugCount("texturesStripped", 1)
 		return 1
 	end
 
@@ -196,30 +229,43 @@ end
 
 local function waitForGrowAGardenReady()
 	local startedAt = os.clock()
+	setDebugStatus("Waiting for Roblox load")
 
 	if not game:IsLoaded() then
 		game.Loaded:Wait()
 	end
 
+	setDebugStatus("Waiting for character")
 	while not localPlayer.Character and os.clock() - startedAt < 90 do
 		task.wait(0.25)
 	end
 
+	setDebugStatus("Waiting for GAG2 map")
 	local stableChecks = 0
 	while os.clock() - startedAt < 120 do
-		if hasCoreGameReplicated() and hasGardenReady() and not hasVisibleLoadingGui() then
+		debugState.coreReady = hasCoreGameReplicated()
+		debugState.gardenReady = hasGardenReady()
+		debugState.loadingGui = hasVisibleLoadingGui()
+		updateDebugGui()
+
+		if debugState.coreReady and debugState.gardenReady and not debugState.loadingGui then
 			stableChecks = stableChecks + 1
+			setDebugStatus(("Ready check %d/6"):format(stableChecks))
 			if stableChecks >= 6 then
 				task.wait(2)
+				debugState.lastReady = true
+				setDebugStatus("Loaded, optimizing")
 				return true
 			end
 		else
 			stableChecks = 0
+			setDebugStatus("Waiting for full load")
 		end
 
 		task.wait(0.5)
 	end
 
+	setDebugStatus("Load wait timed out, optimizing anyway")
 	return false
 end
 
@@ -380,6 +426,7 @@ local function hidePerformanceVisual(instance)
 			instance.LocalTransparencyModifier = 1
 			instance.CastShadow = false
 		end)
+		addDebugCount("hidden", 1)
 		return changed + 1
 	end
 
@@ -484,7 +531,11 @@ local function optimizePerformanceInstance(instance)
 
 	local changed = applyPerformanceGardenHiding(instance)
 	if isPlantVisualInstance(instance) then
-		changed = changed + hidePerformanceVisual(instance)
+		local plantChanged = hidePerformanceVisual(instance)
+		if plantChanged > 0 then
+			addDebugCount("plantsHidden", plantChanged)
+		end
+		changed = changed + plantChanged
 	end
 
 	if performanceState.optimized[instance] then
@@ -507,6 +558,7 @@ local function optimizePerformanceInstance(instance)
 				instance.RenderFidelity = Enum.RenderFidelity.Performance
 			end
 		end)
+		addDebugCount("optimized", 1)
 		return changed + 1
 	end
 
@@ -556,6 +608,28 @@ local function optimizePerformanceTree(root, budget)
 	changed = changed + optimizePerformanceInstance(root)
 	for _, descendant in ipairs(root:GetDescendants()) do
 		changed = changed + optimizePerformanceInstance(descendant)
+		processed = processed + 1
+		if budget and processed % budget == 0 then
+			task.wait()
+		end
+	end
+
+	return changed
+end
+
+local function hideDetectedPlants(root, budget)
+	local changed = 0
+	local processed = 0
+
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if isPlantVisualInstance(descendant) then
+			local hidden = hidePerformanceVisual(descendant)
+			changed = changed + hidden
+			if hidden > 0 then
+				addDebugCount("plantsHidden", hidden)
+			end
+		end
+
 		processed = processed + 1
 		if budget and processed % budget == 0 then
 			task.wait()
@@ -617,6 +691,9 @@ end
 
 local function enablePerformanceMode()
 	local now = os.clock()
+	local changed = 0
+
+	setDebugStatus("Optimizing")
 
 	connectPerformanceWatcher()
 
@@ -630,13 +707,13 @@ local function enablePerformanceMode()
 		Lighting.EnvironmentSpecularScale = 0
 		Lighting.Brightness = math.min(Lighting.Brightness, 1)
 		for _, descendant in ipairs(Lighting:GetDescendants()) do
-			optimizePerformanceInstance(descendant)
+			changed = changed + optimizePerformanceInstance(descendant)
 		end
 	end)
 
 	pcall(function()
 		for _, descendant in ipairs(SoundService:GetDescendants()) do
-			optimizePerformanceInstance(descendant)
+			changed = changed + optimizePerformanceInstance(descendant)
 		end
 	end)
 
@@ -650,14 +727,186 @@ local function enablePerformanceMode()
 
 	if now - performanceState.lastGardenHideAt > 5 then
 		performanceState.lastGardenHideAt = now
-		hidePerformanceGardens()
+		changed = changed + hidePerformanceGardens()
+		changed = changed + hideDetectedPlants(workspace, 220)
 	end
 
 	if not performanceState.fullScanDone then
 		performanceState.fullScanDone = true
-		optimizePerformanceTree(workspace, 220)
+		changed = changed + optimizePerformanceTree(workspace, 220)
 	end
+
+	debugState.scans = debugState.scans + 1
+	debugState.lastChanged = changed
+	setDebugStatus(("Optimized, changed %d"):format(changed))
 end
+
+local function make(parent, className, properties)
+	local instance = Instance.new(className)
+	for key, value in pairs(properties or {}) do
+		instance[key] = value
+	end
+	instance.Parent = parent
+	return instance
+end
+
+local function createDebugGui()
+	if not playerGui then
+		return
+	end
+
+	local old = playerGui:FindFirstChild("PerformanceDebugGui")
+	if old then
+		old:Destroy()
+	end
+
+	local gui = make(playerGui, "ScreenGui", {
+		Name = "PerformanceDebugGui",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+	})
+
+	local panel = make(gui, "Frame", {
+		Name = "Panel",
+		AnchorPoint = Vector2.new(1, 0),
+		BackgroundColor3 = Color3.fromRGB(18, 21, 22),
+		BorderSizePixel = 0,
+		Position = UDim2.new(1, -10, 0, 74),
+		Size = UDim2.fromOffset(210, 168),
+	})
+	make(panel, "UICorner", { CornerRadius = UDim.new(0, 7) })
+	make(panel, "UIPadding", {
+		PaddingTop = UDim.new(0, 7),
+		PaddingBottom = UDim.new(0, 7),
+		PaddingLeft = UDim.new(0, 7),
+		PaddingRight = UDim.new(0, 7),
+	})
+	make(panel, "UIListLayout", {
+		Padding = UDim.new(0, 4),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	})
+
+	make(panel, "TextLabel", {
+		Name = "Title",
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		Text = "Perf Debug",
+		TextColor3 = Color3.fromRGB(239, 248, 240),
+		TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Size = UDim2.new(1, 0, 0, 16),
+		LayoutOrder = 1,
+	})
+
+	local statusLabel = make(panel, "TextLabel", {
+		Name = "Status",
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham,
+		Text = "",
+		TextColor3 = Color3.fromRGB(205, 221, 207),
+		TextSize = 10,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Size = UDim2.new(1, 0, 0, 38),
+		LayoutOrder = 2,
+	})
+
+	local countersLabel = make(panel, "TextLabel", {
+		Name = "Counters",
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Code,
+		Text = "",
+		TextColor3 = Color3.fromRGB(187, 213, 190),
+		TextSize = 10,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Size = UDim2.new(1, 0, 0, 52),
+		LayoutOrder = 3,
+	})
+
+	local buttons = make(panel, "Frame", {
+		Name = "Buttons",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 24),
+		LayoutOrder = 4,
+	})
+	make(buttons, "UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		Padding = UDim.new(0, 4),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	})
+
+	local optimizeButton = make(buttons, "TextButton", {
+		Name = "OptimizeNow",
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(48, 112, 63),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = "Optimize",
+		TextColor3 = Color3.fromRGB(245, 250, 245),
+		TextSize = 10,
+		Size = UDim2.new(0.5, -2, 1, 0),
+	})
+	make(optimizeButton, "UICorner", { CornerRadius = UDim.new(0, 5) })
+
+	local plantsButton = make(buttons, "TextButton", {
+		Name = "HidePlants",
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(58, 70, 78),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamSemibold,
+		Text = "Hide Plants",
+		TextColor3 = Color3.fromRGB(245, 250, 245),
+		TextSize = 10,
+		Size = UDim2.new(0.5, -2, 1, 0),
+	})
+	make(plantsButton, "UICorner", { CornerRadius = UDim.new(0, 5) })
+
+	updateDebugGui = function()
+		if not statusLabel.Parent then
+			return
+		end
+
+		statusLabel.Text = ("Status: %s\nCore:%s Garden:%s Loading:%s Ready:%s"):format(
+			debugState.status,
+			tostring(debugState.coreReady),
+			tostring(debugState.gardenReady),
+			tostring(debugState.loadingGui),
+			tostring(debugState.lastReady)
+		)
+
+		countersLabel.Text = ("Scans:%d Last:%d\nOptimized:%d Hidden:%d\nPlants:%d Textures:%d Effects:%d"):format(
+			debugState.scans,
+			debugState.lastChanged,
+			debugState.optimized,
+			debugState.hidden,
+			debugState.plantsHidden,
+			debugState.texturesStripped,
+			debugState.effectsDisabled
+		)
+	end
+
+	optimizeButton.Activated:Connect(function()
+		task.spawn(function()
+			performanceState.fullScanDone = false
+			enablePerformanceMode()
+		end)
+	end)
+
+	plantsButton.Activated:Connect(function()
+		task.spawn(function()
+			setDebugStatus("Manual plant scan")
+			local changed = hidePerformanceGardens() + hideDetectedPlants(workspace, 180)
+			debugState.lastChanged = changed
+			debugState.scans = debugState.scans + 1
+			setDebugStatus(("Plant scan changed %d"):format(changed))
+		end)
+	end)
+
+	updateDebugGui()
+end
+
+createDebugGui()
 
 task.spawn(function()
 	waitForGrowAGardenReady()
