@@ -11,7 +11,7 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui", 30)
 
 local SCAN_DELAY = 2.5
-local PET_SCAN_DELAY = 0.75
+local PLANT_SCAN_DELAY = 0.75
 local BATCH_SIZE = 450
 local HIDE_PLAYER_CHARACTER = false
 
@@ -22,7 +22,7 @@ local stats = {
 	parts = 0,
 	textures = 0,
 	effects = 0,
-	pets = 0,
+	plants = 0,
 	sounds = 0,
 	lighting = 0,
 }
@@ -46,12 +46,12 @@ local function updateGui()
 	end
 
 	statusLabel.Text = ("Status: %s\nScans: %d  Last: %d"):format(stats.status, stats.scans, stats.lastChanged)
-	statsLabel.Text = ("Parts:%d Textures:%d\nEffects:%d Sounds:%d\nPets:%d Lighting:%d"):format(
+	statsLabel.Text = ("Parts:%d Textures:%d\nEffects:%d Sounds:%d\nPlants:%d Lighting:%d"):format(
 		stats.parts,
 		stats.textures,
 		stats.effects,
 		stats.sounds,
-		stats.pets,
+		stats.plants,
 		stats.lighting
 	)
 end
@@ -303,32 +303,79 @@ local function optimizeInstance(instance)
 	return changed
 end
 
-local function isPetVisualRoot(instance)
+local plantFolderNames = {
+	plants = true,
+	plant = true,
+	fruits = true,
+	fruit = true,
+	crops = true,
+	crop = true,
+	harvest = true,
+	harvests = true,
+}
+
+local plantNameTerms = {
+	"plant",
+	"fruit",
+	"crop",
+	"tree",
+	"bush",
+	"flower",
+	"harvest",
+}
+
+local function isPlantVisualRoot(instance)
 	if not instance then
 		return false
 	end
 
-	local name = string.lower(instance.Name or "")
-	local parent = instance.Parent
-	local parentName = parent and string.lower(parent.Name or "") or ""
+	local current = instance
+	while current and current ~= Workspace do
+		local name = string.lower(current.Name or "")
+		local parent = current.Parent
+		local parentName = parent and string.lower(parent.Name or "") or ""
 
-	return string.find(name, "wildpet", 1, true) ~= nil
-		or string.find(name, "pet", 1, true) ~= nil
-		or string.find(parentName, "wildpet", 1, true) ~= nil
-		or string.find(parentName, "pet", 1, true) ~= nil
+		if plantFolderNames[name] or plantFolderNames[parentName] then
+			return true
+		end
+
+		for _, term in ipairs(plantNameTerms) do
+			if string.find(name, term, 1, true) then
+				return true
+			end
+		end
+
+		current = parent
+	end
+
+	return false
 end
 
-local function optimizePetVisuals()
-	local changed = 0
-	local map = Workspace:FindFirstChild("Map")
-	local wildPetSpawns = map and map:FindFirstChild("WildPetSpawns")
+local function optimizePlantFolder(folder)
+	if not folder then
+		return 0
+	end
 
-	if wildPetSpawns then
-		changed = changed + optimizeService(wildPetSpawns, 120)
+	return optimizeService(folder, 120)
+end
+
+local function optimizePlantVisuals()
+	local changed = 0
+	local gardens = Workspace:FindFirstChild("Gardens")
+
+	if gardens then
+		for _, plot in ipairs(gardens:GetChildren()) do
+			changed = changed + optimizePlantFolder(plot:FindFirstChild("Plants"))
+			changed = changed + optimizePlantFolder(plot:FindFirstChild("Fruits"))
+			changed = changed + optimizePlantFolder(plot:FindFirstChild("Fruit"))
+			changed = changed + optimizePlantFolder(plot:FindFirstChild("Crops"))
+			changed = changed + optimizePlantFolder(plot:FindFirstChild("Harvest"))
+			changed = changed + optimizePlantFolder(plot:FindFirstChild("Harvests"))
+		end
 	end
 
 	for _, descendant in ipairs(Workspace:GetDescendants()) do
-		if isPetVisualRoot(descendant) then
+		if isPlantVisualRoot(descendant) then
 			changed = changed + optimizeInstance(descendant)
 			for _, child in ipairs(descendant:GetDescendants()) do
 				changed = changed + optimizeInstance(child)
@@ -337,7 +384,7 @@ local function optimizePetVisuals()
 	end
 
 	if changed > 0 then
-		addStat("pets", changed)
+		addStat("plants", changed)
 	end
 	return changed
 end
@@ -404,8 +451,8 @@ local function drainQueue()
 					break
 				end
 				optimizeInstance(instance)
-				if isPetVisualRoot(instance) then
-					addStat("pets", optimizeService(instance, 120))
+				if isPlantVisualRoot(instance) then
+					addStat("plants", optimizeService(instance, 120))
 				end
 				for _, descendant in ipairs(instance:GetDescendants()) do
 					optimizeInstance(descendant)
@@ -432,7 +479,7 @@ local function scanEverything()
 	changed = changed + optimizeService(Lighting, BATCH_SIZE)
 	changed = changed + optimizeService(SoundService, BATCH_SIZE)
 	changed = changed + optimizeService(Workspace, BATCH_SIZE)
-	changed = changed + optimizePetVisuals()
+	changed = changed + optimizePlantVisuals()
 	changed = changed + optimizeService(ReplicatedStorage, BATCH_SIZE)
 
 	stats.scans = stats.scans + 1
@@ -458,11 +505,11 @@ end)
 
 task.spawn(function()
 	while true do
-		local changed = optimizePetVisuals()
+		local changed = optimizePlantVisuals()
 		if changed > 0 then
 			stats.lastChanged = changed
-			setStatus(("Pets optimized: %d"):format(changed))
+			setStatus(("Plants optimized: %d"):format(changed))
 		end
-		task.wait(PET_SCAN_DELAY)
+		task.wait(PLANT_SCAN_DELAY)
 	end
 end)
