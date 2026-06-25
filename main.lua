@@ -9,6 +9,9 @@ local SoundService = game:GetService("SoundService")
 local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui", 30)
 
+local AGGRESSIVE_HIDE_WORKSPACE = true
+local AUTO_SCAN_INTERVAL = 4
+
 local debugState = {
 	status = "Starting",
 	lastReady = false,
@@ -32,6 +35,7 @@ local performanceState = {
 	queueHead = 1,
 	queueRunning = false,
 	fullScanDone = false,
+	replicatedScanDone = false,
 	lastGardenHideAt = 0,
 }
 
@@ -71,12 +75,12 @@ local function isLaggyEffectInstance(instance)
 end
 
 local function disableLaggyEffect(instance)
-	if not instance or performanceState.optimized[instance] then
+	if not instance then
 		return 0
 	end
 
 	if isLaggyEffectInstance(instance) then
-		performanceState.optimized[instance] = true
+		local firstPass = performanceState.optimized[instance] ~= true
 		pcall(function()
 			if instance:IsA("Sound") then
 				instance.Volume = 0
@@ -92,8 +96,12 @@ local function disableLaggyEffect(instance)
 		pcall(function()
 			instance.Visible = false
 		end)
-		addDebugCount("effectsDisabled", 1)
-		return 1
+		performanceState.optimized[instance] = true
+		if firstPass then
+			addDebugCount("effectsDisabled", 1)
+			return 1
+		end
+		return 0
 	end
 
 	if instance:IsA("PostEffect")
@@ -103,12 +111,16 @@ local function disableLaggyEffect(instance)
 		or instance:IsA("DepthOfFieldEffect")
 		or instance:IsA("SunRaysEffect")
 	then
-		performanceState.optimized[instance] = true
+		local firstPass = performanceState.optimized[instance] ~= true
 		pcall(function()
 			instance.Enabled = false
 		end)
-		addDebugCount("effectsDisabled", 1)
-		return 1
+		performanceState.optimized[instance] = true
+		if firstPass then
+			addDebugCount("effectsDisabled", 1)
+			return 1
+		end
+		return 0
 	end
 
 	return 0
@@ -160,6 +172,11 @@ local function stripTextureInstance(instance)
 	end
 
 	return 0
+end
+
+local function isLocalCharacterDescendant(instance)
+	local character = localPlayer.Character
+	return character ~= nil and instance ~= nil and instance:IsDescendantOf(character)
 end
 
 local function getGardens()
@@ -267,6 +284,13 @@ local function waitForGrowAGardenReady()
 
 	setDebugStatus("Load wait timed out, optimizing anyway")
 	return false
+end
+
+local function refreshDebugReadiness()
+	debugState.coreReady = hasCoreGameReplicated()
+	debugState.gardenReady = hasGardenReady()
+	debugState.loadingGui = hasVisibleLoadingGui()
+	updateDebugGui()
 end
 
 local function textMatchesLocalPlayer(text)
@@ -405,8 +429,31 @@ local function isPlantVisualInstance(instance)
 	return false
 end
 
+local function shouldAggressivelyHide(instance)
+	if not AGGRESSIVE_HIDE_WORKSPACE or not instance or isLocalCharacterDescendant(instance) then
+		return false
+	end
+
+	if not instance:IsDescendantOf(workspace) then
+		return false
+	end
+
+	return instance:IsA("BasePart")
+		or instance:IsA("Decal")
+		or instance:IsA("Texture")
+		or instance:IsA("SurfaceAppearance")
+		or instance:IsA("SpecialMesh")
+		or instance:IsA("BillboardGui")
+		or instance:IsA("SurfaceGui")
+		or instance:IsA("Highlight")
+		or instance:IsA("SelectionBox")
+		or instance:IsA("SelectionSphere")
+		or instance:IsA("Handles")
+		or instance:IsA("ArcHandles")
+end
+
 local function hidePerformanceVisual(instance)
-	if not instance or performanceState.hidden[instance] then
+	if not instance or isLocalCharacterDescendant(instance) then
 		return 0
 	end
 
@@ -416,7 +463,7 @@ local function hidePerformanceVisual(instance)
 	end
 
 	if instance:IsA("BasePart") then
-		performanceState.hidden[instance] = true
+		local firstPass = performanceState.hidden[instance] ~= true
 		pcall(function()
 			if instance:IsA("MeshPart") then
 				instance.TextureID = ""
@@ -426,8 +473,12 @@ local function hidePerformanceVisual(instance)
 			instance.LocalTransparencyModifier = 1
 			instance.CastShadow = false
 		end)
-		addDebugCount("hidden", 1)
-		return changed + 1
+		performanceState.hidden[instance] = true
+		if firstPass then
+			addDebugCount("hidden", 1)
+			return changed + 1
+		end
+		return changed
 	end
 
 	if instance:IsA("Decal")
@@ -437,8 +488,10 @@ local function hidePerformanceVisual(instance)
 		or instance:IsA("Sky")
 		or instance:IsA("Clouds")
 	then
+		local firstPass = performanceState.hidden[instance] ~= true
+		changed = changed + stripTextureInstance(instance)
 		performanceState.hidden[instance] = true
-		return changed + stripTextureInstance(instance)
+		return firstPass and changed or 0
 	end
 
 	if instance:IsA("BillboardGui")
@@ -449,11 +502,12 @@ local function hidePerformanceVisual(instance)
 		or instance:IsA("Handles")
 		or instance:IsA("ArcHandles")
 	then
-		performanceState.hidden[instance] = true
+		local firstPass = performanceState.hidden[instance] ~= true
 		pcall(function()
 			instance.Enabled = false
 		end)
-		return changed + 1
+		performanceState.hidden[instance] = true
+		return firstPass and (changed + 1) or changed
 	end
 
 	return changed
@@ -528,6 +582,9 @@ local function optimizePerformanceInstance(instance)
 	if not instance then
 		return 0
 	end
+	if isLocalCharacterDescendant(instance) then
+		return disableLaggyEffect(instance)
+	end
 
 	local changed = applyPerformanceGardenHiding(instance)
 	if isPlantVisualInstance(instance) then
@@ -536,6 +593,9 @@ local function optimizePerformanceInstance(instance)
 			addDebugCount("plantsHidden", plantChanged)
 		end
 		changed = changed + plantChanged
+	end
+	if shouldAggressivelyHide(instance) then
+		changed = changed + hidePerformanceVisual(instance)
 	end
 
 	if performanceState.optimized[instance] then
@@ -693,6 +753,7 @@ local function enablePerformanceMode()
 	local now = os.clock()
 	local changed = 0
 
+	refreshDebugReadiness()
 	setDebugStatus("Optimizing")
 
 	connectPerformanceWatcher()
@@ -717,6 +778,11 @@ local function enablePerformanceMode()
 		end
 	end)
 
+	if not performanceState.replicatedScanDone then
+		performanceState.replicatedScanDone = true
+		changed = changed + optimizePerformanceTree(ReplicatedStorage, 320)
+	end
+
 	pcall(function()
 		workspace.Terrain.WaterWaveSize = 0
 		workspace.Terrain.WaterWaveSpeed = 0
@@ -731,10 +797,8 @@ local function enablePerformanceMode()
 		changed = changed + hideDetectedPlants(workspace, 220)
 	end
 
-	if not performanceState.fullScanDone then
-		performanceState.fullScanDone = true
-		changed = changed + optimizePerformanceTree(workspace, 220)
-	end
+	performanceState.fullScanDone = true
+	changed = changed + optimizePerformanceTree(workspace, 260)
 
 	debugState.scans = debugState.scans + 1
 	debugState.lastChanged = changed
@@ -909,11 +973,10 @@ end
 createDebugGui()
 
 task.spawn(function()
-	waitForGrowAGardenReady()
-	for _, delaySeconds in ipairs({ 0, 1.5, 4, 8, 15 }) do
-		if delaySeconds > 0 then
-			task.wait(delaySeconds)
-		end
+	connectPerformanceWatcher()
+	setDebugStatus("Auto potato mode")
+	while true do
 		enablePerformanceMode()
+		task.wait(AUTO_SCAN_INTERVAL)
 	end
 end)
