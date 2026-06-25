@@ -3,9 +3,11 @@
 
 local Players = game:GetService("Players")
 local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local SoundService = game:GetService("SoundService")
 
 local localPlayer = Players.LocalPlayer
+local playerGui = localPlayer:WaitForChild("PlayerGui", 30)
 
 local performanceState = {
 	optimized = setmetatable({}, { __mode = "k" }),
@@ -133,6 +135,92 @@ local function getGardens()
 		return map:FindFirstChild("Gardens") or map:FindFirstChild("Plots")
 	end
 	return workspace:FindFirstChild("Gardens") or workspace:FindFirstChild("Plots")
+end
+
+local function hasVisibleLoadingGui()
+	if not playerGui then
+		return false
+	end
+
+	for _, descendant in ipairs(playerGui:GetDescendants()) do
+		local name = string.lower(descendant.Name or "")
+		if name == "loadinggui"
+			or name == "loading screen"
+			or name == "loadingscreen"
+			or name == "countertxt"
+			or name == "pressanytxt"
+		then
+			local visible = true
+			pcall(function()
+				visible = descendant.Visible ~= false
+			end)
+			if visible then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+local function hasGardenReady()
+	local gardens = getGardens()
+	if not gardens then
+		return false
+	end
+
+	local plotCount = 0
+	for _, plot in ipairs(gardens:GetChildren()) do
+		if string.find(string.lower(plot.Name or ""), "plot", 1, true) then
+			plotCount = plotCount + 1
+			if plot:FindFirstChild("Plants") or plot:FindFirstChild("Signs") then
+				return true
+			end
+		end
+	end
+
+	return plotCount >= 3
+end
+
+local function hasCoreGameReplicated()
+	local stockValues = ReplicatedStorage:FindFirstChild("StockValues")
+	local packetFolder = ReplicatedStorage:FindFirstChild("SharedModules")
+	local map = workspace:FindFirstChild("Map")
+	local gardens = getGardens()
+
+	return stockValues ~= nil
+		and packetFolder ~= nil
+		and map ~= nil
+		and gardens ~= nil
+end
+
+local function waitForGrowAGardenReady()
+	local startedAt = os.clock()
+
+	if not game:IsLoaded() then
+		game.Loaded:Wait()
+	end
+
+	while not localPlayer.Character and os.clock() - startedAt < 90 do
+		task.wait(0.25)
+	end
+
+	local stableChecks = 0
+	while os.clock() - startedAt < 120 do
+		if hasCoreGameReplicated() and hasGardenReady() and not hasVisibleLoadingGui() then
+			stableChecks = stableChecks + 1
+			if stableChecks >= 6 then
+				task.wait(2)
+				return true
+			end
+		else
+			stableChecks = 0
+		end
+
+		task.wait(0.5)
+	end
+
+	return false
 end
 
 local function textMatchesLocalPlayer(text)
@@ -572,6 +660,7 @@ local function enablePerformanceMode()
 end
 
 task.spawn(function()
+	waitForGrowAGardenReady()
 	for _, delaySeconds in ipairs({ 0, 1.5, 4, 8, 15 }) do
 		if delaySeconds > 0 then
 			task.wait(delaySeconds)
