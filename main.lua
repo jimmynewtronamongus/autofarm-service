@@ -220,6 +220,57 @@ local function isOwnPlantVisual(instance, plot)
 	return false
 end
 
+local plantFolderNames = {
+	plants = true,
+	plant = true,
+	fruits = true,
+	fruit = true,
+	crops = true,
+	crop = true,
+	harvest = true,
+	harvests = true,
+}
+
+local plantNameTerms = {
+	"plant",
+	"fruit",
+	"crop",
+	"tree",
+	"bush",
+	"flower",
+	"harvest",
+}
+
+local function isPlantVisualInstance(instance)
+	if not instance then
+		return false
+	end
+
+	local current = instance
+	while current and current ~= workspace do
+		local name = string.lower(current.Name or "")
+		if plantFolderNames[name] then
+			return true
+		end
+
+		local parent = current.Parent
+		local parentName = parent and string.lower(parent.Name or "") or ""
+		if plantFolderNames[parentName] then
+			return true
+		end
+
+		for _, term in ipairs(plantNameTerms) do
+			if string.find(name, term, 1, true) then
+				return true
+			end
+		end
+
+		current = parent
+	end
+
+	return false
+end
+
 local function hidePerformanceVisual(instance)
 	if not instance or performanceState.hidden[instance] then
 		return 0
@@ -344,6 +395,10 @@ local function optimizePerformanceInstance(instance)
 	end
 
 	local changed = applyPerformanceGardenHiding(instance)
+	if isPlantVisualInstance(instance) then
+		changed = changed + hidePerformanceVisual(instance)
+	end
+
 	if performanceState.optimized[instance] then
 		return changed
 	end
