@@ -11,9 +11,9 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui", 30)
 
 local SCAN_DELAY = 2.5
+local PET_SCAN_DELAY = 0.75
 local BATCH_SIZE = 450
 local HIDE_PLAYER_CHARACTER = false
-local STRIP_PLAYER_GUI_IMAGES = false
 
 local stats = {
 	status = "Starting",
@@ -22,7 +22,7 @@ local stats = {
 	parts = 0,
 	textures = 0,
 	effects = 0,
-	guis = 0,
+	pets = 0,
 	sounds = 0,
 	lighting = 0,
 }
@@ -46,12 +46,12 @@ local function updateGui()
 	end
 
 	statusLabel.Text = ("Status: %s\nScans: %d  Last: %d"):format(stats.status, stats.scans, stats.lastChanged)
-	statsLabel.Text = ("Parts:%d Textures:%d\nEffects:%d Sounds:%d\nGuis:%d Lighting:%d"):format(
+	statsLabel.Text = ("Parts:%d Textures:%d\nEffects:%d Sounds:%d\nPets:%d Lighting:%d"):format(
 		stats.parts,
 		stats.textures,
 		stats.effects,
 		stats.sounds,
-		stats.guis,
+		stats.pets,
 		stats.lighting
 	)
 end
@@ -275,27 +275,15 @@ local function hidePart(instance)
 	return changed
 end
 
-local function hideGuiObject(instance)
-	if instance:IsA("BillboardGui") or instance:IsA("SurfaceGui") then
-		local changed = safeSet(function()
-			instance.Enabled = false
-		end)
-		addStat("guis", changed)
-		return changed
-	end
+local optimizeService
 
-	if STRIP_PLAYER_GUI_IMAGES and instance:IsDescendantOf(playerGui) then
-		if instance:IsA("ImageLabel") or instance:IsA("ImageButton") then
-			local changed = safeSet(function()
-				instance.ImageTransparency = 1
-				instance.BackgroundTransparency = 1
-			end)
-			addStat("guis", changed)
-			return changed
-		end
-	end
-
-	return 0
+local function isGuiInstance(instance)
+	return instance:IsA("GuiObject")
+		or instance:IsA("LayerCollector")
+		or instance:IsA("BillboardGui")
+		or instance:IsA("SurfaceGui")
+		or instance:IsA("UIComponent")
+		or instance:IsA("UILayout")
 end
 
 local function optimizeInstance(instance)
@@ -303,16 +291,58 @@ local function optimizeInstance(instance)
 		return 0
 	end
 
+	if isGuiInstance(instance) then
+		return 0
+	end
+
 	local changed = 0
 	changed = changed + killEffect(instance)
 	changed = changed + killSound(instance)
 	changed = changed + killTexture(instance)
-	changed = changed + hideGuiObject(instance)
 	changed = changed + hidePart(instance)
 	return changed
 end
 
-local function optimizeService(root, batchSize)
+local function isPetVisualRoot(instance)
+	if not instance then
+		return false
+	end
+
+	local name = string.lower(instance.Name or "")
+	local parent = instance.Parent
+	local parentName = parent and string.lower(parent.Name or "") or ""
+
+	return string.find(name, "wildpet", 1, true) ~= nil
+		or string.find(name, "pet", 1, true) ~= nil
+		or string.find(parentName, "wildpet", 1, true) ~= nil
+		or string.find(parentName, "pet", 1, true) ~= nil
+end
+
+local function optimizePetVisuals()
+	local changed = 0
+	local map = Workspace:FindFirstChild("Map")
+	local wildPetSpawns = map and map:FindFirstChild("WildPetSpawns")
+
+	if wildPetSpawns then
+		changed = changed + optimizeService(wildPetSpawns, 120)
+	end
+
+	for _, descendant in ipairs(Workspace:GetDescendants()) do
+		if isPetVisualRoot(descendant) then
+			changed = changed + optimizeInstance(descendant)
+			for _, child in ipairs(descendant:GetDescendants()) do
+				changed = changed + optimizeInstance(child)
+			end
+		end
+	end
+
+	if changed > 0 then
+		addStat("pets", changed)
+	end
+	return changed
+end
+
+optimizeService = function(root, batchSize)
 	local changed = optimizeInstance(root)
 	local processed = 0
 
@@ -374,6 +404,9 @@ local function drainQueue()
 					break
 				end
 				optimizeInstance(instance)
+				if isPetVisualRoot(instance) then
+					addStat("pets", optimizeService(instance, 120))
+				end
 				for _, descendant in ipairs(instance:GetDescendants()) do
 					optimizeInstance(descendant)
 				end
@@ -399,6 +432,7 @@ local function scanEverything()
 	changed = changed + optimizeService(Lighting, BATCH_SIZE)
 	changed = changed + optimizeService(SoundService, BATCH_SIZE)
 	changed = changed + optimizeService(Workspace, BATCH_SIZE)
+	changed = changed + optimizePetVisuals()
 	changed = changed + optimizeService(ReplicatedStorage, BATCH_SIZE)
 
 	stats.scans = stats.scans + 1
@@ -419,5 +453,16 @@ task.spawn(function()
 	while true do
 		scanEverything()
 		task.wait(SCAN_DELAY)
+	end
+end)
+
+task.spawn(function()
+	while true do
+		local changed = optimizePetVisuals()
+		if changed > 0 then
+			stats.lastChanged = changed
+			setStatus(("Pets optimized: %d"):format(changed))
+		end
+		task.wait(PET_SCAN_DELAY)
 	end
 end)
